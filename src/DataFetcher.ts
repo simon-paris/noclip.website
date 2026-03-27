@@ -296,12 +296,12 @@ export class DataFetcher {
             this.useDevelopmentStorage = false;
         }
 
-        const REQUEST_CACHE_NAME = `request-cache-v1`;
-        try {
-            this.cache = await caches.open(REQUEST_CACHE_NAME);
-        } catch(e) {
-            // Cache failed to open. That's OK, just don't use it.
-        }
+        // const REQUEST_CACHE_NAME = `request-cache-v1`;
+        // try {
+        //     this.cache = await caches.open(REQUEST_CACHE_NAME);
+        // } catch(e) {
+        //     // Cache failed to open. That's OK, just don't use it.
+        // }
     }
 
     public async clearCache() {

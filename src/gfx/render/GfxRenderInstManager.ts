@@ -437,7 +437,7 @@ export class GfxRenderInst {
                         if (binding.gfxSampler !== null)
                             dst.gfxSampler = binding.gfxSampler;
                     }
-    
+
                     dst.lateBinding = undefined;
                 }
             }
@@ -530,8 +530,11 @@ export class GfxRenderInst {
 
         const indexed = this._indexBuffer !== null;
         if (this._drawInstanceCount > 1) {
-            assert(indexed);
-            passRenderer.drawIndexedInstanced(this._drawCount, this._drawStart, this._drawInstanceCount);
+            if (indexed) {
+                passRenderer.drawIndexedInstanced(this._drawCount, this._drawStart, this._drawInstanceCount);
+            } else {
+                passRenderer.drawInstanced(this._drawCount, this._drawStart, this._drawInstanceCount);
+            }
         } else if (indexed) {
             passRenderer.drawIndexed(this._drawCount, this._drawStart);
         } else {
