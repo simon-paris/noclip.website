@@ -111,6 +111,7 @@ import * as Scenes_Spyro from './Spyro/scenes.js';
 import * as Scenes_CrazyTaxi from './CrazyTaxi/scenes.js';
 import * as Scenes_TokyoMirageSessionsSharpFE from './TokyoMirageSessionsSharpFE/scenes.js';
 import * as Scenes_CasperSD from './CasperSpiritDimensions/scenes.js';
+import * as Scenes_RatchetAndClank1 from './RatchetAndClank/scenes.js';
 
 import { DroppedFileSceneDesc, traverseFileSystemDataTransfer } from './Scenes_FileDrops.js';
 
@@ -139,6 +140,7 @@ import { GfxPlatform } from './gfx/platform/GfxPlatform.js';
 const sceneGroups: (string | SceneGroup)[] = [
     "Development",
     Scenes_Example.sceneGroup,
+    Scenes_RatchetAndClank1.sceneGroup,
 
     "Wii",
     Scenes_MarioKartWii.sceneGroup,
@@ -634,7 +636,7 @@ class Main {
         if (inputManager.isKeyDownEventTriggered('KeyT'))
             this.ui.sceneSelect.expandAndFocus();
         for (let i = 1; i <= 9; i++) {
-            if (inputManager.isKeyDownEventTriggered('Digit'+i)) {
+            if (inputManager.isKeyDownEventTriggered('Digit' + i)) {
                 if (this.currentSceneDesc) {
                     const key = this._getSaveStateSlotKey(i);
                     const action = this._pickSaveStatesAction(inputManager);
@@ -671,7 +673,7 @@ class Main {
                 this.webXRContext.xrSession.addEventListener('end', () => {
                     this.ui.toggleWebXRCheckbox(false);
                 });
-            } catch(e) {
+            } catch (e) {
                 console.error("Failed to start XR");
                 this.ui.toggleWebXRCheckbox(false);
             }

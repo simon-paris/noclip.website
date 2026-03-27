@@ -5,7 +5,7 @@ export enum GfxTopology {
     Triangles, TriStrips, TriFans, Quads,
 };
 
-export function convertToTriangles(dstBuffer: Uint16Array | Uint32Array, dstOffs: number, topology: GfxTopology, indexBuffer: Uint16Array | Uint32Array, baseVertex: number = 0): number {
+export function convertToTriangles(dstBuffer: Uint8Array | Uint16Array | Uint32Array, dstOffs: number, topology: GfxTopology, indexBuffer: Uint8Array | Uint16Array | Uint32Array, baseVertex: number = 0): number {
     assert(dstOffs + getTriangleIndexCountForTopologyIndexCount(topology, indexBuffer.length) <= dstBuffer.length);
 
     let dst = dstOffs;
