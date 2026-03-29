@@ -1,6 +1,6 @@
-import { mat4, vec3 } from "gl-matrix";
+import { mat4, vec3, vec4 } from "gl-matrix";
 import { makeBackbufferDescSimple, standardFullClearRenderPassDescriptor } from "../gfx/helpers/RenderGraphHelpers";
-import { fillMatrix4x4, fillVec3v } from "../gfx/helpers/UniformBufferHelpers";
+import { fillMatrix4x4, fillVec3v, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
 import { GfxBlendFactor, GfxBlendMode, GfxChannelWriteMask, GfxCompareMode, GfxCullMode, GfxDevice, GfxMipFilterMode, GfxProgram, GfxSampler, GfxTexFilterMode, GfxTexture, GfxWrapMode } from "../gfx/platform/GfxPlatform";
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
@@ -195,7 +195,22 @@ class RatchetAndClank1Scene implements SceneGfx {
 
         const template1 = this.renderHelper.pushTemplateRenderInst();
         template1.setGfxProgram(this.tfragProgram);
-        template1.setMegaStateFlags({ cullMode: GfxCullMode.None });
+        template1.setMegaStateFlags({
+            cullMode: GfxCullMode.None,
+            attachmentsState: [{
+                channelWriteMask: GfxChannelWriteMask.AllChannels,
+                rgbBlendState: {
+                    blendMode: GfxBlendMode.Add,
+                    blendSrcFactor: GfxBlendFactor.SrcAlpha,
+                    blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
+                },
+                alphaBlendState: {
+                    blendMode: GfxBlendMode.Add,
+                    blendSrcFactor: GfxBlendFactor.One,
+                    blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
+                },
+            }]
+        });
         const tfragParams = template1.allocateUniformBufferF32(TfragProgram.ub_TfragParams, 16);
         let offs = 0;
         offs += fillMatrix4x4(tfragParams, offs, objectMatrix);
@@ -230,8 +245,9 @@ class RatchetAndClank1Scene implements SceneGfx {
             // tie instance transform
             const objectMatrix = mat4.create();
             mat4.multiply(objectMatrix, noclipSpaceFromRatchetSpace, tieInstance.matrix);
-            const position = vec3.create();
+            let position = vec3.create();
             mat4.getTranslation(position, objectMatrix);
+            // mat4.fromTranslation(objectMatrix, position); // temp
 
             // camera position
             const toCamera = vec3.create();
@@ -257,12 +273,14 @@ class RatchetAndClank1Scene implements SceneGfx {
             return {
                 instance: i,
                 position,
+                distanceToCamera,
                 objectMatrix,
             };
         }).filter(tieParams => !!tieParams);
 
         if (this.settings.showPaths) {
             for (const tieParams of tieInstancesToDraw) {
+                if (tieParams.distanceToCamera > 40) continue;
                 const mtx = mat4.create();
                 mat4.translate(mtx, mtx, tieParams.position);
                 mat4.scale(mtx, mtx, [0.005, 0.005, 0.005]);
@@ -272,8 +290,8 @@ class RatchetAndClank1Scene implements SceneGfx {
 
         const template1 = this.renderHelper.pushTemplateRenderInst();
         template1.setGfxProgram(this.tieProgram);
-        template1.setMegaStateFlags({ cullMode: GfxCullMode.None });
         template1.setMegaStateFlags({
+            cullMode: GfxCullMode.None,
             attachmentsState: [{
                 channelWriteMask: GfxChannelWriteMask.AllChannels,
                 rgbBlendState: {
@@ -335,6 +353,7 @@ class RatchetAndClank1Scene implements SceneGfx {
             mat4.multiply(objectMatrix, noclipSpaceFromRatchetSpace, shrubInstance.matrix);
             const position = vec3.create();
             mat4.getTranslation(position, objectMatrix);
+            const dist = distanceToCamera(position, cameraPosition);
 
             // TODO: frustum cull
 
@@ -342,19 +361,21 @@ class RatchetAndClank1Scene implements SceneGfx {
             if (this.settings.lodSetting >= 1) {
                 return null;
             } else if (this.settings.lodSetting === -1) {
-                if (distanceToCamera(position, cameraPosition) - this.settings.lodBias > shrubInstance.drawDistance) return null;
+                if (dist - this.settings.lodBias > shrubInstance.drawDistance) return null;
             }
 
             return {
                 instance: i,
                 position,
                 objectMatrix,
+                distanceToCamera: dist,
                 rgb: shrubInstance.color
             };
         }).filter(matrix => !!matrix);
 
         if (this.settings.showPaths) {
             for (const shrubParams of shrubInstancesToDraw) {
+                if (shrubParams.distanceToCamera > 40) continue;
                 const mtx = mat4.create();
                 mat4.translate(mtx, mtx, shrubParams.position);
                 mat4.scale(mtx, mtx, [0.005, 0.005, 0.005]);
@@ -364,8 +385,8 @@ class RatchetAndClank1Scene implements SceneGfx {
 
         const template1 = this.renderHelper.pushTemplateRenderInst();
         template1.setGfxProgram(this.shrubProgram);
-        template1.setMegaStateFlags({ cullMode: GfxCullMode.None });
         template1.setMegaStateFlags({
+            cullMode: GfxCullMode.None,
             attachmentsState: [{
                 channelWriteMask: GfxChannelWriteMask.AllChannels,
                 rgbBlendState: {
@@ -395,10 +416,10 @@ class RatchetAndClank1Scene implements SceneGfx {
             for (let j = 0; j < batchSize; j++) {
                 shrubParamsOffset += fillMatrix4x4(shrubParams, shrubParamsOffset, shrubInstancesToDraw[i + j].objectMatrix);
             }
-            shrubParamsOffset = 16 * 0x4 * MAX_SHRUB_INSTANCES; // offset to rgb data
+            shrubParamsOffset = 16 * MAX_SHRUB_INSTANCES;
             for (let j = 0; j < batchSize; j++) {
                 const color = shrubInstancesToDraw[i + j].rgb;
-                shrubParamsOffset += fillVec3v(shrubParams, shrubParamsOffset, vec3.fromValues(color.r, color.g, color.b), 1);
+                shrubParamsOffset += fillVec4(shrubParams, shrubParamsOffset, color.r / 0x40, color.g / 0x40, color.b / 0x40, 1);
             }
             i += batchSize;
             template2.setInstanceCount(batchSize);

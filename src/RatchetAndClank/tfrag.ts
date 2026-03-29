@@ -57,6 +57,9 @@ in vec2 v_TS;
 void main() {
     vec4 texColor = texture(u_Texture, vec2(v_TS.x, v_TS.y));
     vec4 shading = vec4(vec3(abs(v_Normal.x + v_Normal.y + v_Normal.z) / 10.f), 0.f);
+    if (texColor.a < 0.05) {
+        discard;
+    }
     gl_FragColor = texColor * (1.5 * (1.0 + v_Rgba) - 1.0) - shading;
 }
 `;

@@ -220,7 +220,7 @@ export function readTextureEntry(view: DataViewExt) {
 export type TieClass = ReturnType<typeof readTieClass>;
 export type TiePacket = { header: TiePacketHeader, body: TiePacketBody };
 // tie classes are unsized objects, there is an unknown amount of additional data concatted onto the end of the tie class header
-export function readTieClass(view: DataViewExt) {
+export function readTieClass(view: DataViewExt, tieIndex: number) {
     /*
       // header size is 0x80
       packed_struct(TieClassHeader,
@@ -289,7 +289,7 @@ export function readTieClass(view: DataViewExt) {
         const packetsInThisLod: TiePacket[] = [];
         for (let j = 0; j < packetCount; j++) {
             const packetDataOffset = packetOffset + packetHeaders[j].data;
-            const packetBody = readTiePacketBody(view.subview(packetDataOffset), packetHeaders[j]);
+            const packetBody = readTiePacketBody(view.subview(packetDataOffset), packetHeaders[j], tieIndex, i, j);
             packetsInThisLod.push({
                 header: packetHeaders[j],
                 body: packetBody,
@@ -397,7 +397,7 @@ const TieCommandSizes = {
 }
 
 export type TiePacketBody = ReturnType<typeof readTiePacketBody>;
-export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketHeader) {
+export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketHeader, tieIndex: number, lod: number, packetIndex: number) {
     /*
         // unsized
         packed struct TiePacketBody {
@@ -480,12 +480,12 @@ export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketH
         writeCommand(strip.gifTagOffset, TiePacketCommandTypes.PRIMITIVE_RESET, null);
     }
 
-    // Write material change commands.
-    // In real hardware these can occur between strips so we'll have to use these as markers to split the mesh.
-    for (let i = 0; i < AD_GIFS; i++) {
+    // Write material change commands
+    for (let i = 0; i < AD_GIFS - 1; i++) {
         const destAddr = adGifDestOffsets[i];
         if (destAddr === 0) continue; // unused slot
-        const materialId = adGifSrcOffsets[i] / SIZEOF_TIE_AD_GIFS;
+        // destOffset[i] corresponds to srcOffset[i+1] because the first destOffset is for the first material which is implicit
+        const materialId = adGifSrcOffsets[i + 1] / SIZEOF_TIE_AD_GIFS;
         writeCommand(destAddr, TiePacketCommandTypes.SET_MATERIAL, materialId);
     }
 
@@ -666,9 +666,9 @@ export function readTieFatVertex(view: DataViewExt) {
     */
 
     return {
-        unknown0: view.getUint16(0x0),
-        unknown2: view.getUint16(0x2),
-        unknown4: view.getUint16(0x4),
+        unknown0: view.getInt16(0x0),
+        unknown2: view.getInt16(0x2),
+        unknown4: view.getInt16(0x4),
         gsPacketWriteOffset: view.getUint16(0x6),
         gsPacketWriteOffset2: view.getUint16(0x16), // fields out of order for consistency
         x: view.getInt16(0x8),
@@ -913,22 +913,10 @@ export type Tfrag = ReturnType<typeof readTfrag>;
 export function readTfrag(view: DataViewExt, header: TfragHeader) {
     const rgbas = view.subdivide(header.rgbaOffset, header.rgbaSize * 4, 0x4).map(view => view.getUint8_Rgba(0));
     const lights = view.subdivide(header.lightOfs + 0x10, header.vertCount, SIZEOF_TFRAG_LIGHT).map(readTfragLight);
-    // 	Buffer lod_2_buffer = data.subbuf(header.lod_2_ofs, header.shared_ofs - header.lod_2_ofs);
-    // std::vector<VifPacket> lod_2_command_list = read_vif_command_list(lod_2_buffer);
-    // std::vector<VifPacket> lod_2 = filter_vif_unpacks(lod_2_command_list);
-    // verify(lod_2.size() == 2, "Incorrect number of LOD 2 VIF unpacks! %d");
-
-    // tfrag.lod_2_indices = read_unpack<u8>(lod_2[0], VifVnVl::V4_8);
-    // tfrag.memory_map.indices_addr = lod_2[0].code.unpack.addr;
-    // tfrag.lod_2_strips = read_unpack<TfragStrip>(lod_2[1], VifVnVl::V4_8);
-    // tfrag.memory_map.strips_addr = lod_2[1].code.unpack.addr;
-
-
 
     /*
     Lod2
     */
-
 
     const lod2Buffer = view.subview(header.lod2Offset, header.sharedOffset - header.lod2Offset);
     const lod2CommandList = readVifCommandList(lod2Buffer);
@@ -949,21 +937,6 @@ export function readTfrag(view: DataViewExt, header: TfragHeader) {
     /*
     Common
     */
-    // Buffer common_buffer = data.subbuf(header.shared_ofs, header.lod_1_ofs - header.shared_ofs);
-    // std::vector<VifPacket> common_command_list = read_vif_command_list(common_buffer);
-    // verify(common_command_list.size() > 5, "Too few shared VIF commands.");
-    // tfrag.base_position = common_command_list[5].data.read<VifSTROW>(0, "base position");
-    // std::vector<VifPacket> common = filter_vif_unpacks(common_command_list);
-    // verify(common.size() == 4, "Incorrect number of shared VIF unpacks!");
-
-    // tfrag.common_vu_header = common[0].data.read<TfragHeaderUnpack>(0, "VU header");
-    // tfrag.memory_map.header_common_addr = common[0].code.unpack.addr;
-    // tfrag.common_textures = read_unpack<TfragTexturePrimitive>(common[1], VifVnVl::V4_32);
-    // tfrag.memory_map.ad_gifs_common_addr = common[1].code.unpack.addr;
-    // tfrag.common_vertex_info = read_unpack<TfragVertexInfo>(common[2], VifVnVl::V4_16);
-    // tfrag.memory_map.vertex_info_common_addr = common[2].code.unpack.addr;
-    // tfrag.common_positions = read_unpack<TfragVertexPosition>(common[3], VifVnVl::V3_16);
-    // tfrag.memory_map.positions_common_addr = common[3].code.unpack.addr;
 
     const commonBuffer = view.subview(header.sharedOffset, header.lod1Offset - header.sharedOffset);
     const commonCommandList = readVifCommandList(commonBuffer);
@@ -1009,19 +982,6 @@ export function readTfrag(view: DataViewExt, header: TfragHeader) {
     Lod1
     */
 
-
-    // Buffer lod_1_buffer = data.subbuf(header.lod_1_ofs, header.lod_0_ofs - header.lod_1_ofs);
-    // std::vector<VifPacket> lod_1_command_list = read_vif_command_list(lod_1_buffer);
-    // std::vector<VifPacket> lod_1 = filter_vif_unpacks(lod_1_command_list);
-    // verify(lod_1.size() == 2, "Incorrect number of LOD 1 VIF unpacks!");
-
-    // tfrag.lod_1_strips = read_unpack<TfragStrip>(lod_1[0], VifVnVl::V4_8);
-    // verify(tfrag.memory_map.strips_addr == lod_1[0].code.unpack.addr, "Weird tfrag.");
-    // tfrag.lod_1_indices = read_unpack<u8>(lod_1[1], VifVnVl::V4_8);
-    // verify(tfrag.memory_map.indices_addr == lod_1[1].code.unpack.addr, "Weird tfrag.");
-
-
-    // TODO: load lod 1 strips and indices
     const lod1Buffer = view.subview(header.lod1Offset, header.lod0Offset - header.lod1Offset);
     const lod1CommandList = readVifCommandList(lod1Buffer);
     const lod1CommandListUnpacks = lod1CommandList.filter(cmd => isUnpackCommand(cmd.cmd));
@@ -1043,42 +1003,9 @@ export function readTfrag(view: DataViewExt, header: TfragHeader) {
     Lod 1 and 0 shared
     */
 
-
-    // Buffer lod_01_buffer = data.subbuf(
-    // 	header.lod_0_ofs,
-    // 	header.shared_ofs + header.lod_1_size * 0x10 - header.lod_0_ofs);
-    // std::vector<VifPacket> lod_01_command_list = read_vif_command_list(lod_01_buffer);
-    // std::vector<VifPacket> lod_01 = filter_vif_unpacks(lod_01_command_list);
-
     const lod01Buffer = view.subview(header.lod0Offset, header.sharedOffset + header.lod1Size * 0x10 - header.lod0Offset);
     const lod01CommandList = readVifCommandList(lod01Buffer);
     const lod01CommandListUnpacks = lod01CommandList.filter(cmd => isUnpackCommand(cmd.cmd));
-
-
-    // s32 i = 0;
-    // if (i < lod_01.size() && lod_01[i].code.unpack.vnvl == VifVnVl::V4_8 && tfrag.common_vu_header.positions_lod_01_count > 0) {
-    // 	tfrag.lod_01_parent_indices = read_unpack<u8>(lod_01[i], VifVnVl::V4_8);
-    // 	tfrag.memory_map.parent_indices_lod_01_addr = lod_01[i].code.unpack.addr;
-    // 	s32 size_difference = (s32) tfrag.lod_01_parent_indices.size() - (s32) tfrag.common_vu_header.positions_lod_01_count;
-    // 	verify(size_difference >= 0 && size_difference < 4, "Parent indices array has bad size.");
-    // 	tfrag.lod_01_parent_indices.resize(tfrag.common_vu_header.positions_lod_01_count);
-    // 	i++;
-    // }
-    // if (i < lod_01.size() && lod_01[i].code.unpack.vnvl == VifVnVl::V4_8 && lod_01[i].code.unpack.addr) {
-    // 	tfrag.lod_01_unknown_indices_2 = read_unpack<u8>(lod_01[i], VifVnVl::V4_8);
-    // 	tfrag.memory_map.unk_indices_2_lod_01_addr = lod_01[i].code.unpack.addr;
-    // 	i++;
-    // }
-    // if (i < lod_01.size() && lod_01[i].code.unpack.vnvl == VifVnVl::V4_16) {
-    // 	tfrag.lod_01_vertex_info = read_unpack<TfragVertexInfo>(lod_01[i], VifVnVl::V4_16);
-    // 	tfrag.memory_map.vertex_info_lod_01_addr = lod_01[i].code.unpack.addr;
-    // 	i++;
-    // }
-    // if (i < lod_01.size() && lod_01[i].code.unpack.vnvl == VifVnVl::V3_16) {
-    // 	tfrag.lod_01_positions = read_unpack<TfragVertexPosition>(lod_01[i], VifVnVl::V3_16);
-    // 	tfrag.memory_map.positions_lod_01_addr = lod_01[i].code.unpack.addr;
-    // 	i++;
-    // }
 
     let lod01Positions: { data: { x: number, y: number, z: number }[]; addr: number } | null = null;
     let lod01VertexInfo: { data: TfragVertexInfo[]; addr: number } | null = null;
@@ -1117,53 +1044,9 @@ export function readTfrag(view: DataViewExt, header: TfragHeader) {
         }
     }
 
-
-
     /*
     Lod0
     */
-
-
-
-
-    // Buffer lod_0_buffer = data.subbuf(
-    // 	header.shared_ofs + header.lod_1_size * 0x10,
-    // 	header.rgba_ofs - (header.lod_1_size + header.lod_2_size - header.common_size) * 0x10);
-    // std::vector<VifPacket> lod_0_command_list = read_vif_command_list(lod_0_buffer);
-    // std::vector<VifPacket> lod_0 = filter_vif_unpacks(lod_0_command_list);
-
-    // i = 0;
-    // if (i < lod_0.size() && lod_0[i].code.unpack.vnvl == VifVnVl::V3_16) {
-    // 	tfrag.lod_0_positions = read_unpack<TfragVertexPosition>(lod_0[i], VifVnVl::V3_16);
-    // 	tfrag.memory_map.positions_lod_0_addr = lod_0[i].code.unpack.addr;
-    // 	i++;
-    // }
-    // verify(i < lod_0.size(), "Too few LOD 0 VIF unpacks!");
-    // tfrag.lod_0_strips = read_unpack<TfragStrip>(lod_0[i], VifVnVl::V4_8);
-    // verify(tfrag.memory_map.strips_addr == lod_0[i].code.unpack.addr, "Weird tfrag.");
-    // i++;
-    // verify(i < lod_0.size(), "Too few LOD 0 VIF unpacks!");
-    // tfrag.lod_0_indices = read_unpack<u8>(lod_0[i], VifVnVl::V4_8);
-    // verify(tfrag.memory_map.indices_addr == lod_0[i].code.unpack.addr, "Weird tfrag.");
-    // i++;
-    // if (i < lod_0.size() && lod_0[i].code.unpack.vnvl == VifVnVl::V4_8 && tfrag.common_vu_header.positions_lod_0_count > 0) {
-    // 	tfrag.lod_0_parent_indices = read_unpack<u8>(lod_0[i], VifVnVl::V4_8);
-    // 	tfrag.memory_map.parent_indices_lod_0_addr = lod_0[i].code.unpack.addr;
-    // 	s32 size_difference = (s32) tfrag.lod_0_parent_indices.size() - (s32) tfrag.common_vu_header.positions_lod_0_count;
-    // 	verify(size_difference >= 0 && size_difference < 4, "Parent indices array has bad size.");
-    // 	tfrag.lod_0_parent_indices.resize(tfrag.common_vu_header.positions_lod_0_count);
-    // 	i++;
-    // }
-    // if (i < lod_0.size() && lod_0[i].code.unpack.vnvl == VifVnVl::V4_8) {
-    // 	tfrag.lod_0_unknown_indices_2 = read_unpack<u8>(lod_0[i], VifVnVl::V4_8);
-    // 	tfrag.memory_map.unk_indices_2_lod_0_addr = lod_0[i].code.unpack.addr;
-    // 	i++;
-    // }
-    // if (i < lod_0.size() && lod_0[i].code.unpack.vnvl == VifVnVl::V4_16) {
-    // 	tfrag.lod_0_vertex_info = read_unpack<TfragVertexInfo>(lod_0[i], VifVnVl::V4_16);
-    // 	tfrag.memory_map.vertex_info_lod_0_addr = lod_0[i].code.unpack.addr;
-    // 	i++;
-    // }
 
     const lod0Buffer = view.subview(
         header.sharedOffset + header.lod1Size * 0x10,
@@ -1441,7 +1324,7 @@ export function vifCommandSizeInBytes(cmd: number, num: number, immediate: numbe
             if (wl <= cl) {
                 // Skipping write
                 // wl is the number of qwords written to the output per write cycle, and cl is the stride between write cycles in qwords.
-                // if cl>, then all of the vector elements are written and no data is skipped, so we can just multiply to get the input size
+                // if cl>wl, then all of the vector elements are written and no data is skipped, so we can just multiply to get the input size
                 size = num * gsize;
             } else {
                 // Filling write

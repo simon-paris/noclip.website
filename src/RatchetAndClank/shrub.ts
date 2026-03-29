@@ -46,13 +46,12 @@ in vec3 v_Rgb;
 
 void main() {
     vec4 texColor = texture(u_Texture, vec2(v_TS.x, v_TS.y));
-    float alpha = min(texColor.a * 2.0, 1.0);
-    // if (alpha < 0.01) {
-    //     discard;
-    // }
+    float alpha = min(texColor.a, 1.0);
+    if (alpha < 0.05) {
+        discard;
+    }
     vec3 shading = vec3(abs(v_Normal.x + v_Normal.y + v_Normal.z) / 10.f);
-    // gl_FragColor = vec4(v_Rgb, alpha); // not working
-    gl_FragColor = vec4(texColor.rgb - shading, alpha);
+    gl_FragColor = vec4(texColor.rgb * v_Rgb, alpha);
 }
 `;
 
@@ -151,11 +150,6 @@ export function assembleShrubClassGeometry(shrub: ShrubClass) {
 
     let draws: { material: number, vertexCount: number }[] = [];
 
-    function fixTexcoord(n: number) {
-        while (n > 0x1000) n -= 0x1000;
-        return n;
-    }
-
     for (const { vertices, material } of packets) {
         for (const vertex of vertices) {
             const normal = shrub.body.normals[vertex.n];
@@ -165,8 +159,8 @@ export function assembleShrubClassGeometry(shrub: ShrubClass) {
             vertexArrayBuffer[ptr++] = normalScale * normal.x;
             vertexArrayBuffer[ptr++] = normalScale * normal.y;
             vertexArrayBuffer[ptr++] = normalScale * normal.z;
-            vertexArrayBuffer[ptr++] = texcoordScale * fixTexcoord(vertex.s);
-            vertexArrayBuffer[ptr++] = texcoordScale * fixTexcoord(vertex.t);
+            vertexArrayBuffer[ptr++] = texcoordScale * vertex.s;
+            vertexArrayBuffer[ptr++] = texcoordScale * vertex.t;
         }
         draws.push({ material: material.tex0.low, vertexCount: vertices.length });
     }

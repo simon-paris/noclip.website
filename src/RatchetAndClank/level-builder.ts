@@ -69,10 +69,10 @@ export function buildLevelFromFiles(files: LevelFiles) {
     const tieClassEntries = readTieOrMobyClassEntryArray(files.coreIndex.subview(levelCoreHeader.tieClasses.offset), levelCoreHeader.tieClasses.count);
     const tieTextureEntries = files.coreIndex.subdivide(levelCoreHeader.tieTextures.offset, levelCoreHeader.tieTextures.count, SIZEOF_TEXTURE_ENTRY).map(readTextureEntry);
     const tieTextures = tieTextureEntries.map((entry, i) => readTextureData(entry, textureData, files.gsRam, "Tie", i));
-    const tieClassesAndTextures = tieClassEntries.map(entry => {
+    const tieClassesAndTextures = tieClassEntries.map((entry, i) => {
         return {
             tieEntry: entry,
-            tieClass: readTieClass(files.coreData.subview(entry.offsetInAssetWad)),
+            tieClass: readTieClass(files.coreData.subview(entry.offsetInAssetWad), i),
             textureIndices: entry.textures,
         };
     });
