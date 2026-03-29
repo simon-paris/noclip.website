@@ -76,11 +76,10 @@ export function decompressWad(srcView: DataViewExt) {
     }
 
     while (srcPtr < srcView.byteLength) {
-        // debugWadPacket(utils);
         decompressWadPacket(utils);
     }
 
-    // the output should not be a view, it must be a real ArrayBuffer
+    // ensure we output a real ArrayBuffer not a view
     const correctlySizedBuffer = new ArrayBuffer(destPtr);
     new Uint8Array(correctlySizedBuffer).set(destBuf.subarray(0, destPtr));
     return correctlySizedBuffer;
@@ -164,46 +163,6 @@ function decompressWadPacket(u: {
         const littleLiteralSize = u.peek8(-2) & 3;
         u.writeLit(littleLiteralSize);
     }
-
-    return flag;
-}
-
-
-function debugWadPacket(u: Parameters<typeof decompressWadPacket>[0]) {
-    const flag = u.peek8(0);
-    let packetType = "";
-
-    if (flag < 0x10) {
-        if (flag !== 0) {
-            packetType = "big literal"
-        } else {
-            packetType = "medium literal"
-        }
-    } else if (flag < 0x20) {
-        packetType = "far match"
-    } else if (flag < 0x40) {
-        packetType = "medium match"
-    } else {
-        packetType = "little match"
-    }
-
-    console.log(`flag=${flag.toString(16).padStart(2, "0")} type="${packetType}"`);
-
-    decompressWadPacket({
-        ...u,
-        writeLit(bytes) {
-            console.log(`writing literal ${bytes} bytes`)
-            u.writeLit(bytes);
-        },
-        writeMatch(lookback, bytes) {
-            console.log(`writing match ${bytes} bytes lookback=${lookback}`);
-            u.writeMatch(lookback, bytes);
-        },
-        alignToNext4Kb() {
-            console.log(`aligning to next 0x1000 bytes`);
-            u.alignToNext4Kb();
-        }
-    });
 
     return flag;
 }

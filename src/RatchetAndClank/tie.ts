@@ -21,15 +21,15 @@ ${TieProgram.Common}
 
 layout(location = ${TieProgram.a_Position}) in vec3 a_Position;
 layout(location = ${TieProgram.a_STQ}) in vec3 a_STQ;
-layout(location = ${TieProgram.a_Rgba}) in float a_Rgba;
+layout(location = ${TieProgram.a_Rgba}) in vec4 a_Rgba;
 
 out vec2 v_UV;
-out float v_Rgba;
+out vec4 v_Rgba;
 
 void main() {
     vec4 t_PositionWorld = UnpackMatrix(u_tieInstances[gl_InstanceID].transform) * vec4(a_Position.xyz, 1.0f);
     gl_Position = UnpackMatrix(u_ClipFromWorld) * t_PositionWorld;
-    v_UV = vec2(a_STQ.x, a_STQ.y);
+    v_UV = vec2(a_STQ.x, a_STQ.y); // divide by q? seems to not work
     v_Rgba = a_Rgba;
 }
 `;
@@ -37,7 +37,7 @@ void main() {
     public override frag = `
 ${TieProgram.Common}
 in vec2 v_UV;
-in float v_Rgba;
+in vec4 v_Rgba;
 
 void main() {
     vec4 tex = texture(SAMPLER_2D(u_Texture), v_UV);
@@ -47,6 +47,8 @@ void main() {
         discard;
     }
     gl_FragColor = vec4(texColor, alpha);
+    // gl_FragColor = vec4(vec3(v_Rgba.x, v_Rgba.x, texColor.r), alpha);
+    // gl_FragColor.r = v_Rgba.x;
 }
 `;
 
@@ -82,7 +84,7 @@ export class TieGeometry {
     constructor(cache: GfxRenderCache, tieOClass: number, tie: TieClass, lodLevel: number) {
         const device = cache.device;
 
-        const vertexData = assembleTieClassGeometry(tie, lodLevel);
+        const vertexData = assembleTieClassGeometry(tieOClass, tie, lodLevel);
 
         this.vertexBuffer = createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, vertexData.vertexArrayBuffer.buffer);
         device.setResourceName(this.vertexBuffer, `Tie Class ${tieOClass} (VB)`);
@@ -127,7 +129,7 @@ export class TieGeometry {
     }
 }
 
-export function assembleTieClassGeometry(tie: TieClass, lod: number = 0) {
+export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: number) {
     const positionScale = tie.scale * (1 / 1024);
     const texcoordScale = 1 / 4096;
 
@@ -135,7 +137,7 @@ export function assembleTieClassGeometry(tie: TieClass, lod: number = 0) {
 
     const commandLists: TiePacketCommand[][] = [];
     for (const packet of tie.packets[lod]) commandLists.push(packet.body.commandBuffer);
-    const strips = commnadBufferToStrips(commandLists);
+    const strips = commnadBufferToStrips(tieOClass, commandLists);
     strips.sort((a, b) => a.material - b.material);
 
     const expectedSize = strips.reduce((a, b) => a + ((b.verts.length - 2) * 3 * TieGeometry.elementsPerVertex), 0);
@@ -143,27 +145,41 @@ export function assembleTieClassGeometry(tie: TieClass, lod: number = 0) {
     const vertexArrayBuffer = new Float32Array(expectedSize);
     let ptr = 0;
 
-    function fixTexcoord(n: number) {
-        // while (n < 1) n += 1;
-        const extraBits = n & 0xf000 >> 12;
-        // return n & 0x1fff;
-        while (n > 0x1000) n -= 0x1000;
-        return n;
-        return n;
+    function fixTexCoords(verts: TieDinkyVertex[]) {
+        // if ajacent verts have very different texcoords, they're probably intended to overflow and wrap around
+        let min = 0, max = 0;
+        for (const vert of verts) {
+            if (vert.s < min) min = vert.s;
+            if (vert.s > max) max = vert.s;
+        }
+        if (max - min > 8 * 4096) {
+            for (const vert of verts) {
+                if (vert.s < 8 * 4096) vert.s += 16 * 4096;
+            }
+        }
+
+        min = 0, max = 0;
+        for (const vert of verts) {
+            if (vert.t < min) min = vert.t;
+            if (vert.t > max) max = vert.t;
+        }
+        if (max - min > 8 * 4096) {
+            for (const vert of verts) {
+                if (vert.t < 8 * 4096) vert.t += 16 * 4096;
+            }
+        }
     }
 
-    function pushTriangle(verts: TieDinkyVertex[],) {
+    function pushTriangle(verts: TieDinkyVertex[]) {
+        fixTexCoords(verts);
+        // fixMissingUnknowns(verts);
         for (const vert of verts) {
             vertexArrayBuffer[ptr++] = positionScale * vert.x;
             vertexArrayBuffer[ptr++] = positionScale * vert.y;
             vertexArrayBuffer[ptr++] = positionScale * vert.z;
-            vertexArrayBuffer[ptr++] = texcoordScale * fixTexcoord(vert.s);
-            vertexArrayBuffer[ptr++] = texcoordScale * fixTexcoord(vert.t);
-            vertexArrayBuffer[ptr++] = texcoordScale * vert.q;
-
-            // if (texcoordScale * fixTexcoord(vert.q) !== 1) {
-            //     debugger;
-            // }
+            vertexArrayBuffer[ptr++] = texcoordScale * vert.s;
+            vertexArrayBuffer[ptr++] = texcoordScale * vert.t;
+            vertexArrayBuffer[ptr++] = texcoordScale * vert.q; // not working
 
             vertexArrayBuffer[ptr++] = 0;
             vertexArrayBuffer[ptr++] = 0;
@@ -201,26 +217,37 @@ export function assembleTieClassGeometry(tie: TieClass, lod: number = 0) {
     return { vertexArrayBuffer, draws };
 }
 
-function commnadBufferToStrips(packets: TiePacketCommand[][]) {
+function commnadBufferToStrips(tieOClass: number, packets: TiePacketCommand[][]) {
+
+    let strip: { material: number, verts: TieDinkyVertex[] } | undefined;
+    let lastMaterial = null;
 
     const strips: { material: number, verts: TieDinkyVertex[] }[] = [];
 
-    let lastMaterial = 0;
-    for (const packet of packets) {
-        for (const command of packet) {
+    for (let packetIndex = 0; packetIndex < packets.length; packetIndex++) {
+        const packet = packets[packetIndex];
+        for (let i = 0; i < packet.length; i++) {
+            const command = packet[i];
             switch (command.type) {
                 case TiePacketCommandTypes.PRIMITIVE_RESET: {
-                    assert(lastMaterial !== null);
-                    strips.push({ material: lastMaterial, verts: [] })
+                    if (lastMaterial === null) {
+                        throw new Error(`Unexpected primative reset before material`);
+                    }
+                    strip = { material: lastMaterial, verts: [] }
+                    strips.push(strip);
                     break;
                 }
                 case TiePacketCommandTypes.SET_MATERIAL: {
                     lastMaterial = command.value;
+                    strip = undefined;
                     break;
                 }
                 case TiePacketCommandTypes.VERTEX: {
                     const vert = command.value;
-                    strips[strips.length - 1].verts.push(vert);
+                    if (!strip) {
+                        throw new Error(`Unexpected vertex before primative reset`);
+                    }
+                    strip.verts.push(vert);
                 }
             }
         }
