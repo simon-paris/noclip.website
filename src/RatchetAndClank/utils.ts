@@ -1,11 +1,12 @@
-import { mat4, vec3, vec4 } from "gl-matrix";
+import { mat4, ReadonlyMat4, vec3, vec4 } from "gl-matrix";
 import { PaletteTexture } from "./level-builder";
 import { GfxDevice, GfxFormat, GfxTexture, makeTextureDescriptor2D } from "../gfx/platform/GfxPlatform";
 import { Color } from "../Color";
 
 // rotate the whole world 90 degrees
-export const noclipSpaceFromRatchetSpace = mat4.create();
-mat4.rotateX(noclipSpaceFromRatchetSpace, mat4.clone(noclipSpaceFromRatchetSpace), -Math.PI / 2);
+const _noclipSpaceFromRatchetSpace = mat4.create();
+mat4.rotateX(_noclipSpaceFromRatchetSpace, mat4.clone(_noclipSpaceFromRatchetSpace), -Math.PI / 2);
+export const noclipSpaceFromRatchetSpace = _noclipSpaceFromRatchetSpace as ReadonlyMat4;
 
 // turn an array of objects into a map of arrays, using their oClass field as the key
 export function makeInstanceOClassMap<T extends { oClass: number }>(instances: T[]) {

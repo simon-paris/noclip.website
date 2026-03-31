@@ -116,9 +116,9 @@ export function readLevelSettings(view: DataViewExt) {
     return {
         backgroundColor: view.getInt32_Rgb(0),
         fogColor: view.getInt32_Rgb(0xc),
-        fogNearDistance: view.getFloat32(0x18),
+        fogNearDistance: view.getFloat32(0x18), // weird units - this is a float but it has to be divided by 1024 like it's a fixed point
         fogFarDistance: view.getFloat32(0x1c),
-        fogNearIntensity: view.getFloat32(0x20),
+        fogNearIntensity: view.getFloat32(0x20), // also weird units - 255 means zero fog, 0 means full fog
         fogFarIntensity: view.getFloat32(0x24),
         deathHeight: view.getFloat32(0x28),
         shipPosition: view.getFloat32_Xyz(0x2c),
