@@ -1,7 +1,7 @@
 import { readDirectionLightInstance, readGameplayHeader, readGrindPathBlock, readInstanceBlock, readLevelSettings, readPathBlock, readPointLightInstance, readShrubInstance, readTieInstance, ShrubInstance, SIZEOF_DIRECTION_LIGHT_INSTANCE, SIZEOF_POINT_LIGHT_INSTANCE, SIZEOF_SHRUB_INSTANCE, SIZEOF_TIE_INSTANCE, TieInstance } from "./structs-gameplay";
 import { DataViewExt } from "../DataViewExt";
 import { assert } from "../util";
-import { readGsRamTableEntry, readLevelCoreHeader, readShrubClass, readShrubClassEntry, readTextureEntry, readTfrag, readTfragBlockHeader, readTfragHeader, readTieClass, readTieOrMobyClassEntryArray, ShrubClass, SIZEOF_GS_RAM_TABLE_ENTRY, SIZEOF_SHRUB_CLASS_ENTRY, SIZEOF_TEXTURE_ENTRY, SIZEOF_TFRAG_HEADER, TextureEntry, TieClass } from "./structs-core";
+import { readGsRamTableEntry, readLevelCoreHeader, readShrubClass, readShrubClassEntry, readSky, readSkyHeader, readSkyShell, readSkyShellHeader, readSkyTextureEntry, readTextureEntry, readTfrag, readTfragBlockHeader, readTfragHeader, readTieClass, readTieOrMobyClassEntryArray, ShrubClass, SIZEOF_GS_RAM_TABLE_ENTRY, SIZEOF_SHRUB_CLASS_ENTRY, SIZEOF_SKY_TEXTURE_ENTRY, SIZEOF_TEXTURE_ENTRY, SIZEOF_TFRAG_HEADER, SkyHeader, SkyTexture, TextureEntry, TieClass } from "./structs-core";
 import { makeInstanceOClassMap } from "./utils";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { ReadonlyVec3, vec3 } from "gl-matrix";
@@ -123,6 +123,10 @@ export function buildLevelFromFiles(files: LevelFiles) {
         };
     });
 
+    // read sky
+    const sky = readSky(files.coreData.subview(levelCoreHeader.sky));
+    const skyTextures = sky.textureEntries.map((textureEntry, i) => readSkyTextureData(files.coreData.subview(levelCoreHeader.sky), sky.header, textureEntry, i));
+
     return {
         ready: true,
         debug: {
@@ -144,14 +148,20 @@ export function buildLevelFromFiles(files: LevelFiles) {
         tieTextures,
         shrubs,
         shrubTextures,
+        sky,
+        skyTextures,
     };
 }
 
-export type PaletteTexture = ReturnType<typeof readTextureData>;
-function readTextureData(textureEntry: TextureEntry, textureData: DataViewExt, gsRam: DataViewExt, ownerType: string, i: number) {
+export type PaletteTexture = {
+    name: string,
+    textureEntry: { width: number, height: number },
+    pixels: Uint8Array,
+    palette: Color[],
+}
+function readTextureData(textureEntry: TextureEntry, textureData: DataViewExt, gsRam: DataViewExt, ownerType: string, i: number): PaletteTexture {
     const pixels = textureData.subview(textureEntry.dataOffset, textureEntry.width * textureEntry.height).getTypedArrayView(Uint8Array);
     let rgbaPalette = gsRam.subview(textureEntry.palette * 0x100, 256 * 4).subdivide(0, 256, 4).map(view => view.getUint8_Rgba(0));
-    // const rgbaCss = rgbaPalette.map(c => `color: rgba(${c.r}, ${c.g}, ${c.b}, ${c.a / 255});`).join("\n");
     rgbaPalette = fixPalette(rgbaPalette);
 
     return {
@@ -159,7 +169,20 @@ function readTextureData(textureEntry: TextureEntry, textureData: DataViewExt, g
         textureEntry,
         pixels,
         palette: rgbaPalette,
-    }
+    };
+}
+
+function readSkyTextureData(skyView: DataViewExt, skyHeader: SkyHeader, textureEntry: SkyTexture, i: number): PaletteTexture {
+    const pixels = skyView.subview(skyHeader.textureData + textureEntry.dataOffset, textureEntry.width * textureEntry.height).getTypedArrayView(Uint8Array);
+    let rgbaPalette = skyView.subview(skyHeader.textureData + textureEntry.palette, 256 * 4).subdivide(0, 256, 4).map(view => view.getUint8_Rgba(0));
+    rgbaPalette = fixPalette(rgbaPalette);
+
+    return {
+        name: `Sky Texture ${i}`,
+        textureEntry,
+        pixels,
+        palette: rgbaPalette,
+    };
 }
 
 /**
@@ -170,7 +193,6 @@ function fixPalette(palette: Color[]) {
 
     for (let i = 0; i < palette.length; i++) {
         newPalette[i] = palette[mapPaletteIndices(i)];
-        // newPalette[i] = palette[i]
     }
 
     for (let i = 0; i < newPalette.length; i++) {

@@ -18,6 +18,7 @@ import { batches, distanceToCamera, makeTextureWithPalette, noclipSpaceFromRatch
 import { TfragGeometry, TfragProgram } from "./tfrag";
 import { MAX_SHRUB_INSTANCES, ShrubGeometry, ShrubProgram } from "./shrub";
 import { colorFromRGBA8, colorNewFromRGBA, Red, White } from "../Color";
+import { SkyGeometry, SkyProgram } from "./sky";
 
 const pathBase = `RatchetAndClank1`;
 
@@ -29,8 +30,10 @@ class RatchetAndClank1Scene implements SceneGfx {
     private tfragProgram: GfxProgram;
     private tieProgram: GfxProgram;
     private shrubProgram: GfxProgram;
+    private skyProgram: GfxProgram;
 
     private linearSampler: GfxSampler;
+    private clampSampler: GfxSampler;
 
     public textureHolder = new FakeTextureHolder([]);
 
@@ -40,6 +43,8 @@ class RatchetAndClank1Scene implements SceneGfx {
         enableTfrag: true,
         enableTies: true,
         enableShrubs: true,
+        enableSky: true,
+        enableFog: true,
         showPaths: false,
     };
 
@@ -61,6 +66,7 @@ class RatchetAndClank1Scene implements SceneGfx {
         tfragTextures: new Array<GfxTexture>(),
         tieTextures: new Array<GfxTexture>(),
         shrubTextures: new Array<GfxTexture>(),
+        skyTextures: new Array<GfxTexture>(),
     }
 
     // meshes generated from level data
@@ -68,26 +74,31 @@ class RatchetAndClank1Scene implements SceneGfx {
         tfrag: null as null | TfragGeometry,
         ties: new Map<number, (TieGeometry | null)[]>(), // map of oClass to array of LOD geometries
         shrubs: new Map<number, ShrubGeometry>(),
+        skyShells: new Array<SkyGeometry>(),
     };
 
     constructor(private sceneContext: SceneContext, public levelNumber: number) {
-        // The GfxRenderHelper is a helper class that contains several helpers.
         this.renderHelper = new GfxRenderHelper(sceneContext.device, sceneContext);
         const cache = this.renderHelper.renderCache;
 
-        // Compile our shader programs to the GPU.
         this.tfragProgram = cache.createProgram(new TfragProgram());
         this.tieProgram = cache.createProgram(new TieProgram());
         this.shrubProgram = cache.createProgram(new ShrubProgram());
+        this.skyProgram = cache.createProgram(new SkyProgram());
 
-        // Samplers define how exactly textures are sampled; in this case, we want linear filtering,
-        // and we want UVs that are out of bounds to clamp rather than repeat.
         this.linearSampler = cache.createSampler({
             minFilter: GfxTexFilterMode.Bilinear,
             magFilter: GfxTexFilterMode.Bilinear,
             mipFilter: GfxMipFilterMode.Nearest,
             wrapS: GfxWrapMode.Repeat,
             wrapT: GfxWrapMode.Repeat,
+        });
+        this.clampSampler = cache.createSampler({
+            minFilter: GfxTexFilterMode.Bilinear,
+            magFilter: GfxTexFilterMode.Bilinear,
+            mipFilter: GfxMipFilterMode.Nearest,
+            wrapS: GfxWrapMode.Clamp,
+            wrapT: GfxWrapMode.Clamp,
         });
 
         this.fetchLevelFiles().then(() => {
@@ -167,18 +178,50 @@ class RatchetAndClank1Scene implements SceneGfx {
             this.textureHolder.viewerTextures.push({ gfxTexture: gfxTextures.pixelsTexture });
         }
 
+        const { sky, skyTextures } = this.level;
+        for (let i = 0; i < sky.shells.length; i++) {
+            this.geometries.skyShells.push(new SkyGeometry(cache, sky.shells[i]));
+        }
+        for (let i = 0; i < skyTextures.length; i++) {
+            const skyTexture = skyTextures[i];
+            const gfxTextures = makeTextureWithPalette(cache.device, skyTexture);
+            this.textures.skyTextures.push(gfxTextures.pixelsTexture);
+            this.textureHolder.viewerTextures.push({ gfxTexture: gfxTextures.pixelsTexture });
+        }
+
         this.textureHolder.onnewtextures();
     }
 
     private fillSceneParams(template: GfxRenderInst, viewerInput: ViewerRenderInput): void {
-        // Set up the scene parameter uniform block. We need to manually count the size here, which is a bit annoying.
-        // In this case, we know that ub_SceneParams contains a single Mat4x4, and a single Mat4x4 is 16 floats.
-        const data = template.allocateUniformBufferF32(TieProgram.ub_SceneParams, 16);
+        if (!this.level.ready) {
+            throw new Error("Not ready");
+        }
+
+        const size = 16 + 4 + 4 + 4;
+        const data = template.allocateUniformBufferF32(TieProgram.ub_SceneParams, size);
         let offs = 0;
 
-        // Upload the camera's clipFromWorldMatrix to the uniform buffer.
-        viewerInput.camera.setClipPlanes(0.01, 1000);
+        const nearClip = 0.01;
+        const farClip = 1000;
+        viewerInput.camera.setClipPlanes(nearClip, farClip);
         offs += fillMatrix4x4(data, offs, viewerInput.camera.clipFromWorldMatrix);
+
+        if (this.settings.enableFog) {
+            const levelSettings = this.level.levelSettings;
+            const fogColor = levelSettings.fogColor;
+            offs += fillVec4(data, offs, nearClip, farClip, 0, 0);
+            offs += fillVec4(data, offs, fogColor.r / 0xFF, fogColor.g / 0xFF, fogColor.b / 0xFF, 1);
+            offs += fillVec4(data, offs,
+                levelSettings.fogNearDistance / 1024,
+                levelSettings.fogFarDistance / 1024,
+                1 - (levelSettings.fogNearIntensity / 255),
+                1 - (levelSettings.fogFarIntensity / 255),
+            );
+        } else {
+            offs += fillVec4(data, offs, nearClip, farClip, 0, 0);
+            offs += fillVec4(data, offs, 0, 0, 0, 0);
+            offs += fillVec4(data, offs, 1, 1000, 0, 0);
+        }
     }
 
     private renderTfrag(cameraPosition: vec3): void {
@@ -441,6 +484,57 @@ class RatchetAndClank1Scene implements SceneGfx {
         this.renderHelper.renderInstManager.popTemplate();
     }
 
+    private renderSky(cameraPosition: vec3, skyShellIndex: number): void {
+        // const objectMatrix = mat4.clone(noclipSpaceFromRatchetSpace);
+        const objectMatrix = mat4.create(); // the sky shell is already in world space, so it doesn't need a transform
+        mat4.translate(objectMatrix, objectMatrix, cameraPosition); // the sky shell is centered on the camera
+        mat4.multiply(objectMatrix, objectMatrix, noclipSpaceFromRatchetSpace); // convert from Ratchet's coordinate space to our coordinate space
+
+        const skyShellGeometry = this.geometries.skyShells[skyShellIndex];
+        if (!skyShellGeometry) return;
+
+        const template1 = this.renderHelper.pushTemplateRenderInst();
+        template1.setGfxProgram(this.skyProgram);
+        template1.setMegaStateFlags({
+            cullMode: GfxCullMode.None,
+            depthWrite: false,
+            depthCompare: GfxCompareMode.Always,
+            attachmentsState: [{
+                channelWriteMask: GfxChannelWriteMask.AllChannels,
+                rgbBlendState: {
+                    blendMode: GfxBlendMode.Add,
+                    blendSrcFactor: GfxBlendFactor.SrcAlpha,
+                    blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
+                },
+                alphaBlendState: {
+                    blendMode: GfxBlendMode.Add,
+                    blendSrcFactor: GfxBlendFactor.One,
+                    blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
+                },
+            }],
+        });
+        const skyParams = template1.allocateUniformBufferF32(SkyProgram.ub_SkyParams, 16);
+        let offs = 0;
+        offs += fillMatrix4x4(skyParams, offs, objectMatrix);
+
+
+        for (const draw of skyShellGeometry.draws) {
+            const renderInst = this.renderHelper.renderInstManager.newRenderInst();
+            renderInst.setVertexInput(
+                skyShellGeometry.inputLayout,
+                [{ buffer: skyShellGeometry.vertexBuffer, byteOffset: 0 }],
+                { buffer: skyShellGeometry.indexBuffer, byteOffset: 0 },
+            );
+            renderInst.setSamplerBindings(0, [
+                { gfxTexture: this.textures.skyTextures[draw.material], gfxSampler: this.clampSampler }
+            ]);
+            renderInst.setDrawCount(draw.indexCount, draw.startIndex);
+            this.renderInstList.submitRenderInst(renderInst);
+        }
+
+        this.renderHelper.renderInstManager.popTemplate();
+    }
+
     public render(device: GfxDevice, viewerInput: ViewerRenderInput): void {
         if (!this.level.ready) return;
 
@@ -461,6 +555,12 @@ class RatchetAndClank1Scene implements SceneGfx {
         }
         for (const line of this.level.debug.lines) {
             this.renderHelper.debugDraw.drawLine(line.from, line.to, line.color);
+        }
+
+        if (this.settings.enableSky) {
+            for (let i = 0; i < this.geometries.skyShells.length; i++) {
+                this.renderSky(cameraPosition, i);
+            }
         }
 
         if (this.settings.enableTfrag) {
@@ -495,8 +595,8 @@ class RatchetAndClank1Scene implements SceneGfx {
 
         const builder = this.renderHelper.renderGraph.newGraphBuilder();
         const mainColorDesc = makeBackbufferDescSimple(GfxrAttachmentSlot.Color0, viewerInput, standardFullClearRenderPassDescriptor);
-        const backgroundColor = this.level.levelSettings.backgroundColor;
-        mainColorDesc.clearColor = { r: backgroundColor.r / 255, g: backgroundColor.g / 255, b: backgroundColor.b / 255, a: 1 };
+        const fogColor = this.level.levelSettings.fogColor;
+        mainColorDesc.clearColor = { r: fogColor.r / 255, g: fogColor.g / 255, b: fogColor.b / 255, a: 1 };
         const mainDepthDesc = makeBackbufferDescSimple(GfxrAttachmentSlot.DepthStencil, viewerInput, standardFullClearRenderPassDescriptor);
         const mainColorTargetID = builder.createRenderTargetID(mainColorDesc, 'Main Color');
         const mainDepthTargetID = builder.createRenderTargetID(mainDepthDesc, 'Main Depth');
@@ -555,6 +655,12 @@ class RatchetAndClank1Scene implements SceneGfx {
             this.settings.enableShrubs = enableShrubs.checked;
         };
         renderSettingsPanel.contents.appendChild(enableShrubs.elem);
+
+        const enableFog = new UI.Checkbox('Enable Fog', this.settings.enableFog);
+        enableFog.onchanged = () => {
+            this.settings.enableFog = enableFog.checked;
+        };
+        renderSettingsPanel.contents.appendChild(enableFog.elem);
 
         const showPaths = new UI.Checkbox('Show Paths', this.settings.showPaths);
         showPaths.onchanged = () => {

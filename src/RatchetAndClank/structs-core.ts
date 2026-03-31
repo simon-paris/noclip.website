@@ -1867,3 +1867,231 @@ export function readShrubClass(view: DataViewExt) {
         },
     }
 }
+
+export type Sky = ReturnType<typeof readSky>;
+export function readSky(skyView: DataViewExt) {
+    const header = readSkyHeader(skyView);
+    const textureEntries = skyView.subdivide(header.textureDefs, header.textureCount, SIZEOF_SKY_TEXTURE_ENTRY).map(readSkyTextureEntry);
+    const shells = header.shells.slice(0, header.shellCount).map(offset => readSkyShell(skyView, skyView.subview(offset)));
+    return {
+        header,
+        textureEntries,
+        shells,
+    }
+}
+
+export type SkyShell = {
+    header: SkyShellHeader,
+    clusters: {
+        vertices: SkyVertex[],
+        texcoords: SkyTexcoord[],
+        triangles: SkyFace[],
+    }[],
+};
+export function readSkyShell(skyView: DataViewExt, skyShellView: DataViewExt) {
+    const shellHeader = readSkyShellHeader(skyShellView);
+    const skyShells: SkyShell = {
+        header: shellHeader,
+        clusters: [],
+    };
+
+    // skip to 0x10
+    const clusterHeaders = skyShellView.subdivide(0x10, shellHeader.clusterCount, SIZEOF_SKY_CLUSTER_HEADER).map(readSkyClusterHeader);
+    for (const clusterHeader of clusterHeaders) {
+        const dataView = skyView.subview(clusterHeader.data);
+        const vertexBuffer = dataView.subview(clusterHeader.vertexOffset);
+        const vertices = vertexBuffer.subdivide(0, clusterHeader.vertexCount, SIZEOF_SKY_VERTEX).map(readSkyVertex);
+        const texcoordsBuffer = dataView.subview(clusterHeader.stOffset);
+        const texcoords = texcoordsBuffer.subdivide(0, clusterHeader.stOffset, SIZEOF_SKY_TEXCOORD).map(readSkyTexcoord);
+        const indicesBuffer = dataView.subview(clusterHeader.triOffset);
+        const triangles = indicesBuffer.subdivide(0, clusterHeader.triCount, SIZEOF_SKY_FACE).map(readSkyFace);
+        skyShells.clusters.push({
+            vertices,
+            texcoords,
+            triangles,
+        });
+    }
+    return skyShells;
+}
+
+export const SIZEOF_SKY_HEADER = 0x40;
+export type SkyHeader = ReturnType<typeof readSkyHeader>;
+export function readSkyHeader(view: DataViewExt) {
+    /*
+        packed_struct(SkyHeader,
+            // 0x00
+            SkyColour colour;
+            // 0x04
+            s16 clear_screen;
+            // 0x06
+            s16 shell_count;
+            // 0x08
+            s16 sprite_count;
+            // 0x0a
+            s16 maximum_sprite_count;
+            // 0x0c
+            s16 texture_count;
+            // 0x0e
+            s16 fx_count;
+            // 0x10
+            s32 texture_defs;
+            // 0x14
+            s32 texture_data;
+            // 0x18
+            s32 fx_list;
+            // 0x1c
+            s32 sprites;
+            // 0x20
+            s32 shells[8];
+        )
+    */
+    return {
+        clearScreen: view.getInt16(0x04),
+        shellCount: view.getInt16(0x06),
+        spriteCount: view.getInt16(0x08),
+        maximumSpriteCount: view.getInt16(0x0a),
+        textureCount: view.getInt16(0x0c),
+        fxCount: view.getInt16(0x0e),
+        textureDefs: view.getInt32(0x10),
+        textureData: view.getInt32(0x14),
+        fxList: view.getInt32(0x18),
+        sprites: view.getInt32(0x1c),
+        shells: view.getArrayOfNumbers(0x20, 8, Int32Array),
+    };
+}
+
+export const SIZEOF_SKY_TEXTURE_ENTRY = 0x10;
+export type SkyTexture = ReturnType<typeof readSkyTextureEntry>;
+export function readSkyTextureEntry(view: DataViewExt) {
+    /*
+        packed_struct(SkyTexture,
+            // 0x0
+            s32 palette_offset;
+            // 0x4
+            s32 texture_offset;
+            // 0x8
+            s32 width;
+            // 0xc
+            s32 height;
+        )
+    */
+    return {
+        palette: view.getInt32(0x0),
+        dataOffset: view.getInt32(0x4),
+        width: view.getInt32(0x8),
+        height: view.getInt32(0xc),
+    };
+}
+
+export const SIZEOF_SKY_SHELL_HEADER = 0x8;
+export type SkyShellHeader = ReturnType<typeof readSkyShellHeader>;
+export function readSkyShellHeader(view: DataViewExt) {
+    /*
+        packed_struct(SkyShellHeader,
+            // 0x0
+            s32 cluster_count;
+            // 0x4
+            s32 flags;
+            // maybe rotation data here? actual size of this is 0x10
+        )
+    */
+    return {
+        clusterCount: view.getInt32(0x0),
+        flags: view.getInt32(0x4),
+    };
+}
+
+export const SIZEOF_SKY_CLUSTER_HEADER = 0x20;
+export type SkyClusterHeader = ReturnType<typeof readSkyClusterHeader>;
+export function readSkyClusterHeader(view: DataViewExt) {
+    /*
+        packed_struct(SkyClusterHeader,
+            // 0x00
+            Vec4f bounding_sphere;
+            // 0x10
+            s32 data;
+            // 0x14
+            s16 vertex_count;
+            // 0x16
+            s16 tri_count;
+            // 0x18
+            s16 vertex_offset;
+            // 0x1a
+            s16 st_offset;
+            // 0x1c
+            s16 tri_offset;
+            // 0x1e
+            s16 data_size;
+        )
+    */
+    return {
+        boundingSphere: view.getFloat32_Xyzw(0x00),
+        data: view.getInt32(0x10),
+        vertexCount: view.getInt16(0x14),
+        triCount: view.getInt16(0x16),
+        vertexOffset: view.getInt16(0x18),
+        stOffset: view.getInt16(0x1a),
+        triOffset: view.getInt16(0x1c),
+        dataSize: view.getInt16(0x1e),
+    };
+}
+
+export const SIZEOF_SKY_VERTEX = 0x8;
+export type SkyVertex = ReturnType<typeof readSkyVertex>;
+export function readSkyVertex(view: DataViewExt) {
+    /*
+        packed_struct(SkyVertex,
+            // 0x0
+            s16 x;
+            // 0x2
+            s16 y;
+            // 0x4
+            s16 z;
+            // 0x6
+            s16 alpha;
+        )
+    */
+    return {
+        x: view.getInt16(0x0),
+        y: view.getInt16(0x2),
+        z: view.getInt16(0x4),
+        alpha: view.getInt16(0x6),
+    };
+}
+
+export const SIZEOF_SKY_TEXCOORD = 0x4;
+export type SkyTexcoord = ReturnType<typeof readSkyTexcoord>;
+export function readSkyTexcoord(view: DataViewExt) {
+    /*
+        packed_struct(SkyTexcoord,
+            // 0x0
+            s16 s;
+            // 0x2
+            s16 t;
+        )
+    */
+    return {
+        s: view.getUint16(0x0),
+        t: view.getUint16(0x2),
+    };
+}
+
+export const SIZEOF_SKY_FACE = 0x4;
+export type SkyFace = ReturnType<typeof readSkyFace>;
+export function readSkyFace(view: DataViewExt) {
+    /*
+        packed_struct(SkyFace,
+            // 0x0
+            u8 indices[3];
+            // 0x3
+            u8 texture;
+        )
+    */
+    return {
+        indices: view.getArrayOfNumbers(0x0, 3, Uint8Array),
+        texture: view.getUint8(0x3),
+    };
+}
+
+
+

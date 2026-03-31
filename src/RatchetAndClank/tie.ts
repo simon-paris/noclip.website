@@ -39,6 +39,12 @@ ${TieProgram.Common}
 in vec2 v_UV;
 in vec4 v_Rgba;
 
+float linearizeDepth(float depth, float near, float far) {
+    float z = depth * 2.0 - 1.0;
+    return (2.0 * near * far) / (far + near - z * (far - near));
+}
+
+
 void main() {
     vec4 tex = texture(SAMPLER_2D(u_Texture), v_UV);
     vec3 texColor = vec3(tex.r, tex.g, tex.b);
@@ -46,9 +52,19 @@ void main() {
     if (alpha < 0.01) {
         discard;
     }
-    gl_FragColor = vec4(texColor, alpha);
-    // gl_FragColor = vec4(vec3(v_Rgba.x, v_Rgba.x, texColor.r), alpha);
-    // gl_FragColor.r = v_Rgba.x;
+    vec3 surfaceCoolor = texColor;
+
+    float worldDepth = linearizeDepth(1.0 - gl_FragCoord.z, u_NearFarClip.x, u_NearFarClip.y);
+
+    vec3 fogColor = u_FogColor.xyz;
+    float nearFogDist = u_FogParams.x;
+    float farFogDist = u_FogParams.y;
+
+    float fogFactor = 1.0 - clamp((farFogDist - worldDepth) / (farFogDist - nearFogDist), 0.0, 1.0);
+    fogFactor = u_FogParams.z + fogFactor * (u_FogParams.w - u_FogParams.z);
+
+    vec3 finalColor = mix(surfaceCoolor, fogColor, fogFactor);
+    gl_FragColor = vec4(finalColor, alpha);
 }
 `;
 
@@ -57,6 +73,9 @@ ${GfxShaderLibrary.MatrixLibrary}
 
 layout(std140) uniform ub_SceneParams {
     Mat4x4 u_ClipFromWorld;
+    vec2 u_NearFarClip;
+    vec4 u_FogColor;
+    vec4 u_FogParams; // nearDist, farDist, nearIntensity, farIntensity
 };
 
 struct TieInstance {
