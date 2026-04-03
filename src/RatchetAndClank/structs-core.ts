@@ -379,7 +379,7 @@ export const TiePacketCommandTypes = {
 export type TiePacketCommand = {
     type: typeof TiePacketCommandTypes.PRIMITIVE_RESET,
     size: number,
-    value: null
+    value: TieStrip
 } | {
     type: typeof TiePacketCommandTypes.SET_MATERIAL,
     size: number,
@@ -420,6 +420,10 @@ export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketH
     const tieStrips = view.subdivide(0x2c, tieUnpackHeader.stripCount, SIZEOF_TIE_STRIP).map(readTieStrip);
 
     const vertexBuffer = view.subview(tiePacketHeader.vertOffset * 0x10, tiePacketHeader.vertSize * 0x10);
+    // const normalsGuess = view.subview((tiePacketHeader.vertOffset + tiePacketHeader.vertSize) * 0x10, tiePacketHeader.vertSize * 0x10);
+    // console.log("dinky", tieUnpackHeader.dinkyVerticesSizePlusFour, "fat", tieUnpackHeader.fatVerticesSize, "unknown8", tieUnpackHeader.unknown7);
+    const guess = view.subdivide((tiePacketHeader.vertOffset + tiePacketHeader.vertSize) * 0x10, tiePacketHeader.vertSize * 0x4, 0x4).map(v => v.getUint8_Xyz(0));
+    console.log(guess);
 
     // read dinky verts
     const dinkyVertexCount = (tieUnpackHeader.dinkyVerticesSizePlusFour - 4) / 2; // ???
@@ -438,7 +442,7 @@ export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketH
     const MAX_BUFFER_SIZE = 0x100; // the max size seems to be ~185 so I'll use 256 to be safe
     const imaginaryGpuCommandBuffer: (TiePacketCommand | null)[] = Array(MAX_BUFFER_SIZE).fill(null);
 
-    function writeCommand(offset: number, type: typeof TiePacketCommandTypes.PRIMITIVE_RESET, value: null): void;
+    function writeCommand(offset: number, type: typeof TiePacketCommandTypes.PRIMITIVE_RESET, value: TieStrip): void;
     function writeCommand(offset: number, type: typeof TiePacketCommandTypes.SET_MATERIAL, value: number): void;
     function writeCommand(offset: number, type: typeof TiePacketCommandTypes.VERTEX, value: TieDinkyVertex): void;
     function writeCommand(offset: number, type: TiePacketCommand["type"], value: any) {
@@ -477,7 +481,7 @@ export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketH
 
     // Write primative reset commands. There's always one before the first vert (address 7).
     for (const strip of tieStrips) {
-        writeCommand(strip.gifTagOffset, TiePacketCommandTypes.PRIMITIVE_RESET, null);
+        writeCommand(strip.gifTagOffset, TiePacketCommandTypes.PRIMITIVE_RESET, strip);
     }
 
     // Write material change commands
@@ -569,9 +573,18 @@ export function readTieUnpackHeader(view: DataViewExt) {
     */
 
     return {
+        unknown0: view.getUint8(0x0),
+        unknown1: view.getUint8(0x1),
+        unknown2: view.getUint8(0x2),
         stripCount: view.getUint8(0x3),
+        unknown4: view.getUint8(0x4),
+        unknown5: view.getUint8(0x5),
+        unknown6: view.getUint8(0x6),
+        unknown7: view.getUint8(0x7),
         dinkyVerticesSizePlusFour: view.getUint8(0x8),
         fatVerticesSize: view.getUint8(0x9),
+        unknown8: view.getUint8(0xa),
+        unknown9: view.getUint8(0xb),
     };
 }
 
@@ -594,6 +607,7 @@ export function readTieStrip(view: DataViewExt) {
     return {
         vertexCount: view.getUint8(0x0),
         gifTagOffset: view.getUint8(0x2),
+        windingOrder: view.getUint8(0x1),
     };
 }
 

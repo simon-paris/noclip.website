@@ -5,6 +5,7 @@ import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice, GfxFormat
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { DeviceProgram } from "../Program";
 import { assert } from "../util";
+import { RatchetShaderLib } from "./shader-lib";
 import { ShrubClass, ShrubPacketCommand, ShrubPacketCommandTypes, ShrubTexturePrimitive, ShrubVertex, TieClass, TieDinkyVertex, TiePacketCommandTypes } from "./structs-core";
 
 export const MAX_SHRUB_INSTANCES = 128;
@@ -26,41 +27,40 @@ layout(location = ${ShrubProgram.a_Normal}) in vec3 a_Normal;
 layout(location = ${ShrubProgram.a_TS}) in vec2 a_TS;
 
 out vec2 v_TS;
-out vec3 v_Normal;
 out vec3 v_Rgb;
+out vec3 v_Normal;
+
+${RatchetShaderLib.LightingFunctions}
 
 void main() {
-    vec4 t_PositionWorld = UnpackMatrix(u_shrubInstances[gl_InstanceID].transform) * vec4(a_Position.xyz, 1.0f);
+    mat4 instanceTransform = UnpackMatrix(u_shrubInstances[gl_InstanceID].transform);
+    vec4 t_PositionWorld = instanceTransform * vec4(a_Position.xyz, 1.0f);
     gl_Position = UnpackMatrix(u_ClipFromWorld) * t_PositionWorld;
     v_TS = a_TS.xy;
-    v_Normal = a_Normal;
-    v_Rgb = u_shrubInstancesRgbs[gl_InstanceID].rgb;
+    vec3 normal = normalize(inverse(transpose(mat3(instanceTransform))) * a_Normal);
+    v_Rgb = commonVertexLighting(u_shrubInstancesRgbs[gl_InstanceID].rgb, normal, 0);
+    v_Normal = normal;
 }
 `;
 
     public override frag = `
 ${ShrubProgram.Common}
 in vec2 v_TS;
-in vec3 v_Normal;
 in vec3 v_Rgb;
+in vec3 v_Normal;
+
+${RatchetShaderLib.CommonFragmentShader}
 
 void main() {
-    vec4 texColor = texture(u_Texture, vec2(v_TS.x, v_TS.y));
-    float alpha = min(texColor.a, 1.0);
-    if (alpha < 0.05) {
-        discard;
-    }
-    vec3 shading = vec3(abs(v_Normal.x + v_Normal.y + v_Normal.z) / 10.f);
-    gl_FragColor = vec4(texColor.rgb * v_Rgb, alpha);
+    gl_FragColor = commonFragmentShader(vec4(v_Rgb, 1.0), u_Texture, v_TS);
+    // gl_FragColor = vec4(v_Normal, 1.0);
 }
+
 `;
 
     public static Common = `
 ${GfxShaderLibrary.MatrixLibrary}
-
-layout(std140) uniform ub_SceneParams {
-    Mat4x4 u_ClipFromWorld;
-};
+${RatchetShaderLib.SceneParams}
 
 struct ShrubInstance {
     Mat4x4 transform;
@@ -229,11 +229,7 @@ function commandBufferToTriangles(commandBuffer: ShrubPacketCommand[]) {
 function stripToTris(strip: ShrubVertex[]) {
     const tris: ShrubVertex[] = [];
     for (let i = 0; i < strip.length - 2; i++) {
-        if (i % 2 === 0) {
-            tris.push(strip[i + 0], strip[i + 1], strip[i + 2]);
-        } else {
-            tris.push(strip[i + 0], strip[i + 2], strip[i + 1]);
-        }
+        tris.push(strip[i + 0], strip[i + 1], strip[i + 2]);
     }
     return tris;
 };
