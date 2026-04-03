@@ -3,6 +3,7 @@ import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
 import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice, GfxFormat, GfxInputLayout, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { DeviceProgram } from "../Program";
+import { RatchetShaderLib } from "./shader-lib";
 import { SkyShell } from "./structs-core";
 
 export class SkyProgram extends DeviceProgram {
@@ -46,10 +47,7 @@ void main() {
 
     public static Common = `
 ${GfxShaderLibrary.MatrixLibrary}
-
-layout(std140) uniform ub_SceneParams {
-    Mat4x4 u_ClipFromWorld;
-};
+${RatchetShaderLib.SceneParams}
 
 layout(std140) uniform ub_SkyParams {
     Mat4x4 u_SkyTransform;

@@ -19,6 +19,7 @@ import { TfragGeometry, TfragProgram } from "./tfrag";
 import { MAX_SHRUB_INSTANCES, ShrubGeometry, ShrubProgram } from "./shrub";
 import { colorFromRGBA8, colorNewFromRGBA, Red, White } from "../Color";
 import { SkyGeometry, SkyProgram } from "./sky";
+import { RatchetShaderLib } from "./shader-lib";
 
 const pathBase = `RatchetAndClank1`;
 
@@ -189,27 +190,31 @@ class RatchetAndClank1Scene implements SceneGfx {
             this.textureHolder.viewerTextures.push({ gfxTexture: gfxTextures.pixelsTexture });
         }
 
+        console.log(this.geometries);
+
         this.textureHolder.onnewtextures();
     }
 
-    private fillSceneParams(template: GfxRenderInst, viewerInput: ViewerRenderInput): void {
+    private fillSceneParams(template: GfxRenderInst, viewerInput: ViewerRenderInput, cameraPosition: vec3): void {
         if (!this.level.ready) {
             throw new Error("Not ready");
         }
 
-        const size = 16 + 4 + 4 + 4;
-        const data = template.allocateUniformBufferF32(TieProgram.ub_SceneParams, size);
+        const data = template.allocateUniformBufferF32(TieProgram.ub_SceneParams, RatchetShaderLib.SceneParamsSizeInFloats);
         let offs = 0;
 
+        // camera transform and position (24 floats)
         const nearClip = 0.01;
         const farClip = 1000;
         viewerInput.camera.setClipPlanes(nearClip, farClip);
         offs += fillMatrix4x4(data, offs, viewerInput.camera.clipFromWorldMatrix);
+        offs += fillVec3v(data, offs, cameraPosition, 0);
+        offs += fillVec4(data, offs, nearClip, farClip, 0, 0);
 
+        // fog params (8 floats)
         if (this.settings.enableFog) {
             const levelSettings = this.level.levelSettings;
             const fogColor = levelSettings.fogColor;
-            offs += fillVec4(data, offs, nearClip, farClip, 0, 0);
             offs += fillVec4(data, offs, fogColor.r / 0xFF, fogColor.g / 0xFF, fogColor.b / 0xFF, 1);
             offs += fillVec4(data, offs,
                 levelSettings.fogNearDistance / 1024,
@@ -218,9 +223,25 @@ class RatchetAndClank1Scene implements SceneGfx {
                 1 - (levelSettings.fogFarIntensity / 255),
             );
         } else {
-            offs += fillVec4(data, offs, nearClip, farClip, 0, 0);
             offs += fillVec4(data, offs, 0, 0, 0, 0);
             offs += fillVec4(data, offs, 1, 1000, 0, 0);
+        }
+
+        // lights (16 * 8 floats)
+        const directionalLights = this.level.directionLights;
+        for (let i = 0; i < 8; i++) {
+            if (i < directionalLights.length) {
+                const light = directionalLights[i];
+                offs += fillVec4(data, offs, light.directionA.x, -light.directionA.y, light.directionA.z, 0);
+                offs += fillVec4(data, offs, light.colorA.r, light.colorA.g, light.colorA.b, 1);
+                offs += fillVec4(data, offs, light.directionB.x, -light.directionB.y, light.directionB.z, 0);
+                offs += fillVec4(data, offs, light.colorB.r, light.colorB.g, light.colorB.b, 1);
+            } else {
+                offs += fillVec4(data, offs, 0, 0, 0, 0);
+                offs += fillVec4(data, offs, 0, 0, 0, 0);
+                offs += fillVec4(data, offs, 0, 0, 0, 0);
+                offs += fillVec4(data, offs, 0, 0, 0, 0);
+            }
         }
     }
 
@@ -548,7 +569,7 @@ class RatchetAndClank1Scene implements SceneGfx {
             { numSamplers: 1, numUniformBuffers: 2 },
         ]);
 
-        this.fillSceneParams(template, viewerInput);
+        this.fillSceneParams(template, viewerInput, cameraPosition);
 
         for (const locator of this.level.debug.locators) {
             this.renderHelper.debugDraw.drawLocator(locator.position, 0.05, locator.color);

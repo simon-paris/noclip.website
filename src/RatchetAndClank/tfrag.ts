@@ -3,6 +3,7 @@ import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
 import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice, GfxFormat, GfxInputLayout, GfxProgram, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { DeviceProgram } from "../Program";
+import { RatchetShaderLib } from "./shader-lib";
 import { Tfrag, TfragAdGifs, TfragLight, TfragStrip, TfragVertexInfo } from "./structs-core";
 
 export class TfragProgram extends DeviceProgram {
@@ -39,37 +40,38 @@ out vec3 v_Normal;
 out vec4 v_Rgba;
 out vec2 v_TS;
 
+${RatchetShaderLib.LightingFunctions}
+
 void main() {
-    vec4 t_PositionWorld = UnpackMatrix(u_WorldFromLocal) * vec4(a_Position.xyz, 1.0f);
+    mat4 worldTransform = UnpackMatrix(u_WorldFromLocal);
+    vec4 t_PositionWorld = worldTransform * vec4(a_Position.xyz, 1.0f);
     gl_Position = UnpackMatrix(u_ClipFromWorld) * t_PositionWorld;
-    v_Normal = a_Normal;
-    v_Rgba = a_Rgba;
+
+    vec3 normal = normalize(inverse(transpose(mat3(worldTransform))) * a_Normal);
+    v_Rgba = vec4(commonVertexLighting(a_Rgba.rgb, normal, 0), a_Rgba.a);
+
     v_TS = a_TS.xy;
+    v_Normal = normal;
 }
 `;
 
     public override frag = `
 ${TfragProgram.Common}
+${RatchetShaderLib.CommonFragmentShader}
+
 in vec3 v_Normal;
 in vec4 v_Rgba;
 in vec2 v_TS;
 
 void main() {
-    vec4 texColor = texture(u_Texture, vec2(v_TS.x, v_TS.y));
-    vec4 shading = vec4(vec3(abs(v_Normal.x + v_Normal.y + v_Normal.z) / 10.f), 0.f);
-    if (texColor.a < 0.05) {
-        discard;
-    }
-    gl_FragColor = texColor * (1.5 * (1.0 + v_Rgba) - 1.0) - shading;
+    gl_FragColor = commonFragmentShader(v_Rgba, u_Texture, v_TS);
+    // gl_FragColor = vec4(v_Normal, 1.0);
 }
 `;
 
     public static Common = `
 ${GfxShaderLibrary.MatrixLibrary}
-
-layout(std140) uniform ub_SceneParams {
-    Mat4x4 u_ClipFromWorld;
-};
+${RatchetShaderLib.SceneParams}
 
 layout(std140) uniform ub_TfragParams {
     Mat4x4 u_WorldFromLocal;
