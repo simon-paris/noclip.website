@@ -72,7 +72,7 @@ export function buildLevelFromFiles(files: LevelFiles) {
     const tieClassesAndTextures = tieClassEntries.map((entry, i) => {
         return {
             tieEntry: entry,
-            tieClass: readTieClass(files.coreData.subview(entry.offsetInAssetWad), i),
+            tieClass: readTieClass(files.coreData.subview(entry.offsetInAssetWad), entry.oClass),
             textureIndices: entry.textures,
         };
     });
@@ -129,10 +129,6 @@ export function buildLevelFromFiles(files: LevelFiles) {
 
     return {
         ready: true,
-        debug: {
-            locators,
-            lines,
-        },
 
         levelCoreHeader,
 

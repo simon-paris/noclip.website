@@ -1,12 +1,11 @@
-import { vec3 } from "gl-matrix";
 import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
-import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice, GfxFormat, GfxInputLayout, GfxProgram, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
+import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice, GfxFormat, GfxInputLayout, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { DeviceProgram } from "../Program";
 import { assert } from "../util";
 import { RatchetShaderLib } from "./shader-lib";
-import { TieClass, TieDinkyVertex, TiePacketCommand, TiePacketCommandTypes } from "./structs-core";
+import { TieClass, TiePacketCommand, TiePacketCommandTypes, TieVertex } from "./structs-core";
 
 export const MAX_TIE_INSTANCES = 64;
 
@@ -15,7 +14,7 @@ export class TieProgram extends DeviceProgram {
     public static a_STQ = 1;
     public static a_Normal = 2;
     public static a_Rgba = 3;
-    public static a_LowerLodOffset = 4;
+    public static a_LodMorphOffset = 4;
 
     public static elementsPerVertex = 16; // xyz, stq, normal, rgba, lowerLodOffset
 
@@ -29,7 +28,7 @@ layout(location = ${TieProgram.a_Position}) in vec3 a_Position;
 layout(location = ${TieProgram.a_STQ}) in vec3 a_STQ;
 layout(location = ${TieProgram.a_Normal}) in vec3 a_Normal;
 layout(location = ${TieProgram.a_Rgba}) in vec4 a_Rgba;
-layout(location = ${TieProgram.a_LowerLodOffset}) in vec3 a_LowerLodOffset;
+layout(location = ${TieProgram.a_LodMorphOffset}) in vec3 a_LodMorphOffset;
 
 out vec2 v_UV;
 out vec4 v_Rgba;
@@ -39,21 +38,15 @@ out vec3 v_Normal;
 ${RatchetShaderLib.LightingFunctions}
 
 void main() {
+    vec3 morphedPosition = a_Position + a_LodMorphOffset * u_lodMorphFactor[gl_InstanceID].x;
     mat4 instanceTransform = UnpackMatrix(u_tieInstances[gl_InstanceID].transform);
-    vec4 t_PositionWorld = instanceTransform * vec4(a_Position, 1.0f);
+    vec4 t_PositionWorld = instanceTransform * vec4(morphedPosition, 1.0f);
 
     gl_Position = UnpackMatrix(u_ClipFromWorld) * t_PositionWorld;
     v_UV = vec2(a_STQ.x, a_STQ.y) / a_STQ.z;
     
-    vec3 normal = normalize(inverse(transpose(mat3(instanceTransform))) * a_Normal);
-
-    vec3 viewDir = normalize(t_PositionWorld.xyz - u_CameraPosWorld);
-    if (dot(normal, viewDir) < 0.0) {
-        normal = -normal;
-    }
-    normal *= vec3(-1.0, -1.0, 1.0);
-    v_Normal = normal;
-    v_Rgba = vec4(commonVertexLighting(a_Rgba.rgb, normal, 0), a_Rgba.a);
+    v_Normal = normalize(inverse(transpose(mat3(instanceTransform))) * a_Normal);
+    v_Rgba = vec4(commonVertexLighting(a_Rgba.rgb, v_Normal, 0), a_Rgba.a);
 }
 
 `;
@@ -83,6 +76,7 @@ struct TieInstance {
 
 layout(std140) uniform ub_TieParams {
     TieInstance u_tieInstances[${MAX_TIE_INSTANCES}];
+    vec4 u_lodMorphFactor[${MAX_TIE_INSTANCES}]; // only x used
 };
 
 layout(location = 0) uniform sampler2D u_Texture;
@@ -133,7 +127,7 @@ export class TieGeometry {
                     bufferIndex: 0,
                 },
                 {
-                    location: TieProgram.a_LowerLodOffset,
+                    location: TieProgram.a_LodMorphOffset,
                     format: GfxFormat.F32_RGB,
                     bufferByteOffset: 13 * 4,
                     bufferIndex: 0,
@@ -159,8 +153,7 @@ export class TieGeometry {
 export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: number) {
     const positionScale = tie.scale * (1 / 1024);
     const texcoordScale = 1 / 4096;
-
-    // TODO: this converts the tri-strips to tri-lists, I'd prefer to render native tri-strips but the renderer doesn't support it
+    const normalScale = 1 / 0x7FFF;
 
     const commandLists: TiePacketCommand[][] = [];
     for (const packet of tie.packets[lod]) commandLists.push(packet.body.commandBuffer);
@@ -172,8 +165,8 @@ export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: 
     const vertexArrayBuffer = new Float32Array(expectedSize);
     let ptr = 0;
 
-    function fixTexcoords(verts: TieDinkyVertex[]) {
-        // if ajacent verts have very different texcoords, they're probably intended to overflow and wrap around
+    function fixTexcoords(verts: TieVertex[]) {
+        // if ajacent verts have very different texcoords, they're intended to overflow and wrap around
         let min = 0, max = 0;
         for (const vert of verts) {
             if (vert.s < min) min = vert.s;
@@ -197,24 +190,11 @@ export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: 
         }
     }
 
-    function getNormal(triVerts: TieDinkyVertex[]) {
-        const p1 = vec3.fromValues(triVerts[0].x, triVerts[0].y, triVerts[0].z);
-        const p2 = vec3.fromValues(triVerts[1].x, triVerts[1].y, triVerts[1].z);
-        const p3 = vec3.fromValues(triVerts[2].x, triVerts[2].y, triVerts[2].z);
-        const a = vec3.create();
-        vec3.subtract(a, p2, p1);
-        const b = vec3.create();
-        vec3.subtract(b, p3, p1);
-        const normal = vec3.create();
-        vec3.cross(normal, a, b);
-        vec3.normalize(normal, normal);
-        return normal;
-    }
-
-    function pushTriangle(verts: TieDinkyVertex[]) {
-        fixTexcoords(verts);
-        const normal = getNormal(verts);
-        for (const vert of verts) {
+    function pushTriangle(verts: { vertex: TieVertex, normalIndex: number }[]) {
+        fixTexcoords(verts.map(v => v.vertex));
+        for (const vertAndNormalIndex of verts) {
+            const vert = vertAndNormalIndex.vertex;
+            const normal = tie.normalsData[vertAndNormalIndex.normalIndex];
             vertexArrayBuffer[ptr++] = positionScale * vert.x;
             vertexArrayBuffer[ptr++] = positionScale * vert.y;
             vertexArrayBuffer[ptr++] = positionScale * vert.z;
@@ -222,18 +202,19 @@ export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: 
             vertexArrayBuffer[ptr++] = texcoordScale * vert.t;
             vertexArrayBuffer[ptr++] = texcoordScale * vert.q;
 
-            vertexArrayBuffer[ptr++] = normal[0];
-            vertexArrayBuffer[ptr++] = normal[1];
-            vertexArrayBuffer[ptr++] = normal[2];
+            vertexArrayBuffer[ptr++] = normalScale * normal.x;
+            vertexArrayBuffer[ptr++] = normalScale * normal.y;
+            vertexArrayBuffer[ptr++] = normalScale * normal.z;
 
+            // TODO: vertex colors come from instances not classes, also I don't know how to read them
             vertexArrayBuffer[ptr++] = 0;
             vertexArrayBuffer[ptr++] = 0;
             vertexArrayBuffer[ptr++] = 0;
-            vertexArrayBuffer[ptr++] = 0;
+            vertexArrayBuffer[ptr++] = 1;
 
-            vertexArrayBuffer[ptr++] = positionScale * ((vert as any).unknown0 ?? 0);
-            vertexArrayBuffer[ptr++] = positionScale * ((vert as any).unknown2 ?? 0);
-            vertexArrayBuffer[ptr++] = positionScale * ((vert as any).unknown4 ?? 0);
+            vertexArrayBuffer[ptr++] = positionScale * vert.lodMorphOffsetX;
+            vertexArrayBuffer[ptr++] = positionScale * vert.lodMorphOffsetY;
+            vertexArrayBuffer[ptr++] = positionScale * vert.lodMorphOffsetZ;
         }
     }
 
@@ -263,7 +244,7 @@ export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: 
 }
 
 function commnadBufferToStrips(tieOClass: number, packets: TiePacketCommand[][]) {
-    type TieStrip = { material: number, windingOrder: number, isFirstStripInPacket: number, verts: TieDinkyVertex[] };
+    type TieStrip = { material: number, windingOrder: number, isFirstStripInPacket: number, verts: { vertex: TieVertex, normalIndex: number }[] };
 
     let strip: TieStrip | undefined;
     let lastMaterial = null;

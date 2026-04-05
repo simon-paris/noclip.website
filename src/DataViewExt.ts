@@ -294,23 +294,23 @@ export class DataViewExt<T extends ArrayBufferLike = ArrayBufferLike> extends Da
     }
 
     getUint8_Xy(offset: number) {
-        const x = this.getInt8(offset + 0x0);
-        const y = this.getInt8(offset + 0x1);
+        const x = this.getUint8(offset + 0x0);
+        const y = this.getUint8(offset + 0x1);
         return { x, y };
     }
 
     getUint8_Xyz(offset: number) {
-        const x = this.getInt8(offset + 0x0);
-        const y = this.getInt8(offset + 0x1);
-        const z = this.getInt8(offset + 0x2);
+        const x = this.getUint8(offset + 0x0);
+        const y = this.getUint8(offset + 0x1);
+        const z = this.getUint8(offset + 0x2);
         return { x, y, z };
     }
 
     getUint8_Xyzw(offset: number) {
-        const x = this.getInt8(offset + 0x0);
-        const y = this.getInt8(offset + 0x1);
-        const z = this.getInt8(offset + 0x2);
-        const w = this.getInt8(offset + 0x3);
+        const x = this.getUint8(offset + 0x0);
+        const y = this.getUint8(offset + 0x1);
+        const z = this.getUint8(offset + 0x2);
+        const w = this.getUint8(offset + 0x3);
         return { x, y, z, w };
     }
 
@@ -350,6 +350,17 @@ export class DataViewExt<T extends ArrayBufferLike = ArrayBufferLike> extends Da
         return textDecoder.decode(bytes.subarray(0, nullTerminatorIndex));
     }
 
+    downloadAsFile(filename: string) {
+        const clone = new ArrayBuffer(this.byteLength);
+        new Uint8Array(clone).set(this.getTypedArrayView(Uint8Array));
+        const blob = new Blob([clone], { type: "application/octet-stream" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
 }
 
 type DataViewExtWithTracerOptions = DataViewExtOptions & {
