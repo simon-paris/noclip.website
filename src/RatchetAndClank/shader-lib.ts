@@ -3,6 +3,9 @@ export const RatchetShaderLib = {
         16, // camera transform
         4, // camera position
         4, // near/far clip
+        4, // ambient color
+        4, // sky color
+        4, // pit color
         4 + 4, // fog params
         (4 + 4 + 4 + 4) * 8, // directional lights
     ].reduce((a, b) => a + b, 0),
@@ -33,6 +36,9 @@ layout(std140) uniform ub_SceneParams {
     float pad1;
     vec2 u_NearFarClip;
     vec2 pad2;
+    vec4 u_AmbientColor;
+    vec4 u_SkyColor;
+    vec4 u_PitColor;
     FogParams u_FogParams;
     DirectionLight u_DirectionLight[8];
 };
@@ -40,27 +46,27 @@ layout(std140) uniform ub_SceneParams {
     `,
     LightingFunctions: `
 
-float AMBIENT_LIGHT = 1.0;
+float WHITE_AMBIENT_LIGHT = 0.7;
+float AMBIENT_LIGHT = 0.0;
 float ENVIRONMENT_LIGHT = 1.0;
-float DIRECTIONAL_LIGHT_A = 1.0;
-float DIRECTIONAL_LIGHT_B = 1.0;
+float DIRECTIONAL_LIGHT_A = 0.4;
+float DIRECTIONAL_LIGHT_B = 0.4;
 
 vec3 commonVertexLighting(vec3 rgb, vec3 normal, int lightIndex) {
     vec3 light = vec3(0.0);
 
     // ambient
-    light += AMBIENT_LIGHT;
+    light += WHITE_AMBIENT_LIGHT;
+    light += AMBIENT_LIGHT * u_AmbientColor.rgb;
 
     // environment probe
     light += ENVIRONMENT_LIGHT * rgb;
 
     // directional
     DirectionLight dirlight = u_DirectionLight[lightIndex];
-
-    float nDotL_A = dot(normal, -dirlight.directionA);
+    float nDotL_A = dot(normal, dirlight.directionA);
     light += DIRECTIONAL_LIGHT_A * nDotL_A * dirlight.colorA;
-
-    float nDotL_B = dot(normal, -dirlight.directionB);
+    float nDotL_B = dot(normal, dirlight.directionB);
     light += DIRECTIONAL_LIGHT_B * nDotL_B * dirlight.colorB;
 
     return light;
@@ -76,24 +82,36 @@ float linearizeDepth(float depth, float near, float far) {
 
 float fogFactor() {
     float worldDepth = linearizeDepth(1.0 - gl_FragCoord.z, u_NearFarClip.x, u_NearFarClip.y);
-
     float fogFactor = 1.0 - clamp((u_FogParams.farDist - worldDepth) / (u_FogParams.farDist - u_FogParams.nearDist), 0.0, 1.0);
     fogFactor = u_FogParams.nearIntensity + fogFactor * (u_FogParams.farIntensity - u_FogParams.nearIntensity);
     return fogFactor;
 }
 
+vec3 adjustSaturation(vec3 color, float adjustment) {
+    const vec3 luminanceWeights = vec3(0.2125, 0.7154, 0.0721);
+    float luminance = dot(color, luminanceWeights);
+    vec3 grayscale = vec3(luminance);
+    return mix(grayscale, color, adjustment);
+}
+
 vec4 commonFragmentShader(vec4 rgba, sampler2D sampler, vec2 uv) {
     vec4 tex = texture(SAMPLER_2D(sampler), uv);
     vec3 texColor = vec3(tex.r, tex.g, tex.b);
-    if (tex.a < 0.01) {
-        discard;
-    }
+    if (tex.a < 0.01) { discard; }
 
     float fogFactor = fogFactor();
     vec3 fogColor = u_FogParams.color.rgb;
 
-    vec3 finalColor = mix(texColor * rgba.rgb, fogColor, fogFactor);
-    return vec4(finalColor, tex.a);
+    // initial color
+    vec3 color1 = texColor * rgba.rgb;
+
+    // with fog
+    vec3 color2 = mix(color1, fogColor, fogFactor);
+
+    // with saturation filter (not authentic but looks more accurate, not sure why)
+    vec3 color3 = adjustSaturation(color2, 1.15);
+
+    return vec4(color3, tex.a * rgba.a);
 }
 
     `,

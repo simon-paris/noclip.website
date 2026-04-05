@@ -218,9 +218,9 @@ export function readTextureEntry(view: DataViewExt) {
 }
 
 export type TieClass = ReturnType<typeof readTieClass>;
-export type TiePacket = { header: TiePacketHeader, body: TiePacketBody };
+export type TiePacket = { header: TiePacketHeader, body: TiePacketBody, vertCount: number };
 // tie classes are unsized objects, there is an unknown amount of additional data concatted onto the end of the tie class header
-export function readTieClass(view: DataViewExt, tieIndex: number) {
+export function readTieClass(view: DataViewExt, oClass: number) {
     /*
       // header size is 0x80
       packed_struct(TieClassHeader,
@@ -289,10 +289,11 @@ export function readTieClass(view: DataViewExt, tieIndex: number) {
         const packetsInThisLod: TiePacket[] = [];
         for (let j = 0; j < packetCount; j++) {
             const packetDataOffset = packetOffset + packetHeaders[j].data;
-            const packetBody = readTiePacketBody(view.subview(packetDataOffset), packetHeaders[j], tieIndex, i, j);
+            const packetBody = readTiePacketBody(view.subview(packetDataOffset), packetHeaders[j], oClass, i, j);
             packetsInThisLod.push({
                 header: packetHeaders[j],
                 body: packetBody,
+                vertCount: packetBody.debugData.tieUnpackHeader.dinkyVertexCount + packetBody.debugData.tieUnpackHeader.fatVertexCount,
             })
         }
 
@@ -303,8 +304,12 @@ export function readTieClass(view: DataViewExt, tieIndex: number) {
     const adGifsOffset = view.getUint32(0x2c);
     const adGifs = view.subdivide(adGifsOffset, textureCount, SIZEOF_TIE_AD_GIFS).map(readTieAdGifs);
 
+    const normalsOffset = view.getUint32(0xc);
+    const normalsData = view.subdivide(normalsOffset, 128, 8).map(view => view.getInt16_Xyzw(0));
+
     return {
-        vertNormals: view.getUint32(0xc),
+        normalsOffset,
+        normalsData,
         nearDist: view.getFloat32(0x10),
         midDist: view.getFloat32(0x14),
         farDist: view.getFloat32(0x18),
@@ -316,7 +321,7 @@ export function readTieClass(view: DataViewExt, tieIndex: number) {
         packetCounts,
         packets,
         adGifs,
-    }
+    };
 }
 
 export const SIZEOF_TIE_PACKET_HEADER = 0x10;
@@ -387,7 +392,7 @@ export type TiePacketCommand = {
 } | {
     type: typeof TiePacketCommandTypes.VERTEX,
     size: number,
-    value: TieDinkyVertex
+    value: { vertex: TieVertex, normalIndex: number }
 }
 
 const TieCommandSizes = {
@@ -397,7 +402,7 @@ const TieCommandSizes = {
 }
 
 export type TiePacketBody = ReturnType<typeof readTiePacketBody>;
-export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketHeader, tieIndex: number, lod: number, packetIndex: number) {
+export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketHeader, oClass: number, lod: number, packetIndex: number) {
     /*
         // unsized
         packed struct TiePacketBody {
@@ -409,42 +414,79 @@ export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketH
             TieUnpackHeader tieUnpackHeader;
             // 0x2c
             TieStrip tieStrips[tieUnpackHeader.stripCount];
+            // align 0x10
+            TieDinkyVertex dinkyVerts[tieUnpackHeader.dinkyVertexCount];
+            TieFatVertex fatVerts[tieUnpackHeader.fatVertexCount];
+            // align 0x10
+            u8 dinkyNormalIndices[tieUnpackHeader.dinkyVertexCount];
+            // align 0x4
+            uint8vec4 fatNormalIndices[tieUnpackHeader.fatVertexCount];
+            // align 0x10
+            u8 dinkyNormalIndices[tieUnpackHeader.dinkyVertexCount];
+            // align 0x4
+            uint8vec4 fatNormalIndices[tieUnpackHeader.fatVertexCount];
+            // align 0x10
+            u8 unknown[?];
         }
     */
+
+    let ptr = 0;
+    function alignTo(size: number) {
+        if (ptr % size !== 0) {
+            ptr += size - (ptr % size);
+        }
+    }
+
     const AD_GIFS = 4;
-    const adGifDestOffsets = view.getArrayOfNumbers(0x0, AD_GIFS, Int32Array);
-    const adGifSrcOffsets = view.getArrayOfNumbers(0x10, AD_GIFS, Int32Array)
+    const adGifDestOffsets = view.getArrayOfNumbers(ptr, AD_GIFS, Int32Array);
+    ptr += AD_GIFS * 0x4;
+    const adGifSrcOffsets = view.getArrayOfNumbers(ptr, AD_GIFS, Int32Array)
+    ptr += AD_GIFS * 0x4;
 
-    const tieUnpackHeader = readTieUnpackHeader(view.subview(0x20));
+    const tieUnpackHeader = readTieUnpackHeader(view.subview(ptr));
+    ptr += SIZEOF_TIE_UNPACK_HEADER;
 
-    const tieStrips = view.subdivide(0x2c, tieUnpackHeader.stripCount, SIZEOF_TIE_STRIP).map(readTieStrip);
+    const tieStrips = view.subdivide(ptr, tieUnpackHeader.stripCount, SIZEOF_TIE_STRIP).map(readTieStrip);
+    ptr += tieUnpackHeader.stripCount * SIZEOF_TIE_STRIP;
 
-    const vertexBuffer = view.subview(tiePacketHeader.vertOffset * 0x10, tiePacketHeader.vertSize * 0x10);
-    // const normalsGuess = view.subview((tiePacketHeader.vertOffset + tiePacketHeader.vertSize) * 0x10, tiePacketHeader.vertSize * 0x10);
-    // console.log("dinky", tieUnpackHeader.dinkyVerticesSizePlusFour, "fat", tieUnpackHeader.fatVerticesSize, "unknown8", tieUnpackHeader.unknown7);
-    const guess = view.subdivide((tiePacketHeader.vertOffset + tiePacketHeader.vertSize) * 0x10, tiePacketHeader.vertSize * 0x4, 0x4).map(v => v.getUint8_Xyz(0));
-    console.log(guess);
+    // dinky verts
+    alignTo(0x10);
+    const dinkyVertexCount = tieUnpackHeader.dinkyVertexCount;
+    const dinkyVerts = view.subdivide(ptr, dinkyVertexCount, SIZEOF_TIE_DINKY_VERTEX).map(readTieDinkyVertex);
+    ptr += dinkyVertexCount * SIZEOF_TIE_DINKY_VERTEX;
 
-    // read dinky verts
-    const dinkyVertexCount = (tieUnpackHeader.dinkyVerticesSizePlusFour - 4) / 2; // ???
-    const dinkyVerts = vertexBuffer.subdivide(0, dinkyVertexCount, SIZEOF_TIE_DINKY_VERTEX).map(readTieDinkyVertex);
+    // fat verts
+    const fatVertexCount = tieUnpackHeader.fatVertexCount;
+    const fatVerts = view.subdivide(ptr, fatVertexCount, SIZEOF_TIE_FAT_VERTEX).map(readTieFatVertex);
+    ptr += fatVertexCount * SIZEOF_TIE_FAT_VERTEX;
 
-    // read fat verts until the end of the buffer
-    const fatVerts = vertexBuffer.subdivide(dinkyVertexCount * 0x10, 0xFFFF, SIZEOF_TIE_FAT_VERTEX).map(readTieFatVertex);
+    // indices into the tie's normal array
+    alignTo(0x10);
+    const dinkyNormalIndices = view.subdivide(ptr, tieUnpackHeader.dinkyVertexCount, 0x1).map(view => view.getUint8(0));
+    ptr += tieUnpackHeader.dinkyVertexCount * 0x1;
+    alignTo(0x4);
+    const fatNormalIndices = view.subdivide(ptr, tieUnpackHeader.fatVertexCount, 0x4).map(view => view.getUint8_Xyz(0));
+    ptr += tieUnpackHeader.fatVertexCount * 0x4;
 
-    /*
-    The data we have is all out of order, but each item has an address for where it wants to be written
-    into the GPU command buffer. We need to build the command buffer as it would have been built by the game
-    to validate it and convert it into a usable mesh.
-    */
+    // no idea what these are
+    alignTo(0x10);
+    const unknownBuffer2A = view.subdivide(ptr, tieUnpackHeader.dinkyVertexCount, 0x1).map(view => view.getUint8(0));
+    ptr += tieUnpackHeader.dinkyVertexCount * 0x1;
+    alignTo(0x4);
+    const unknownBuffer2B = view.subdivide(ptr, tieUnpackHeader.fatVertexCount, 0x4).map(view => view.getUint8_Xyzw(0));
+    ptr += tieUnpackHeader.fatVertexCount * 0x4;
 
+    // there's one more array of bytes after this but not sure what it is or what its length is (usually 50-60 bytes)
+    alignTo(0x10);
+
+    // build command buffer
     let bufferEnd = 0;
     const MAX_BUFFER_SIZE = 0x100; // the max size seems to be ~185 so I'll use 256 to be safe
     const imaginaryGpuCommandBuffer: (TiePacketCommand | null)[] = Array(MAX_BUFFER_SIZE).fill(null);
 
     function writeCommand(offset: number, type: typeof TiePacketCommandTypes.PRIMITIVE_RESET, value: TieStrip): void;
     function writeCommand(offset: number, type: typeof TiePacketCommandTypes.SET_MATERIAL, value: number): void;
-    function writeCommand(offset: number, type: typeof TiePacketCommandTypes.VERTEX, value: TieDinkyVertex): void;
+    function writeCommand(offset: number, type: typeof TiePacketCommandTypes.VERTEX, value: { vertex: TieVertex, normalIndex: number }): void;
     function writeCommand(offset: number, type: TiePacketCommand["type"], value: any) {
         if (offset >= MAX_BUFFER_SIZE) {
             throw new Error(`Command buffer exceeds max size`);
@@ -464,18 +506,22 @@ export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketH
     // first command always sets the material to the first material
     writeCommand(0, TiePacketCommandTypes.SET_MATERIAL, adGifSrcOffsets[0] / SIZEOF_TIE_AD_GIFS);
 
-    // Write verts into command buffer. Both vert types are the same.
+    // Write verts into command buffer
     // Some are written twice.
-    for (const vertex of dinkyVerts) {
-        writeCommand(vertex.gsPacketWriteOffset, TiePacketCommandTypes.VERTEX, vertex);
+    for (let i = 0; i < dinkyVerts.length; i++) {
+        const vertex = dinkyVerts[i];
+        const normalIndex = dinkyNormalIndices[i];
+        writeCommand(vertex.gsPacketWriteOffset, TiePacketCommandTypes.VERTEX, { vertex, normalIndex });
         if (vertex.gsPacketWriteOffset2 !== 0 && vertex.gsPacketWriteOffset !== vertex.gsPacketWriteOffset2) {
-            writeCommand(vertex.gsPacketWriteOffset2, TiePacketCommandTypes.VERTEX, vertex);
+            writeCommand(vertex.gsPacketWriteOffset2, TiePacketCommandTypes.VERTEX, { vertex, normalIndex });
         }
     }
-    for (const vertex of fatVerts) {
-        writeCommand(vertex.gsPacketWriteOffset, TiePacketCommandTypes.VERTEX, vertex);
+    for (let i = 0; i < fatVerts.length; i++) {
+        const vertex = fatVerts[i];
+        const normalIndex = fatNormalIndices[i].x; // all 3 components are normal indices and they all work... x seems to look best
+        writeCommand(vertex.gsPacketWriteOffset, TiePacketCommandTypes.VERTEX, { vertex, normalIndex });
         if (vertex.gsPacketWriteOffset2 !== 0 && vertex.gsPacketWriteOffset !== vertex.gsPacketWriteOffset2) {
-            writeCommand(vertex.gsPacketWriteOffset2, TiePacketCommandTypes.VERTEX, vertex);
+            writeCommand(vertex.gsPacketWriteOffset2, TiePacketCommandTypes.VERTEX, { vertex, normalIndex });
         }
     }
 
@@ -531,10 +577,13 @@ export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketH
             adGifSrcOffsets,
             tieUnpackHeader,
             tieStrips,
-            vertexBuffer,
             dinkyVertexCount,
             dinkyVerts,
             fatVerts,
+            dinkyNormalIndices,
+            fatNormalIndices,
+            unknownBuffer2A,
+            unknownBuffer2B,
         },
         commandBuffer: filteredCommandBuffer,
     }
@@ -562,13 +611,13 @@ export function readTieUnpackHeader(view: DataViewExt) {
             // 0x07
             u8 unknown_e;
             // 0x08
-            u8 dinky_vertices_size_plus_four;
+            u8 dinky_vertices_size_plus_four_over_two;
             // 0x09
-            u8 fat_vertices_size;
+            u8 fat_vertices_size_plus_four_over_two;
             // 0x0a
-            u8 unknown_14;
+            u8 dinky_vertex_count;
             // 0x0b
-            u8 unknown_16;
+            u8 fat_vertex_count;
         )
     */
 
@@ -581,10 +630,10 @@ export function readTieUnpackHeader(view: DataViewExt) {
         unknown5: view.getUint8(0x5),
         unknown6: view.getUint8(0x6),
         unknown7: view.getUint8(0x7),
-        dinkyVerticesSizePlusFour: view.getUint8(0x8),
-        fatVerticesSize: view.getUint8(0x9),
-        unknown8: view.getUint8(0xa),
-        unknown9: view.getUint8(0xb),
+        dinkyVerticesSizePlusFourOverTwo: view.getUint8(0x8),
+        fatVerticesSizePlusFourOverTwo: view.getUint8(0x9),
+        dinkyVertexCount: view.getUint8(0xa),
+        fatVertexCount: view.getUint8(0xb),
     };
 }
 
@@ -611,9 +660,22 @@ export function readTieStrip(view: DataViewExt) {
     };
 }
 
+export type TieVertex = {
+    gsPacketWriteOffset: number,
+    gsPacketWriteOffset2: number,
+    x: number,
+    y: number,
+    z: number,
+    s: number,
+    t: number,
+    q: number,
+    lodMorphOffsetX: number,
+    lodMorphOffsetY: number,
+    lodMorphOffsetZ: number,
+}
+
 export const SIZEOF_TIE_DINKY_VERTEX = 0x10;
-export type TieDinkyVertex = ReturnType<typeof readTieDinkyVertex>;
-export function readTieDinkyVertex(view: DataViewExt) {
+export function readTieDinkyVertex(view: DataViewExt): TieVertex {
     /*
         packed_struct(TieDinkyVertex,
             // 0x00
@@ -636,7 +698,7 @@ export function readTieDinkyVertex(view: DataViewExt) {
     */
 
     return {
-        gsPacketWriteOffset: view.getUint16(0x6), // fields out of order for consistency
+        gsPacketWriteOffset: view.getUint16(0x6), // fields out of order for consistency with other vertex type
         gsPacketWriteOffset2: view.getUint16(0xe),
         x: view.getInt16(0x0),
         y: view.getInt16(0x2),
@@ -644,12 +706,14 @@ export function readTieDinkyVertex(view: DataViewExt) {
         s: view.getUint16(0x8),
         t: view.getUint16(0xa),
         q: view.getUint16(0xc),
+        lodMorphOffsetX: 0,
+        lodMorphOffsetY: 0,
+        lodMorphOffsetZ: 0,
     };
 }
 
 export const SIZEOF_TIE_FAT_VERTEX = 0x18;
-export type TieFatVertex = ReturnType<typeof readTieFatVertex>;
-export function readTieFatVertex(view: DataViewExt) {
+export function readTieFatVertex(view: DataViewExt): TieVertex {
     /*
         packed_struct(TieFatVertex,
             // 0x00
@@ -680,17 +744,17 @@ export function readTieFatVertex(view: DataViewExt) {
     */
 
     return {
-        unknown0: view.getInt16(0x0),
-        unknown2: view.getInt16(0x2),
-        unknown4: view.getInt16(0x4),
-        gsPacketWriteOffset: view.getUint16(0x6),
-        gsPacketWriteOffset2: view.getUint16(0x16), // fields out of order for consistency
+        gsPacketWriteOffset: view.getUint16(0x6), // fields out of order for consistency with other vertex type
+        gsPacketWriteOffset2: view.getUint16(0x16),
         x: view.getInt16(0x8),
         y: view.getInt16(0xa),
         z: view.getInt16(0xc),
         s: view.getUint16(0x10),
         t: view.getUint16(0x12),
         q: view.getUint16(0x14),
+        lodMorphOffsetX: view.getInt16(0x0),
+        lodMorphOffsetY: view.getInt16(0x2),
+        lodMorphOffsetZ: view.getInt16(0x4),
     };
 }
 
@@ -1960,6 +2024,7 @@ export function readSkyHeader(view: DataViewExt) {
         )
     */
     return {
+        skyColor: view.getUint8_Rgba(0x0),
         clearScreen: view.getInt16(0x04),
         shellCount: view.getInt16(0x06),
         spriteCount: view.getInt16(0x08),
@@ -2009,9 +2074,13 @@ export function readSkyShellHeader(view: DataViewExt) {
             // maybe rotation data here? actual size of this is 0x10
         )
     */
+
+    const flags = view.getInt32(0x4);
+
     return {
         clusterCount: view.getInt32(0x0),
-        flags: view.getInt32(0x4),
+        flags,
+        useSkyColorInsteadOfTexture: flags & 0x1 ? true : false,
     };
 }
 

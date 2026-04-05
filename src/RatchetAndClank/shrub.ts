@@ -1,12 +1,12 @@
 import { GsPrimitiveType } from "../Common/PS2/GS";
 import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
-import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice, GfxFormat, GfxInputLayout, GfxProgram, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
+import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice, GfxFormat, GfxInputLayout, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { DeviceProgram } from "../Program";
 import { assert } from "../util";
 import { RatchetShaderLib } from "./shader-lib";
-import { ShrubClass, ShrubPacketCommand, ShrubPacketCommandTypes, ShrubTexturePrimitive, ShrubVertex, TieClass, TieDinkyVertex, TiePacketCommandTypes } from "./structs-core";
+import { ShrubClass, ShrubPacketCommand, ShrubPacketCommandTypes, ShrubTexturePrimitive, ShrubVertex } from "./structs-core";
 
 export const MAX_SHRUB_INSTANCES = 128;
 
@@ -29,6 +29,7 @@ layout(location = ${ShrubProgram.a_TS}) in vec2 a_TS;
 out vec2 v_TS;
 out vec3 v_Rgb;
 out vec3 v_Normal;
+out float v_LodAlpha;
 
 ${RatchetShaderLib.LightingFunctions}
 
@@ -38,8 +39,10 @@ void main() {
     gl_Position = UnpackMatrix(u_ClipFromWorld) * t_PositionWorld;
     v_TS = a_TS.xy;
     vec3 normal = normalize(inverse(transpose(mat3(instanceTransform))) * a_Normal);
-    v_Rgb = commonVertexLighting(u_shrubInstancesRgbs[gl_InstanceID].rgb, normal, 0);
+    // not sure about dividing by 4 here
+    v_Rgb = commonVertexLighting(u_shrubInstancesRgbs[gl_InstanceID].rgb / 4.0, normal, 0);
     v_Normal = normal;
+    v_LodAlpha = u_shrubLodAlphas[gl_InstanceID].x;
 }
 `;
 
@@ -48,11 +51,12 @@ ${ShrubProgram.Common}
 in vec2 v_TS;
 in vec3 v_Rgb;
 in vec3 v_Normal;
+in float v_LodAlpha;
 
 ${RatchetShaderLib.CommonFragmentShader}
 
 void main() {
-    gl_FragColor = commonFragmentShader(vec4(v_Rgb, 1.0), u_Texture, v_TS);
+    gl_FragColor = commonFragmentShader(vec4(v_Rgb, v_LodAlpha), u_Texture, v_TS);
     // gl_FragColor = vec4(v_Normal, 1.0);
 }
 
@@ -70,6 +74,7 @@ layout(std140) uniform ub_ShrubParams {
     // this is laid out wierd because chrome got very laggy when I had the color in the ShrubInstance struct
     ShrubInstance u_shrubInstances[${MAX_SHRUB_INSTANCES}];
     vec4 u_shrubInstancesRgbs[${MAX_SHRUB_INSTANCES}];
+    vec4 u_shrubLodAlphas[${MAX_SHRUB_INSTANCES}]; // only x used
 };
 
 layout(location = 0) uniform sampler2D u_Texture;
