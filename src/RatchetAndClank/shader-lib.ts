@@ -8,6 +8,7 @@ export const RatchetShaderLib = {
         4, // pit color
         4 + 4, // fog params
         (4 + 4 + 4 + 4) * 8, // directional lights
+        4, // debugSelectedDirLight
     ].reduce((a, b) => a + b, 0),
     SceneParams: `
 
@@ -41,6 +42,7 @@ layout(std140) uniform ub_SceneParams {
     vec4 u_PitColor;
     FogParams u_FogParams;
     DirectionLight u_DirectionLight[8];
+    vec4 u_DebugSelectedDirLight; // x = index
 };
 
     `,

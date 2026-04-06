@@ -518,14 +518,14 @@ export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketH
     }
     for (let i = 0; i < fatVerts.length; i++) {
         const vertex = fatVerts[i];
-        const normalIndex = fatNormalIndices[i].x; // all 3 components are normal indices and they all work... x seems to look best
+        const normalIndex = fatNormalIndices[i].x; // all 3 components are normal indices, not sure why there are 3, maybe to do with lod morphing
         writeCommand(vertex.gsPacketWriteOffset, TiePacketCommandTypes.VERTEX, { vertex, normalIndex });
         if (vertex.gsPacketWriteOffset2 !== 0 && vertex.gsPacketWriteOffset !== vertex.gsPacketWriteOffset2) {
             writeCommand(vertex.gsPacketWriteOffset2, TiePacketCommandTypes.VERTEX, { vertex, normalIndex });
         }
     }
 
-    // Write primative reset commands. There's always one before the first vert (address 7).
+    // Write primative reset commands
     for (const strip of tieStrips) {
         writeCommand(strip.gifTagOffset, TiePacketCommandTypes.PRIMITIVE_RESET, strip);
     }
@@ -1089,19 +1089,16 @@ export function readTfrag(view: DataViewExt, header: TfragHeader) {
     let lod01VertexInfo: { data: TfragVertexInfo[]; addr: number } | null = null;
     {
         let i = 0;
-        // TODO: check vnvl
         if (i < lod01CommandListUnpacks.length && lod01CommandListUnpacks[i].unpack!.vnvl === VifVnVl.V4_8 && commonVuHeader.data.positionsLod01Count > 0) {
             // TODO: load lod 01 parent indices
             i++;
         }
 
-        // TODO: check vnvl
         if (i < lod01CommandListUnpacks.length && lod01CommandListUnpacks[i].unpack!.vnvl === VifVnVl.V4_8 && lod01CommandListUnpacks[i].unpack!.addr) {
             // TODO: load lod 01 unknown indices 2
             i++;
         }
 
-        // TODO: check vnvl
         if (i < lod01CommandListUnpacks.length && lod01CommandListUnpacks[i].unpack!.vnvl === VifVnVl.V4_16) {
             lod01VertexInfo = {
                 data: readVifUnpackData(lod01CommandListUnpacks[i]).subdivide(0, 0xFFFF, SIZEOF_TFRAG_VERTEX_INFO).map(readTfragVertexInfo),
@@ -1177,6 +1174,7 @@ export function readTfrag(view: DataViewExt, header: TfragHeader) {
 
         if (i < lod0CommandListUnpacks.length && lod0CommandListUnpacks[i].unpack!.vnvl === VifVnVl.V4_8) {
             // TODO: load unknown indices 2 if required
+            // TODO: are these direction light indices? that'd be helpful
             i++;
         }
 
@@ -1548,9 +1546,15 @@ export function readTfragVertexInfo(view: DataViewExt) {
             s16 vertex;
         )
     */
+
+    // divide negative texcoords by 2 for reasons that I cannot possibly imagine
+    function fixTexcoord(value: number) {
+        return value < 0 ? value / 2 : value;
+    }
+
     return {
-        s: view.getInt16(0x0),
-        t: view.getInt16(0x2),
+        s: fixTexcoord(view.getInt16(0x0)),
+        t: fixTexcoord(view.getInt16(0x2)),
         parent: view.getInt16(0x4),
         vertex: view.getInt16(0x6),
     };

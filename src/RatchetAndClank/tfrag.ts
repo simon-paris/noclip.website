@@ -7,18 +7,13 @@ import { RatchetShaderLib } from "./shader-lib";
 import { Tfrag, TfragAdGifs, TfragLight, TfragStrip, TfragVertexInfo } from "./structs-core";
 
 export class TfragProgram extends DeviceProgram {
-    // position(3) + normal(3) + rgba(4) = 10
-    // + repeat for parent vertex = 20
-    // + texcoord(2) = 22
-    public static elementsPerVertex = 22;
+    // position(3) + normal(3) + rgba(4) + texcoord(2) = 12
+    public static elementsPerVertex = 12;
 
     public static a_Position = 0;
     public static a_Normal = 1;
     public static a_Rgba = 2;
-    public static a_ParentPosition = 3;
-    public static a_ParentNormal = 4;
-    public static a_ParentRgba = 5;
-    public static a_TS = 6;
+    public static a_TS = 3;
 
     // Define the slot index for our uniform parameters. noclip's framework just assigns sequential indices to
     // uniform blocks seen in the shader, in-order, starting with 0.
@@ -31,9 +26,6 @@ ${TfragProgram.Common}
 layout(location = ${TfragProgram.a_Position}) in vec3 a_Position;
 layout(location = ${TfragProgram.a_Normal}) in vec3 a_Normal;
 layout(location = ${TfragProgram.a_Rgba}) in vec4 a_Rgba;
-layout(location = ${TfragProgram.a_ParentPosition}) in vec3 a_ParentPosition;
-layout(location = ${TfragProgram.a_ParentNormal}) in vec3 a_ParentNormal;
-layout(location = ${TfragProgram.a_ParentRgba}) in vec4 a_ParentRgba;
 layout(location = ${TfragProgram.a_TS}) in vec2 a_TS;
 
 out vec3 v_Normal;
@@ -48,7 +40,7 @@ void main() {
     gl_Position = UnpackMatrix(u_ClipFromWorld) * t_PositionWorld;
 
     vec3 normal = normalize(inverse(transpose(mat3(worldTransform))) * a_Normal);
-    v_Rgba = vec4(commonVertexLighting(a_Rgba.rgb, normal, 0), a_Rgba.a);
+    v_Rgba = vec4(commonVertexLighting(a_Rgba.rgb, normal, int(u_DebugSelectedDirLight)), a_Rgba.a);
 
     v_TS = a_TS.xy;
     v_Normal = normal;
@@ -65,7 +57,7 @@ in vec2 v_TS;
 
 void main() {
     gl_FragColor = commonFragmentShader(v_Rgba, u_Texture, v_TS);
-    // gl_FragColor = vec4(v_Normal, 1.0);
+    // gl_FragColor = vec4(v_TS / 1.0, gl_FragColor.x / 16.0, 1.0);
 }
 `;
 
@@ -128,32 +120,14 @@ export class TfragGeometry {
                 },
                 {
                     location: TfragProgram.a_Rgba,
-                    format: GfxFormat.F32_RGB,
+                    format: GfxFormat.F32_RGBA,
                     bufferByteOffset: 6 * 0x4,
-                    bufferIndex: 0,
-                },
-                {
-                    location: TfragProgram.a_ParentPosition,
-                    format: GfxFormat.F32_RGB,
-                    bufferByteOffset: 10 * 0x4,
-                    bufferIndex: 0,
-                },
-                {
-                    location: TfragProgram.a_ParentNormal,
-                    format: GfxFormat.F32_RGB,
-                    bufferByteOffset: 13 * 0x4,
-                    bufferIndex: 0,
-                },
-                {
-                    location: TfragProgram.a_ParentRgba,
-                    format: GfxFormat.F32_RGB,
-                    bufferByteOffset: 16 * 0x4,
                     bufferIndex: 0,
                 },
                 {
                     location: TfragProgram.a_TS,
                     format: GfxFormat.F32_RG,
-                    bufferByteOffset: 20 * 0x4,
+                    bufferByteOffset: 10 * 0x4,
                     bufferIndex: 0,
                 },
             ],
@@ -188,11 +162,6 @@ type TfragVertex = {
     g: number,
     b: number,
     a: number,
-    parent: {
-        x: number,
-        y: number,
-        z: number,
-    } | null,
     s: number,
     t: number,
 }
@@ -341,7 +310,6 @@ function concatAndRemoveDoubleIndirectionFromVertices(tfragId: number, tfrag: Tf
         const rgba = tfrag.rgbas[idx];
         const light = tfrag.lights[idx];
         const normal = lightToNormal(light);
-        const parentPosition = info.parent !== 0x1000 ? tfragVerts[idx] : null;
         return {
             tfragId,
             x: positionScale * (basePosition.x + position.x),
@@ -354,11 +322,6 @@ function concatAndRemoveDoubleIndirectionFromVertices(tfragId: number, tfrag: Tf
             g: rgba.g / 255,
             b: rgba.b / 255,
             a: Math.max(1, (rgba.a * 2) / 255), // alpha values are 0x0 - 0x80
-            parent: parentPosition ? {
-                x: positionScale * (basePosition.x + parentPosition.x),
-                y: positionScale * (basePosition.y + parentPosition.y),
-                z: positionScale * (basePosition.z + parentPosition.z),
-            } : null,
             s: texcoordScale * info.s,
             t: texcoordScale * info.t,
         };
@@ -432,18 +395,6 @@ function encodeVerts(verts: TfragVertex[]) {
         vertexArrayBuffer[ptr++] = vert.g;
         vertexArrayBuffer[ptr++] = vert.b;
         vertexArrayBuffer[ptr++] = vert.a;
-
-        vertexArrayBuffer[ptr++] = vert.parent ? vert.parent.x : vert.x;
-        vertexArrayBuffer[ptr++] = vert.parent ? vert.parent.y : vert.y;
-        vertexArrayBuffer[ptr++] = vert.parent ? vert.parent.z : vert.z;
-        vertexArrayBuffer[ptr++] = 0; // parent normal missing
-        vertexArrayBuffer[ptr++] = 0;
-        vertexArrayBuffer[ptr++] = 0;
-        vertexArrayBuffer[ptr++] = 0; // parent rgba missing
-        vertexArrayBuffer[ptr++] = 0;
-        vertexArrayBuffer[ptr++] = 0;
-        vertexArrayBuffer[ptr++] = 0;
-
         vertexArrayBuffer[ptr++] = vert.s;
         vertexArrayBuffer[ptr++] = vert.t;
     }
