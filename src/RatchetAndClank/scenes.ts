@@ -1,4 +1,4 @@
-import { mat4, vec3 } from "gl-matrix";
+import { mat4, vec3, vec4 } from "gl-matrix";
 import { makeBackbufferDescSimple, standardFullClearRenderPassDescriptor } from "../gfx/helpers/RenderGraphHelpers";
 import { fillMatrix4x4, fillVec3v, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
 import { GfxBlendFactor, GfxBlendMode, GfxChannelWriteMask, GfxCompareMode, GfxCullMode, GfxDevice, GfxMipFilterMode, GfxProgram, GfxSampler, GfxTexFilterMode, GfxTexture, GfxWrapMode } from "../gfx/platform/GfxPlatform";
@@ -15,9 +15,10 @@ import { buildLevelFromFiles, LevelFiles, ShrubInstanceBatch, TieInstanceBatch }
 import { batches, distanceToCamera, makeTextureWithPalette, noclipSpaceFromRatchetSpace, pathToDebugLines } from "./utils";
 import { TfragGeometry, TfragProgram } from "./tfrag";
 import { MAX_SHRUB_INSTANCES, ShrubGeometry, ShrubProgram } from "./shrub";
-import { colorNewFromRGBA } from "../Color";
+import { Blue, colorNewFromRGBA, Red } from "../Color";
 import { SkyGeometry, SkyProgram } from "./sky";
 import { RatchetShaderLib } from "./shader-lib";
+import { Frustum } from "../Geometry";
 
 const pathBase = `RatchetAndClank1`;
 
@@ -45,6 +46,7 @@ class RatchetAndClank1Scene implements SceneGfx {
         enableSky: true,
         enableFog: true,
         showPaths: false,
+        dirLightIndex: 0,
     };
 
     // raw data files
@@ -252,6 +254,9 @@ class RatchetAndClank1Scene implements SceneGfx {
                 offs += fillVec4(data, offs, 0, 0, 0, 0);
             }
         }
+
+        // debug selected directional light index (4 floats)
+        offs += fillVec4(data, offs, this.settings.dirLightIndex, 0, 0, 0);
     }
 
     private renderTfrag(cameraPosition: vec3): void {
@@ -306,15 +311,13 @@ class RatchetAndClank1Scene implements SceneGfx {
         this.renderHelper.renderInstManager.popTemplate();
     }
 
-    private renderTie(tieInstanceBatch: TieInstanceBatch, lodLevel: number, cameraPosition: vec3): void {
+    private renderTie(tieInstanceBatch: TieInstanceBatch, cameraPosition: vec3, cameraFrustum: Frustum): void {
         const { tieClass, textureIndices, oClass } = tieInstanceBatch;
-        const tieGeometry = this.geometries.ties.get(oClass)?.[lodLevel];
-        if (!tieGeometry) return;
 
         const scratchVec3_1 = vec3.create();
         const scratchVec3_2 = vec3.create();
 
-        const tieInstancesToDraw: { objectMatrix: mat4, lodMorphFactor: number, i: number }[] = [];
+        const tieInstancesToDrawByLod: { objectMatrix: mat4, lodMorphFactor: number, i: number }[][] = [[], [], []];
         for (let i = 0; i < tieInstanceBatch.instances.length; i++) {
             const tieInstance = tieInstanceBatch.instances[i];
 
@@ -329,9 +332,9 @@ class RatchetAndClank1Scene implements SceneGfx {
             vec3.sub(toCamera, position, cameraPosition);
             const distanceToCamera = vec3.len(toCamera);
 
+            // determine LOD level
             const hasLod2 = tieClass.packets[2].length > 0;
             const hasLod1 = tieClass.packets[1].length > 0;
-
             let modelLodLevel = this.settings.lodSetting;
             let lodMorphFactor = 0;
             if (this.settings.lodSetting === -1) {
@@ -354,75 +357,89 @@ class RatchetAndClank1Scene implements SceneGfx {
             if (modelLodLevel === 2 && !hasLod2) { modelLodLevel = 1; lodMorphFactor = 0; }
             if (modelLodLevel === 1 && !hasLod1) { modelLodLevel = 0; lodMorphFactor = 0; }
 
-            if (modelLodLevel !== lodLevel) continue;
+            // this is much slower than doing nothing because of the jumps into rust
+            // // find bounding sphere and frustum cull
+            // const objectScale = Math.hypot(objectMatrix[0], objectMatrix[1], objectMatrix[2]);
+            // if (!cameraFrustum.containsSphere(position, 0x7FFF / 1024 * tieClass.scale * objectScale)) {
+            //     continue;
+            // }
 
-            tieInstancesToDraw.push({ objectMatrix, lodMorphFactor, i });
+            tieInstancesToDrawByLod[modelLodLevel].push({ objectMatrix, lodMorphFactor, i });
         }
 
-        const template1 = this.renderHelper.pushTemplateRenderInst();
-        template1.setGfxProgram(this.tieProgram);
-        template1.setMegaStateFlags({
-            cullMode: GfxCullMode.None,
-            attachmentsState: [{
-                channelWriteMask: GfxChannelWriteMask.AllChannels,
-                rgbBlendState: {
-                    blendMode: GfxBlendMode.Add,
-                    blendSrcFactor: GfxBlendFactor.SrcAlpha,
-                    blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
-                },
-                alphaBlendState: {
-                    blendMode: GfxBlendMode.Add,
-                    blendSrcFactor: GfxBlendFactor.One,
-                    blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
-                },
-            }]
-        });
-        template1.setVertexInput(
-            tieGeometry.inputLayout,
-            [{ buffer: tieGeometry.vertexBuffer, byteOffset: 0 }],
-            null,
-        );
+        for (let i = 0; i < tieInstancesToDrawByLod.length; i++) {
+            const lodLevel = i;
+            const tieInstancesToDraw = tieInstancesToDrawByLod[i];
+            if (!tieInstancesToDraw.length) continue;
 
-        const batchSizes = batches(tieInstancesToDraw.length, MAX_TIE_INSTANCES);
-        let ptr = 0;
-        for (let i = 0; i < batchSizes.length; i++) {
-            const batchSize = batchSizes[i];
-            const template2 = this.renderHelper.pushTemplateRenderInst();
-            const uniformBufferSize =
-                // matrix
-                (16 * MAX_TIE_INSTANCES) +
-                // morph factor
-                (4 * MAX_TIE_INSTANCES);
-            const tieParams = template2.allocateUniformBufferF32(TieProgram.ub_TieParams, uniformBufferSize);
-            let tieParamsOffset = 0;
-            for (let j = 0; j < batchSize; j++) {
-                tieParamsOffset += fillMatrix4x4(tieParams, tieParamsOffset, tieInstancesToDraw[ptr + j].objectMatrix);
-            }
-            tieParamsOffset = 16 * MAX_TIE_INSTANCES;
-            for (let j = 0; j < batchSize; j++) {
-                tieParams[tieParamsOffset] = tieInstancesToDraw[ptr + j].lodMorphFactor;
-                tieParamsOffset += 4;
-            }
-            ptr += batchSize;
-            template2.setInstanceCount(batchSize);
+            const tieGeometry = this.geometries.ties.get(oClass)?.[lodLevel];
+            if (!tieGeometry) continue;
 
-            let vertexPtr = 0;
-            for (const draw of tieGeometry.draws) {
-                const renderInst = this.renderHelper.renderInstManager.newRenderInst();
-                renderInst.setSamplerBindings(0, [
-                    { gfxTexture: this.textures.tieTextures[textureIndices[draw.material]], gfxSampler: this.samplerWrap }
-                ]);
-                renderInst.setDrawCount(draw.vertexCount, vertexPtr);
-                this.renderInstList.submitRenderInst(renderInst);
-                vertexPtr += draw.vertexCount;
-            }
+            const template1 = this.renderHelper.pushTemplateRenderInst();
+            template1.setGfxProgram(this.tieProgram);
+            template1.setMegaStateFlags({
+                cullMode: GfxCullMode.None,
+                attachmentsState: [{
+                    channelWriteMask: GfxChannelWriteMask.AllChannels,
+                    rgbBlendState: {
+                        blendMode: GfxBlendMode.Add,
+                        blendSrcFactor: GfxBlendFactor.SrcAlpha,
+                        blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
+                    },
+                    alphaBlendState: {
+                        blendMode: GfxBlendMode.Add,
+                        blendSrcFactor: GfxBlendFactor.One,
+                        blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
+                    },
+                }]
+            });
+            template1.setVertexInput(
+                tieGeometry.inputLayout,
+                [{ buffer: tieGeometry.vertexBuffer, byteOffset: 0 }],
+                null,
+            );
 
+            const batchSizes = batches(tieInstancesToDraw.length, MAX_TIE_INSTANCES);
+            let ptr = 0;
+            for (let i = 0; i < batchSizes.length; i++) {
+                const batchSize = batchSizes[i];
+                const template2 = this.renderHelper.pushTemplateRenderInst();
+                const uniformBufferSize =
+                    // matrix
+                    (16 * MAX_TIE_INSTANCES) +
+                    // morph factor
+                    (4 * MAX_TIE_INSTANCES);
+                const tieParams = template2.allocateUniformBufferF32(TieProgram.ub_TieParams, uniformBufferSize);
+                let tieParamsOffset = 0;
+                for (let j = 0; j < batchSize; j++) {
+                    tieParamsOffset += fillMatrix4x4(tieParams, tieParamsOffset, tieInstancesToDraw[ptr + j].objectMatrix);
+                }
+                tieParamsOffset = 16 * MAX_TIE_INSTANCES;
+                for (let j = 0; j < batchSize; j++) {
+                    tieParams[tieParamsOffset] = tieInstancesToDraw[ptr + j].lodMorphFactor;
+                    tieParamsOffset += 4;
+                }
+                ptr += batchSize;
+                template2.setInstanceCount(batchSize);
+
+                let vertexPtr = 0;
+                for (const draw of tieGeometry.draws) {
+                    const renderInst = this.renderHelper.renderInstManager.newRenderInst();
+                    renderInst.setSamplerBindings(0, [
+                        { gfxTexture: this.textures.tieTextures[textureIndices[draw.material]], gfxSampler: this.samplerWrap }
+                    ]);
+                    renderInst.setDrawCount(draw.vertexCount, vertexPtr);
+                    this.renderInstList.submitRenderInst(renderInst);
+                    vertexPtr += draw.vertexCount;
+                }
+
+                this.renderHelper.renderInstManager.popTemplate();
+            }
             this.renderHelper.renderInstManager.popTemplate();
         }
-        this.renderHelper.renderInstManager.popTemplate();
     }
 
-    private renderShrubs(shrubInstanceBatch: ShrubInstanceBatch, cameraPosition: vec3): void {
+    private renderShrubs(shrubInstanceBatch: ShrubInstanceBatch, cameraPosition: vec3, cameraFrustum: Frustum): void {
         const { shrubClass, instances: shrubInstances, textureIndices } = shrubInstanceBatch;
         const oClass = shrubClass.header.oClass;
 
@@ -440,8 +457,6 @@ class RatchetAndClank1Scene implements SceneGfx {
             mat4.getTranslation(position, objectMatrix);
             const dist = distanceToCamera(position, cameraPosition);
 
-            // TODO: frustum cull
-
             // lod
             let lodAlpha = this.settings.lodSetting === 0 ? 1 : 0;
             if (this.settings.lodSetting === -1) {
@@ -451,8 +466,14 @@ class RatchetAndClank1Scene implements SceneGfx {
                     lodAlpha = 1 - (dist - nearDist) / (farDist - nearDist);
                 }
             }
-
             if (lodAlpha <= 0) continue;
+
+            // this is much slower than doing nothing because of the jumps into rust
+            // // find bounding sphere and frustum cull
+            // const objectScale = Math.hypot(objectMatrix[0], objectMatrix[1], objectMatrix[2]);
+            // if (!cameraFrustum.containsSphere(position, 0x7FFF / 1024 * shrubClass.header.scale * objectScale)) {
+            //     continue;
+            // }
 
             shrubInstancesToDraw.push({
                 objectMatrix,
@@ -533,10 +554,9 @@ class RatchetAndClank1Scene implements SceneGfx {
     }
 
     private renderSky(cameraPosition: vec3, skyShellIndex: number): void {
-        // const objectMatrix = mat4.clone(noclipSpaceFromRatchetSpace);
-        const objectMatrix = mat4.create(); // the sky shell is already in world space, so it doesn't need a transform
-        mat4.translate(objectMatrix, objectMatrix, cameraPosition); // the sky shell is centered on the camera
-        mat4.multiply(objectMatrix, objectMatrix, noclipSpaceFromRatchetSpace); // convert from Ratchet's coordinate space to our coordinate space
+        const objectMatrix = mat4.create();
+        mat4.translate(objectMatrix, objectMatrix, cameraPosition);
+        mat4.multiply(objectMatrix, objectMatrix, noclipSpaceFromRatchetSpace);
 
         const skyShellGeometry = this.geometries.skyShells[skyShellIndex];
         if (!skyShellGeometry) return;
@@ -590,7 +610,7 @@ class RatchetAndClank1Scene implements SceneGfx {
 
         const cameraPosition = vec3.create();
         mat4.getTranslation(cameraPosition, viewerInput.camera.worldMatrix);
-        viewerInput.camera.frustum
+        const cameraFrustum = viewerInput.camera.frustum;
 
         this.renderHelper.debugDraw.beginFrame(viewerInput.camera.projectionMatrix, viewerInput.camera.viewMatrix, viewerInput.backbufferWidth, viewerInput.backbufferHeight);
 
@@ -613,15 +633,13 @@ class RatchetAndClank1Scene implements SceneGfx {
 
         if (this.settings.enableTies) {
             for (let i = 0; i < this.level.ties.length; i++) {
-                for (let lodLevel = 0; lodLevel < 3; lodLevel++) {
-                    this.renderTie(this.level.ties[i], lodLevel, cameraPosition);
-                }
+                this.renderTie(this.level.ties[i], cameraPosition, cameraFrustum);
             }
         }
 
         if (this.settings.enableShrubs) {
             for (let i = 0; i < this.level.shrubs.length; i++) {
-                this.renderShrubs(this.level.shrubs[i], cameraPosition);
+                this.renderShrubs(this.level.shrubs[i], cameraPosition, cameraFrustum);
             }
         }
 
@@ -747,9 +765,9 @@ class RatchetAndClank1SceneDesc implements SceneDesc {
 
 export const sceneGroup: SceneGroup = {
     id: "RatchetAndClank1",
-    name: "Ratchet and Clank",
+    name: "Ratchet & Clank",
     sceneDescs: [
-        new RatchetAndClank1SceneDesc(0, "Tutorial, Veldin"),
+        new RatchetAndClank1SceneDesc(0, "Kyzil Plateau, Veldin (Tutorial)"),
         new RatchetAndClank1SceneDesc(1, "Tobruk Crater, Novalis"),
         new RatchetAndClank1SceneDesc(2, "Outpost X11, Aridia"),
         new RatchetAndClank1SceneDesc(3, "Metropolis, Kerwan"),
@@ -761,12 +779,12 @@ export const sceneGroup: SceneGroup = {
         new RatchetAndClank1SceneDesc(9, "Blarg Depot, Gaspar"),
         new RatchetAndClank1SceneDesc(10, "Kogor Refinery, Orxon"),
         new RatchetAndClank1SceneDesc(11, "Jowai Resort, Pokitaru"),
-        new RatchetAndClank1SceneDesc(12, "Hoven"),
-        new RatchetAndClank1SceneDesc(13, "Oltanis Orbit"),
-        new RatchetAndClank1SceneDesc(14, "Oltanis"),
-        new RatchetAndClank1SceneDesc(15, "Quartu"),
-        new RatchetAndClank1SceneDesc(16, "Kalebo III"),
-        new RatchetAndClank1SceneDesc(17, "Veldin Orbit"),
-        new RatchetAndClank1SceneDesc(18, "Veldin Finale"),
+        new RatchetAndClank1SceneDesc(12, "Bomb Factory, Hoven"),
+        new RatchetAndClank1SceneDesc(13, "Gemlik Base, Oltanis Orbit"),
+        new RatchetAndClank1SceneDesc(14, "Gorda City Ruins, Oltanis"),
+        new RatchetAndClank1SceneDesc(15, "Robot Plant, Quartu"),
+        new RatchetAndClank1SceneDesc(16, "Gadgetron Site, Kalebo III"),
+        new RatchetAndClank1SceneDesc(17, "Drek's Fleet, Veldin Orbit"),
+        new RatchetAndClank1SceneDesc(18, "Kyzil Plateau, Veldin"),
     ],
 };
