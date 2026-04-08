@@ -1,4 +1,4 @@
-import { mat4, vec3, vec4 } from "gl-matrix";
+import { mat4, quat, vec3 } from "gl-matrix";
 import { makeBackbufferDescSimple, standardFullClearRenderPassDescriptor } from "../gfx/helpers/RenderGraphHelpers";
 import { fillMatrix4x4, fillVec3v, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
 import { GfxBlendFactor, GfxBlendMode, GfxChannelWriteMask, GfxCompareMode, GfxCullMode, GfxDevice, GfxMipFilterMode, GfxProgram, GfxSampler, GfxTexFilterMode, GfxTexture, GfxWrapMode } from "../gfx/platform/GfxPlatform";
@@ -15,10 +15,11 @@ import { buildLevelFromFiles, LevelFiles, ShrubInstanceBatch, TieInstanceBatch }
 import { batches, distanceToCamera, makeTextureWithPalette, noclipSpaceFromRatchetSpace, pathToDebugLines } from "./utils";
 import { TfragGeometry, TfragProgram } from "./tfrag";
 import { MAX_SHRUB_INSTANCES, ShrubGeometry, ShrubProgram } from "./shrub";
-import { Blue, colorNewFromRGBA, Red } from "../Color";
+import { colorNewFromRGBA, White } from "../Color";
 import { SkyGeometry, SkyProgram } from "./sky";
 import { RatchetShaderLib } from "./shader-lib";
 import { Frustum } from "../Geometry";
+import { MobyInstance } from "./structs-gameplay";
 
 const pathBase = `RatchetAndClank1`;
 
@@ -42,6 +43,7 @@ class RatchetAndClank1Scene implements SceneGfx {
         lodBias: 40,
         enableTfrag: true,
         enableTies: true,
+        enableMobys: false,
         enableShrubs: true,
         enableSky: true,
         enableFog: true,
@@ -439,6 +441,17 @@ class RatchetAndClank1Scene implements SceneGfx {
         }
     }
 
+    private renderMoby(mobyInstance: MobyInstance, cameraWorldMatrix: mat4): void {
+        const pos = vec3.fromValues(mobyInstance.position.x, mobyInstance.position.y, mobyInstance.position.z);
+        vec3.transformMat4(pos, pos, noclipSpaceFromRatchetSpace);
+        this.renderHelper.debugDraw.drawLocator(pos, 0.3, White);
+        const mat = mat4.fromTranslation(mat4.create(), pos);
+        const rotation = quat.create();
+        mat4.getRotation(rotation, cameraWorldMatrix);
+        mat4.fromRotationTranslationScale(mat, rotation, pos, vec3.fromValues(0.01, 0.01, 0.01));
+        this.renderHelper.debugDraw.drawWorldTextMtx(String(mobyInstance.oClass), mat, White);
+    }
+
     private renderShrubs(shrubInstanceBatch: ShrubInstanceBatch, cameraPosition: vec3, cameraFrustum: Frustum): void {
         const { shrubClass, instances: shrubInstances, textureIndices } = shrubInstanceBatch;
         const oClass = shrubClass.header.oClass;
@@ -588,7 +601,7 @@ class RatchetAndClank1Scene implements SceneGfx {
             const skyParams = renderInst.allocateUniformBufferF32(SkyProgram.ub_SkyParams, 20);
             let offs = 0;
             offs += fillMatrix4x4(skyParams, offs, objectMatrix);
-            offs += fillVec4(skyParams, offs, Number(draw.flags.useSkyColorInsteadOfTexture), 0, 0, 0);
+            offs += fillVec4(skyParams, offs, Number(draw.flags.textured), 0, 0, 0);
 
             renderInst.setVertexInput(
                 skyShellGeometry.inputLayout,
@@ -637,6 +650,12 @@ class RatchetAndClank1Scene implements SceneGfx {
             }
         }
 
+        if (this.settings.enableMobys) {
+            for (let i = 0; i < this.level.mobyInstances.instances.length; i++) {
+                this.renderMoby(this.level.mobyInstances.instances[i], viewerInput.camera.worldMatrix);
+            }
+        }
+
         if (this.settings.enableShrubs) {
             for (let i = 0; i < this.level.shrubs.length; i++) {
                 this.renderShrubs(this.level.shrubs[i], cameraPosition, cameraFrustum);
@@ -657,12 +676,8 @@ class RatchetAndClank1Scene implements SceneGfx {
 
         const builder = this.renderHelper.renderGraph.newGraphBuilder();
         const mainColorDesc = makeBackbufferDescSimple(GfxrAttachmentSlot.Color0, viewerInput, standardFullClearRenderPassDescriptor);
-        // const backgroundColor = this.level.levelSettings.backgroundColor;
-        // if (this.level.sky.header.clearScreen) {
-        //     mainColorDesc.clearColor = { r: backgroundColor.r / 255, g: backgroundColor.g / 255, b: backgroundColor.b / 255, a: 1 };
-        // } else {
-        mainColorDesc.clearColor = { r: 0, g: 0, b: 0, a: 1 };
-        // }
+        const backgroundColor = this.level.levelSettings.backgroundColor;
+        mainColorDesc.clearColor = { r: backgroundColor.r / 255, g: backgroundColor.g / 255, b: backgroundColor.b / 255, a: 1 };
         const mainDepthDesc = makeBackbufferDescSimple(GfxrAttachmentSlot.DepthStencil, viewerInput, standardFullClearRenderPassDescriptor);
         const mainColorTargetID = builder.createRenderTargetID(mainColorDesc, 'Main Color');
         const mainDepthTargetID = builder.createRenderTargetID(mainDepthDesc, 'Main Depth');
@@ -727,6 +742,18 @@ class RatchetAndClank1Scene implements SceneGfx {
             this.settings.enableFog = enableFog.checked;
         };
         renderSettingsPanel.contents.appendChild(enableFog.elem);
+
+        const enableSky = new UI.Checkbox('Enable Sky', this.settings.enableSky);
+        enableSky.onchanged = () => {
+            this.settings.enableSky = enableSky.checked;
+        };
+        renderSettingsPanel.contents.appendChild(enableSky.elem);
+
+        const enableMobys = new UI.Checkbox('Show Moby Positions', this.settings.enableMobys);
+        enableMobys.onchanged = () => {
+            this.settings.enableMobys = enableMobys.checked;
+        };
+        renderSettingsPanel.contents.appendChild(enableMobys.elem);
 
         const showPaths = new UI.Checkbox('Show Paths', this.settings.showPaths);
         showPaths.onchanged = () => {

@@ -172,6 +172,81 @@ export function readTieInstance(view: DataViewExt) {
     }
 }
 
+export const SIZEOF_MOBY_INSTANCE = 0x78;
+export type MobyInstance = ReturnType<typeof readMobyInstance>;
+export function readMobyInstance(view: DataViewExt) {
+    /*
+        packed_struct(RacMobyInstance,
+            // 0x00
+            s32 size;
+            // 0x04
+            s32 unknown_4;
+            // 0x08
+            s32 unknown_8;
+            // 0x0c
+            s32 unknown_c;
+            // 0x10
+            s32 unknown_10;
+            // 0x14
+            s32 unknown_14;
+            // 0x18
+            s32 o_class;
+            // 0x1c
+            f32 scale;
+            // 0x20
+            f32 draw_distance;
+            // 0x24
+            s32 update_distance;
+            // 0x28
+            s32 unused_28;
+            // 0x2c
+            s32 unused_2c;
+            // 0x30
+            Vec3f position;
+            // 0x3c
+            Vec3f rotation;
+            // 0x48
+            s32 group;
+            // 0x4c
+            s32 is_rooted;
+            // 0x50
+            f32 rooted_distance;
+            // 0x54
+            s32 unknown_54;
+            // 0x58
+            s32 pvar_index;
+            // 0x5c
+            s32 occlusion;
+            // 0x60
+            s32 mode_bits;
+            // 0x64
+            Rgb96 colour;
+            // 0x70
+            s32 light;
+            // 0x74
+            s32 unknown_74;
+        )
+    */
+
+    return {
+        size: view.getInt32(0x0),
+        oClass: view.getInt32(0x18),
+        scale: view.getFloat32(0x1c),
+        drawDistance: view.getFloat32(0x20),
+        updateDistance: view.getInt32(0x24),
+        position: view.getFloat32_Xyz(0x30),
+        rotation: view.getFloat32_Xyz(0x3c),
+        group: view.getInt32(0x48),
+        isRooted: view.getInt32(0x4c),
+        rootedDistance: view.getFloat32(0x50),
+        pvarIndex: view.getInt32(0x58),
+        occlusion: view.getInt32(0x5c),
+        modeBits: view.getInt32(0x60),
+        color: view.getInt32_Rgb(0x64),
+        light: view.getInt32(0x70),
+    }
+}
+
 export const SIZEOF_SHRUB_INSTANCE = 0x70;
 export type ShrubInstance = ReturnType<typeof readShrubInstance>;
 export function readShrubInstance(view: DataViewExt) {

@@ -9,9 +9,10 @@ import { SkyShell } from "./structs-core";
 export class SkyProgram extends DeviceProgram {
     public static a_Position = 0;
     public static a_ST = 1;
-    public static a_Alpha = 2;
+    public static a_Rgba = 2;
+    public static a_Alpha = 3;
 
-    public static elementsPerVertex = 6; // xyz, st, a
+    public static elementsPerVertex = 10; // xyz, st, rgba, a
 
     public static ub_SceneParams = 0;
     public static ub_SkyParams = 1;
@@ -21,6 +22,7 @@ ${SkyProgram.Common}
 
 layout(location = ${SkyProgram.a_Position}) in vec3 a_Position;
 layout(location = ${SkyProgram.a_ST}) in vec2 a_ST;
+layout(location = ${SkyProgram.a_Rgba}) in vec4 a_Rgba;
 layout(location = ${SkyProgram.a_Alpha}) in float a_Alpha;
 
 out vec2 v_ST;
@@ -29,18 +31,13 @@ out vec4 v_Rgba;
 void main() {
     vec4 t_PositionWorld = UnpackMatrix(u_SkyTransform) * vec4(a_Position.xyz, 1.0f);
     gl_Position = (UnpackMatrix(u_ClipFromWorld) * t_PositionWorld).xyww; // infinite depth
-    if (u_UseSkyColorInsteadOfTexture > 0.5) {
-        float localY = a_Position.z;
-        if (localY > 0.01) {
-            vec3 color = mix(u_SkyColor.rgb, u_FogParams.color.rgb, a_ST.x / 2.0);
-            v_Rgba = vec4(color, a_Alpha);
-        } else {
-            v_Rgba = vec4(u_PitColor.rgb, a_Alpha);
-        }
-    } else {
+
+    if (u_Textured == 1.0) {
+        v_ST = a_ST;
         v_Rgba = vec4(1.0, 1.0, 1.0, a_Alpha);
+    } else {
+        v_Rgba = vec4(a_Rgba.rgb, a_Alpha * a_Rgba.a);
     }
-    v_ST = a_ST;
 }
 `;
 
@@ -51,17 +48,12 @@ in vec2 v_ST;
 in vec4 v_Rgba;
 
 void main() {
-    float fog = v_ST.x / 2.0;
-    vec4 baseColor;
-    if (u_UseSkyColorInsteadOfTexture > 0.5) {
-        baseColor = v_Rgba;
-        // gl_FragColor = mix(v_Rgba, u_FogParams.color, fog);
-        gl_FragColor = baseColor;
+    if (u_Textured == 1.0) {
+        gl_FragColor = v_Rgba * texture(SAMPLER_2D(u_Texture), v_ST);
     } else {
-        vec4 tex = texture(SAMPLER_2D(u_Texture), v_ST);
-        baseColor = v_Rgba * tex;
-        gl_FragColor = baseColor;
+        gl_FragColor = v_Rgba;
     }
+    gl_FragColor = vec4(adjustSaturation(gl_FragColor.xyz, SATURATION_ADJUST), gl_FragColor.a);
 }
 `;
 
@@ -71,7 +63,7 @@ ${RatchetShaderLib.SceneParams}
 
 layout(std140) uniform ub_SkyParams {
     Mat4x4 u_SkyTransform;
-    float u_UseSkyColorInsteadOfTexture;
+    float u_Textured;
 };
 
 layout(location = 0) uniform sampler2D u_Texture;
@@ -82,7 +74,7 @@ layout(location = 0) uniform sampler2D u_Texture;
 export class SkyGeometry {
     public vertexBuffer: GfxBuffer;
     public indexBuffer: GfxBuffer;
-    public draws: { material: number, flags: { useSkyColorInsteadOfTexture: boolean }, indexCount: number, startIndex: number }[] = [];
+    public draws: { material: number, flags: { textured: boolean }, indexCount: number, startIndex: number }[] = [];
     public assembled: ReturnType<typeof assembleSkyShellGeometry>;
 
     public inputLayout: GfxInputLayout;
@@ -115,9 +107,15 @@ export class SkyGeometry {
                     bufferIndex: 0,
                 },
                 {
+                    location: SkyProgram.a_Rgba,
+                    format: GfxFormat.F32_RGBA,
+                    bufferByteOffset: 5 * 4,
+                    bufferIndex: 0,
+                },
+                {
                     location: SkyProgram.a_Alpha,
                     format: GfxFormat.F32_R,
-                    bufferByteOffset: 5 * 4,
+                    bufferByteOffset: 9 * 4,
                     bufferIndex: 0,
                 },
             ],
@@ -143,8 +141,19 @@ function assembleSkyShellGeometry(skyShell: SkyShell) {
     const positionScale = 1 / 1024;
     const texcoordScale = 1 / 4096;
 
-    const verts = [];
-    const draws: { material: number, flags: { useSkyColorInsteadOfTexture: boolean }, indices: number[] }[] = [];
+    const verts: {
+        x: number,
+        y: number,
+        z: number,
+        s: number,
+        t: number,
+        r: number,
+        g: number,
+        b: number,
+        a1: number,
+        a2: number,
+    }[] = [];
+    const draws: { material: number, flags: { textured: boolean }, indices: number[] }[] = [];
 
     let baseVertex = 0;
     for (let i = 0; i < skyShell.clusters.length; i++) {
@@ -152,23 +161,41 @@ function assembleSkyShellGeometry(skyShell: SkyShell) {
         for (let j = 0; j < cluster.vertices.length; j++) {
             const vert = cluster.vertices[j];
             const st = cluster.texcoords[j];
-            verts.push({
-                x: vert.x,
-                y: vert.y,
-                z: vert.z,
-                s: st.s,
-                t: st.t,
-                a: vert.alpha,
-            });
+            const rgba = cluster.rgbas[j];
+            if (skyShell.header.flags.textured) {
+                verts.push({
+                    x: vert.x,
+                    y: vert.y,
+                    z: vert.z,
+                    s: st.s,
+                    t: st.t,
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a1: 1,
+                    a2: vert.alpha,
+                });
+            } else {
+                verts.push({
+                    x: vert.x,
+                    y: vert.y,
+                    z: vert.z,
+                    s: 0,
+                    t: 0,
+                    r: rgba.r,
+                    g: rgba.g,
+                    b: rgba.b,
+                    a1: rgba.a,
+                    a2: vert.alpha,
+                });
+            }
         }
         for (let j = 0; j < cluster.triangles.length; j++) {
             const triangle = cluster.triangles[j];
             for (let k = 0; k < 3; k++) {
                 draws.push({
                     material: triangle.texture,
-                    flags: {
-                        useSkyColorInsteadOfTexture: skyShell.header.useSkyColorInsteadOfTexture,
-                    },
+                    flags: skyShell.header.flags,
                     indices: [
                         triangle.indices[0] + baseVertex,
                         triangle.indices[1] + baseVertex,
@@ -181,19 +208,24 @@ function assembleSkyShellGeometry(skyShell: SkyShell) {
     }
 
     const vertexArrayBuffer = new Float32Array(verts.length * SkyProgram.elementsPerVertex);
+    let ptr = 0;
     for (let i = 0; i < verts.length; i++) {
         const vert = verts[i];
-        vertexArrayBuffer[i * SkyProgram.elementsPerVertex + 0] = positionScale * vert.x;
-        vertexArrayBuffer[i * SkyProgram.elementsPerVertex + 1] = positionScale * vert.y;
-        vertexArrayBuffer[i * SkyProgram.elementsPerVertex + 2] = positionScale * vert.z;
-        vertexArrayBuffer[i * SkyProgram.elementsPerVertex + 3] = texcoordScale * vert.s;
-        vertexArrayBuffer[i * SkyProgram.elementsPerVertex + 4] = texcoordScale * vert.t;
-        vertexArrayBuffer[i * SkyProgram.elementsPerVertex + 5] = vert.a / 0xff;
+        vertexArrayBuffer[ptr++] = positionScale * vert.x;
+        vertexArrayBuffer[ptr++] = positionScale * vert.y;
+        vertexArrayBuffer[ptr++] = positionScale * vert.z;
+        vertexArrayBuffer[ptr++] = texcoordScale * vert.s;
+        vertexArrayBuffer[ptr++] = texcoordScale * vert.t;
+        vertexArrayBuffer[ptr++] = (vert.r / 0xFF);
+        vertexArrayBuffer[ptr++] = (vert.g / 0xFF);
+        vertexArrayBuffer[ptr++] = (vert.b / 0xFF);
+        vertexArrayBuffer[ptr++] = (vert.a1 / 0xFF * 2);
+        vertexArrayBuffer[ptr++] = (vert.a2 / 0xFF * 2);
     }
 
     const indexArrayBuffer = new Uint32Array(draws.length * 3);
     let lastMaterial = 0;
-    const draws2: { material: number, flags: { useSkyColorInsteadOfTexture: boolean }, startIndex: number, indexCount: number }[] = [];
+    const draws2: { material: number, flags: { textured: boolean }, startIndex: number, indexCount: number }[] = [];
     for (let i = 0; i < draws.length; i++) {
         if (draws[i].material !== 0xff) lastMaterial = draws[i].material;
         const draw = draws[i];

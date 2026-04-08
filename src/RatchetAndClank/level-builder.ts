@@ -1,4 +1,4 @@
-import { readDirectionLightInstance, readGameplayHeader, readGrindPathBlock, readInstanceBlock, readLevelSettings, readPathBlock, readPointLightInstance, readShrubInstance, readTieInstance, ShrubInstance, SIZEOF_DIRECTION_LIGHT_INSTANCE, SIZEOF_POINT_LIGHT_INSTANCE, SIZEOF_SHRUB_INSTANCE, SIZEOF_TIE_INSTANCE, TieInstance } from "./structs-gameplay";
+import { readDirectionLightInstance, readGameplayHeader, readGrindPathBlock, readInstanceBlock, readLevelSettings, readMobyInstance, readPathBlock, readPointLightInstance, readShrubInstance, readTieInstance, ShrubInstance, SIZEOF_DIRECTION_LIGHT_INSTANCE, SIZEOF_MOBY_INSTANCE, SIZEOF_POINT_LIGHT_INSTANCE, SIZEOF_SHRUB_INSTANCE, SIZEOF_TIE_INSTANCE, TieInstance } from "./structs-gameplay";
 import { DataViewExt } from "../DataViewExt";
 import { assert } from "../util";
 import { readGsRamTableEntry, readLevelCoreHeader, readShrubClass, readShrubClassEntry, readSky, readSkyHeader, readSkyShell, readSkyShellHeader, readSkyTextureEntry, readTextureEntry, readTfrag, readTfragBlockHeader, readTfragHeader, readTieClass, readTieOrMobyClassEntryArray, ShrubClass, SIZEOF_GS_RAM_TABLE_ENTRY, SIZEOF_SHRUB_CLASS_ENTRY, SIZEOF_SKY_TEXTURE_ENTRY, SIZEOF_TEXTURE_ENTRY, SIZEOF_TFRAG_HEADER, SkyHeader, SkyTexture, TextureEntry, TieClass } from "./structs-core";
@@ -94,6 +94,9 @@ export function buildLevelFromFiles(files: LevelFiles) {
         };
     });
 
+    // read moby instances
+    const mobyInstances = readInstanceBlock(files.gameplay.subview(gameplayHeader.mobyInstances), SIZEOF_MOBY_INSTANCE, readMobyInstance);
+
     // read shrub classes
     const shrubClassEntries = files.coreIndex.subdivide(levelCoreHeader.shrubClasses.offset, levelCoreHeader.shrubClasses.count, SIZEOF_SHRUB_CLASS_ENTRY).map(readShrubClassEntry);
     const shrubTextureEntries = files.coreIndex.subdivide(levelCoreHeader.shrubTextures.offset, levelCoreHeader.shrubTextures.count, SIZEOF_TEXTURE_ENTRY).map(readTextureEntry);
@@ -146,6 +149,8 @@ export function buildLevelFromFiles(files: LevelFiles) {
         shrubTextures,
         sky,
         skyTextures,
+
+        mobyInstances,
     };
 }
 
