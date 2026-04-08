@@ -61,12 +61,12 @@ for (const levelSectors of tableOfContents.levelSectors) {
     const levelNum = levelDescriptor.id;
     console.log(`Start level ${levelNum}`);
 
-    const fileWritten: string[] = [];
+    const filesWritten: string[] = [];
     async function extractLevelFile(name: string, buf: string | Uint8Array | DataView) {
         const filename = name.replace(/\{\}/g, String(levelNum));
         await fs.writeFile(path.join(DATA_DIR, filename), buf);
         console.log(`Writing file ${filename}`);
-        fileWritten.push(filename);
+        filesWritten.push(filename);
     }
 
     // read level data section
@@ -105,7 +105,7 @@ for (const levelSectors of tableOfContents.levelSectors) {
 
     // write metadata file
     await extractLevelFile(`level_{}.json`, JSON.stringify({
-        filesReferenced: fileWritten,
+        filesReferenced: filesWritten,
         levelDataHeader,
         levelDescriptor,
     }));

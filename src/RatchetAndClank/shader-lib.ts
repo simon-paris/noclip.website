@@ -51,8 +51,8 @@ layout(std140) uniform ub_SceneParams {
 float WHITE_AMBIENT_LIGHT = 0.7;
 float AMBIENT_LIGHT = 0.0;
 float ENVIRONMENT_LIGHT = 1.0;
-float DIRECTIONAL_LIGHT_A = 0.4;
-float DIRECTIONAL_LIGHT_B = 0.4;
+float DIRECTIONAL_LIGHT_A = 0.5;
+float DIRECTIONAL_LIGHT_B = 0.5;
 
 vec3 commonVertexLighting(vec3 rgb, vec3 normal, int lightIndex) {
     vec3 light = vec3(0.0);
@@ -76,6 +76,8 @@ vec3 commonVertexLighting(vec3 rgb, vec3 normal, int lightIndex) {
 
     `,
     CommonFragmentShader: `
+
+const float SATURATION_ADJUST = 1.15;
 
 float linearizeDepth(float depth, float near, float far) {
     float z = depth * 2.0 - 1.0;
@@ -111,7 +113,7 @@ vec4 commonFragmentShader(vec4 rgba, sampler2D sampler, vec2 uv) {
     vec3 color2 = mix(color1, fogColor, fogFactor);
 
     // with saturation filter (not authentic but looks more accurate, not sure why)
-    vec3 color3 = adjustSaturation(color2, 1.15);
+    vec3 color3 = adjustSaturation(color2, SATURATION_ADJUST);
 
     return vec4(color3, tex.a * rgba.a);
 }

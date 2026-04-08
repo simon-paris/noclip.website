@@ -1967,6 +1967,7 @@ export type SkyShell = {
     clusters: {
         vertices: SkyVertex[],
         texcoords: SkyTexcoord[],
+        rgbas: SkyRgba[],
         triangles: SkyFace[],
     }[],
 };
@@ -1983,13 +1984,20 @@ export function readSkyShell(skyView: DataViewExt, skyShellView: DataViewExt) {
         const dataView = skyView.subview(clusterHeader.data);
         const vertexBuffer = dataView.subview(clusterHeader.vertexOffset);
         const vertices = vertexBuffer.subdivide(0, clusterHeader.vertexCount, SIZEOF_SKY_VERTEX).map(readSkyVertex);
-        const texcoordsBuffer = dataView.subview(clusterHeader.stOffset);
-        const texcoords = texcoordsBuffer.subdivide(0, clusterHeader.stOffset, SIZEOF_SKY_TEXCOORD).map(readSkyTexcoord);
+        const texcoordsOrRgbaBuffer = dataView.subview(clusterHeader.stOffset);
+        let texcoords: SkyTexcoord[] = [];
+        let rgbas: SkyRgba[] = [];
+        if (shellHeader.flags.textured) {
+            texcoords = texcoordsOrRgbaBuffer.subdivide(0, clusterHeader.stOffset, SIZEOF_SKY_TEXCOORD).map(readSkyTexcoord);
+        } else {
+            rgbas = texcoordsOrRgbaBuffer.subdivide(0, clusterHeader.stOffset, 4).map(view => view.getUint8_Rgba(0));
+        }
         const indicesBuffer = dataView.subview(clusterHeader.triOffset);
         const triangles = indicesBuffer.subdivide(0, clusterHeader.triCount, SIZEOF_SKY_FACE).map(readSkyFace);
         skyShells.clusters.push({
             vertices,
             texcoords,
+            rgbas,
             triangles,
         });
     }
@@ -2083,8 +2091,11 @@ export function readSkyShellHeader(view: DataViewExt) {
 
     return {
         clusterCount: view.getInt32(0x0),
-        flags,
-        useSkyColorInsteadOfTexture: flags & 0x1 ? true : false,
+        flags: {
+            textured: flags & 0x1 ? false : true,
+        },
+        unknown8: view.getUint32(0x8),
+        unknownc: view.getUint32(0xc),
     };
 }
 
@@ -2144,6 +2155,14 @@ export function readSkyVertex(view: DataViewExt) {
         z: view.getInt16(0x4),
         alpha: view.getInt16(0x6),
     };
+}
+
+// uint8[4]
+export type SkyRgba = {
+    r: number;
+    g: number;
+    b: number;
+    a: number;
 }
 
 export const SIZEOF_SKY_TEXCOORD = 0x4;
