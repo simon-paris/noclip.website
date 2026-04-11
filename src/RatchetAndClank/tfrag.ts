@@ -7,13 +7,14 @@ import { RatchetShaderLib } from "./shader-lib";
 import { Tfrag, TfragAdGifs, TfragLight, TfragStrip, TfragVertexInfo } from "./structs-core";
 
 export class TfragProgram extends DeviceProgram {
-    // position(3) + normal(3) + rgba(4) + texcoord(2) = 12
-    public static elementsPerVertex = 12;
+    // position(3) + normal(3) + rgba(4) + texcoord(2) + debug(4) = 16
+    public static elementsPerVertex = 16;
 
     public static a_Position = 0;
     public static a_Normal = 1;
     public static a_Rgba = 2;
     public static a_TS = 3;
+    public static a_DirLightIndices = 4;
 
     // Define the slot index for our uniform parameters. noclip's framework just assigns sequential indices to
     // uniform blocks seen in the shader, in-order, starting with 0.
@@ -27,6 +28,7 @@ layout(location = ${TfragProgram.a_Position}) in vec3 a_Position;
 layout(location = ${TfragProgram.a_Normal}) in vec3 a_Normal;
 layout(location = ${TfragProgram.a_Rgba}) in vec4 a_Rgba;
 layout(location = ${TfragProgram.a_TS}) in vec2 a_TS;
+layout(location = ${TfragProgram.a_DirLightIndices}) in vec4 a_DirLightIndices;
 
 out vec3 v_Normal;
 out vec4 v_Rgba;
@@ -39,8 +41,10 @@ void main() {
     vec4 t_PositionWorld = worldTransform * vec4(a_Position.xyz, 1.0f);
     gl_Position = UnpackMatrix(u_ClipFromWorld) * t_PositionWorld;
 
-    vec3 normal = normalize(inverse(transpose(mat3(worldTransform))) * a_Normal);
-    v_Rgba = vec4(commonVertexLighting(a_Rgba.rgb, normal, int(u_DebugSelectedDirLight)), a_Rgba.a);
+    vec3 normal = normalize(inverse(transpose(mat3(worldTransform))) * normalize(a_Normal));
+    vec4 lights = a_DirLightIndices;
+
+    v_Rgba = vec4(commonVertexLighting(a_Rgba.rgb, normal, lights, 1.0), a_Rgba.a);
 
     v_TS = a_TS.xy;
     v_Normal = normal;
@@ -54,10 +58,10 @@ ${RatchetShaderLib.CommonFragmentShader}
 in vec3 v_Normal;
 in vec4 v_Rgba;
 in vec2 v_TS;
+in vec4 v_Debug;
 
 void main() {
     gl_FragColor = commonFragmentShader(v_Rgba, u_Texture, v_TS);
-    // gl_FragColor = vec4(v_TS / 1.0, gl_FragColor.x / 16.0, 1.0);
 }
 `;
 
@@ -130,6 +134,12 @@ export class TfragGeometry {
                     bufferByteOffset: 10 * 0x4,
                     bufferIndex: 0,
                 },
+                {
+                    location: TfragProgram.a_DirLightIndices,
+                    format: GfxFormat.F32_RGBA,
+                    bufferByteOffset: 12 * 0x4,
+                    bufferIndex: 0,
+                },
             ],
 
             vertexBufferDescriptors: [
@@ -164,6 +174,10 @@ type TfragVertex = {
     a: number,
     s: number,
     t: number,
+    light0: number,
+    light1: number,
+    light2: number,
+    light3: number,
 }
 
 export function assembleTfragGeometry(tfrag: Tfrag[]) {
@@ -324,6 +338,10 @@ function concatAndRemoveDoubleIndirectionFromVertices(tfragId: number, tfrag: Tf
             a: Math.max(1, (rgba.a * 2) / 255), // alpha values are 0x0 - 0x80
             s: texcoordScale * info.s,
             t: texcoordScale * info.t,
+            light0: light.directionalLights[0],
+            light1: light.directionalLights[1],
+            light2: light.directionalLights[2],
+            light3: light.directionalLights[3],
         };
     });
 }
@@ -397,6 +415,10 @@ function encodeVerts(verts: TfragVertex[]) {
         vertexArrayBuffer[ptr++] = vert.a;
         vertexArrayBuffer[ptr++] = vert.s;
         vertexArrayBuffer[ptr++] = vert.t;
+        vertexArrayBuffer[ptr++] = vert.light0;
+        vertexArrayBuffer[ptr++] = vert.light1;
+        vertexArrayBuffer[ptr++] = vert.light2;
+        vertexArrayBuffer[ptr++] = vert.light3;
     }
 
     if (ptr !== vertexArrayBuffer.length) {

@@ -38,15 +38,18 @@ out vec3 v_Normal;
 ${RatchetShaderLib.LightingFunctions}
 
 void main() {
-    vec3 morphedPosition = a_Position + a_LodMorphOffset * u_lodMorphFactor[gl_InstanceID].x;
-    mat4 instanceTransform = UnpackMatrix(u_tieInstances[gl_InstanceID].transform);
+    vec3 morphedPosition = a_Position + a_LodMorphOffset * u_TieExtraData[gl_InstanceID].x;
+    mat4 instanceTransform = UnpackMatrix(u_TieInstances[gl_InstanceID].transform);
     vec4 t_PositionWorld = instanceTransform * vec4(morphedPosition, 1.0f);
 
     gl_Position = UnpackMatrix(u_ClipFromWorld) * t_PositionWorld;
     v_UV = vec2(a_STQ.x, a_STQ.y) / a_STQ.z;
     
+    vec3 rgb = a_Rgba.rgb / 4.0;
+    vec4 lights = u_TieDirectionLights[gl_InstanceID];
+    
     v_Normal = normalize(inverse(transpose(mat3(instanceTransform))) * a_Normal);
-    v_Rgba = vec4(commonVertexLighting(a_Rgba.rgb, v_Normal, 0), a_Rgba.a);
+    v_Rgba = vec4(commonVertexLighting(rgb, v_Normal, lights, 1.0), a_Rgba.a);
 }
 
 `;
@@ -75,8 +78,9 @@ struct TieInstance {
 };
 
 layout(std140) uniform ub_TieParams {
-    TieInstance u_tieInstances[${MAX_TIE_INSTANCES}];
-    vec4 u_lodMorphFactor[${MAX_TIE_INSTANCES}]; // only x used
+    TieInstance u_TieInstances[${MAX_TIE_INSTANCES}];
+    vec4 u_TieDirectionLights[${MAX_TIE_INSTANCES}]; // 4 direction light indices
+    vec4 u_TieExtraData[${MAX_TIE_INSTANCES}]; // x = lod morph factor
 };
 
 layout(location = 0) uniform sampler2D u_Texture;
@@ -207,9 +211,9 @@ export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: 
             vertexArrayBuffer[ptr++] = normalScale * normal.z;
 
             // TODO: vertex colors come from instances not classes, also I don't know how to read them
-            vertexArrayBuffer[ptr++] = 0;
-            vertexArrayBuffer[ptr++] = 0;
-            vertexArrayBuffer[ptr++] = 0;
+            vertexArrayBuffer[ptr++] = 1;
+            vertexArrayBuffer[ptr++] = 1;
+            vertexArrayBuffer[ptr++] = 1;
             vertexArrayBuffer[ptr++] = 1;
 
             vertexArrayBuffer[ptr++] = positionScale * vert.lodMorphOffsetX;

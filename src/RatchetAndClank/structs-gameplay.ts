@@ -157,8 +157,6 @@ export function readTieInstance(view: DataViewExt) {
     */
 
     const matrix = view.getMat4Slice(0x10).slice();
-
-    // TODO: no idea why this
     matrix[15] = 1;
 
     return {
@@ -166,8 +164,8 @@ export function readTieInstance(view: DataViewExt) {
         drawDistance: view.getInt32(0x4),
         occlusionIndex: view.getInt32(0xc),
         matrix,
-        ambientRgbas: view.getArrayOfNumbers(0x50, 0x80 / 2, Uint16Array),
-        directionalLights: view.getInt32(0xd0),
+        ambientRgbas: view.getArrayOfNumbers(0x50, 0x80 / 2, Uint16Array), // not sure how to read this... could be offsets
+        directionalLights: view.getNibbleArray(0xd0, 2),
         uid: view.getInt32(0xd4),
     }
 }
@@ -278,7 +276,6 @@ export function readShrubInstance(view: DataViewExt) {
     */
 
     const matrix = view.getMat4Slice(0x10).slice();
-
     matrix[15] = 1;
 
     return {
@@ -286,7 +283,7 @@ export function readShrubInstance(view: DataViewExt) {
         drawDistance: view.getFloat32(0x4),
         matrix,
         color: view.getInt32_Rgb(0x50),
-        directionalLights: view.getInt32(0x60),
+        directionalLights: view.getNibbleArray(0x60, 2),
     }
 }
 

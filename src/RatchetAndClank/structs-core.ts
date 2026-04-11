@@ -980,10 +980,12 @@ export function readTfragLight(view: DataViewExt) {
         )
     */
     return {
-        intensity: view.getInt8(0x1),
+        unknown0: view.getInt8(0x0),
+        intensity: view.getInt8(0x1), // this is not intensity, it might be a packet number
         azimuth: view.getInt8(0x2),
         elevation: view.getInt8(0x3),
-        color: view.getInt16(0x4),
+        color: view.getUint16(0x4), // this is a brightness value
+        directionalLights: view.getNibbleArray(0x6, 2),
     }
 }
 
