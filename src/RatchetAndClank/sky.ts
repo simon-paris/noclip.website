@@ -220,7 +220,7 @@ function assembleSkyShellGeometry(skyShell: SkyShell) {
         vertexArrayBuffer[ptr++] = (vert.g / 0xFF);
         vertexArrayBuffer[ptr++] = (vert.b / 0xFF);
         vertexArrayBuffer[ptr++] = (vert.a1 / 0xFF * 2);
-        vertexArrayBuffer[ptr++] = (vert.a2 / 0xFF * 2);
+        vertexArrayBuffer[ptr++] = (vert.a2 / 0xFF);
     }
 
     const indexArrayBuffer = new Uint32Array(draws.length * 3);

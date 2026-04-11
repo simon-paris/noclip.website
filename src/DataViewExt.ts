@@ -159,6 +159,19 @@ export class DataViewExt<T extends ArrayBufferLike = ArrayBufferLike> extends Da
     }
 
     /**
+     * Reads a number of bytes and interprets them as nibbles.
+     */
+    getNibbleArray(offset: number, bytes: number): number[] {
+        const arr: number[] = [];
+        for (let i = 0; i < bytes; i++) {
+            const byte = this.getUint8(offset + i);
+            arr.push(byte & 0xF);
+            arr.push(byte >> 4);
+        }
+        return arr;
+    }
+
+    /**
      * Returns a 2 element slice of the buffer at offset, as a Float32Array.
      * Endianness is ignored.
      */

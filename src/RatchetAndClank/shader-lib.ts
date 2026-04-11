@@ -3,11 +3,10 @@ export const RatchetShaderLib = {
         16, // camera transform
         4, // camera position
         4, // near/far clip
-        4, // ambient color
+        4, // background color
         4, // sky color
-        4, // pit color
         4 + 4, // fog params
-        (4 + 4 + 4 + 4) * 8, // directional lights
+        (4 + 4 + 4 + 4) * 16, // directional lights
         4, // debugSelectedDirLight
     ].reduce((a, b) => a + b, 0),
     SceneParams: `
@@ -34,42 +33,60 @@ struct DirectionLight {
 layout(std140) uniform ub_SceneParams {
     Mat4x4 u_ClipFromWorld;
     vec3 u_CameraPosWorld;
-    float pad1;
+    float u_EnableTextures;
     vec2 u_NearFarClip;
     vec2 pad2;
-    vec4 u_AmbientColor;
+    vec4 u_BackgroundColor;
     vec4 u_SkyColor;
-    vec4 u_PitColor;
     FogParams u_FogParams;
-    DirectionLight u_DirectionLight[8];
+    DirectionLight u_DirectionLights[16];
     vec4 u_DebugSelectedDirLight; // x = index
 };
 
     `,
     LightingFunctions: `
 
-float WHITE_AMBIENT_LIGHT = 0.7;
-float AMBIENT_LIGHT = 0.0;
-float ENVIRONMENT_LIGHT = 1.0;
-float DIRECTIONAL_LIGHT_A = 0.5;
-float DIRECTIONAL_LIGHT_B = 0.5;
+float AMBIENT_LIGHT = 0.6;
+float ENVIRONMENT_LIGHT = 0.7;
+float DIRECTIONAL_LIGHT_A = 0.9;
+float DIRECTIONAL_LIGHT_B = 0.9;
 
-vec3 commonVertexLighting(vec3 rgb, vec3 normal, int lightIndex) {
+vec3 applyDirectionalLight(vec3 normal, int dirLightIndex) {
+    DirectionLight dirlight = u_DirectionLights[dirLightIndex];
+    if (dirLightIndex == 15) return vec3(0.0);
+
     vec3 light = vec3(0.0);
-
-    // ambient
-    light += WHITE_AMBIENT_LIGHT;
-    light += AMBIENT_LIGHT * u_AmbientColor.rgb;
-
-    // environment probe
-    light += ENVIRONMENT_LIGHT * rgb;
-
-    // directional
-    DirectionLight dirlight = u_DirectionLight[lightIndex];
     float nDotL_A = dot(normal, dirlight.directionA);
     light += DIRECTIONAL_LIGHT_A * nDotL_A * dirlight.colorA;
     float nDotL_B = dot(normal, dirlight.directionB);
     light += DIRECTIONAL_LIGHT_B * nDotL_B * dirlight.colorB;
+    return light;
+}
+
+vec3 commonVertexLighting(vec3 rgb, vec3 normal, vec4 dirLightIndices, float ambientMultiplier) {
+    vec3 light = vec3(0.0);
+
+    // directional
+    int lightsApplied = 0;
+    for(int i = 0; i < 4; i++) {
+        int dirLightIndex = int(dirLightIndices[i]);
+        if (dirLightIndex == 15) continue;
+        if (i > 0 && int(dirLightIndex) == 0) break;
+        light += applyDirectionalLight(normal, dirLightIndex);
+        lightsApplied++;
+    }
+
+    ambientMultiplier *= 1.0 + float(4 - lightsApplied) * 0.1;
+    
+    float environmentLightAmount = ENVIRONMENT_LIGHT * ambientMultiplier;
+    float ambientLightAmount = AMBIENT_LIGHT * ambientMultiplier;
+    vec3 ambientLightColor = vec3(1.0); // on some levels this could be the background color, but not all
+
+    // ambient
+    light += ambientLightAmount * ambientLightColor;
+
+    // environmental
+    light += environmentLightAmount * rgb;
 
     return light;
 }
@@ -77,7 +94,7 @@ vec3 commonVertexLighting(vec3 rgb, vec3 normal, int lightIndex) {
     `,
     CommonFragmentShader: `
 
-const float SATURATION_ADJUST = 1.15;
+const float SATURATION_ADJUST = 1.1;
 
 float linearizeDepth(float depth, float near, float far) {
     float z = depth * 2.0 - 1.0;
@@ -99,7 +116,12 @@ vec3 adjustSaturation(vec3 color, float adjustment) {
 }
 
 vec4 commonFragmentShader(vec4 rgba, sampler2D sampler, vec2 uv) {
-    vec4 tex = texture(SAMPLER_2D(sampler), uv);
+    vec4 tex;
+    if (u_EnableTextures != 0.0) {
+        tex = texture(SAMPLER_2D(sampler), uv);
+    } else {
+        tex = vec4(0.5, 0.5, 0.5, 1.0);
+    }
     vec3 texColor = vec3(tex.r, tex.g, tex.b);
     if (tex.a < 0.01) { discard; }
 

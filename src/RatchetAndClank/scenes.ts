@@ -1,6 +1,6 @@
 import { mat4, quat, vec3 } from "gl-matrix";
 import { makeBackbufferDescSimple, standardFullClearRenderPassDescriptor } from "../gfx/helpers/RenderGraphHelpers";
-import { fillMatrix4x4, fillVec3v, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
+import { fillMatrix4x4, fillVec3v, fillVec4, fillVec4v } from "../gfx/helpers/UniformBufferHelpers";
 import { GfxBlendFactor, GfxBlendMode, GfxChannelWriteMask, GfxCompareMode, GfxCullMode, GfxDevice, GfxMipFilterMode, GfxProgram, GfxSampler, GfxTexFilterMode, GfxTexture, GfxWrapMode } from "../gfx/platform/GfxPlatform";
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
@@ -15,7 +15,7 @@ import { buildLevelFromFiles, LevelFiles, ShrubInstanceBatch, TieInstanceBatch }
 import { batches, distanceToCamera, makeTextureWithPalette, noclipSpaceFromRatchetSpace, pathToDebugLines } from "./utils";
 import { TfragGeometry, TfragProgram } from "./tfrag";
 import { MAX_SHRUB_INSTANCES, ShrubGeometry, ShrubProgram } from "./shrub";
-import { colorNewFromRGBA, White } from "../Color";
+import { colorNewFromRGBA, Red, White } from "../Color";
 import { SkyGeometry, SkyProgram } from "./sky";
 import { RatchetShaderLib } from "./shader-lib";
 import { Frustum } from "../Geometry";
@@ -47,6 +47,7 @@ class RatchetAndClank1Scene implements SceneGfx {
         enableShrubs: true,
         enableSky: true,
         enableFog: true,
+        enableTextures: true,
         showPaths: false,
         dirLightIndex: 0,
     };
@@ -211,19 +212,15 @@ class RatchetAndClank1Scene implements SceneGfx {
         const farClip = 1024;
         viewerInput.camera.setClipPlanes(nearClip, farClip);
         offs += fillMatrix4x4(data, offs, viewerInput.camera.clipFromWorldMatrix);
-        offs += fillVec3v(data, offs, cameraPosition, 0);
+        offs += fillVec3v(data, offs, cameraPosition, this.settings.enableTextures ? 1 : 0);
         offs += fillVec4(data, offs, nearClip, farClip, 0, 0);
 
-        // ambient color (4 floats)
-        const ambientColor = this.level.levelSettings.backgroundColor;
-        offs += fillVec4(data, offs, ambientColor.r / 0xFF, ambientColor.g / 0xFF, ambientColor.b / 0xFF, 1);
+        // background color (4 floats)
+        const backgroundColor = this.level.levelSettings.backgroundColor;
+        offs += fillVec4(data, offs, backgroundColor.r / 0xFF, backgroundColor.g / 0xFF, backgroundColor.b / 0xFF, 1);
         // sky color (4 floats)
         const skyColor = this.level.sky.header.skyColor;
         offs += fillVec4(data, offs, skyColor.r / 0xFF, skyColor.g / 0xFF, skyColor.b / 0xFF, skyColor.a / 0xFF);
-        // pit color (4 floats)
-        const lastSkyTexture = this.level.skyTextures[this.level.skyTextures.length - 1];
-        const pitColor = lastSkyTexture.palette[lastSkyTexture.pixels[lastSkyTexture.pixels.length - 1]];
-        offs += fillVec4(data, offs, pitColor.r / 0xFF, pitColor.g / 0xFF, pitColor.b / 0xFF, 1);
 
         // fog params (8 floats)
         if (this.settings.enableFog) {
@@ -240,9 +237,9 @@ class RatchetAndClank1Scene implements SceneGfx {
             offs += fillVec4(data, offs, 1, 2, 0, 0);
         }
 
-        // lights (16 * 8 floats)
+        // lights (16 * 16 floats)
         const directionalLights = this.level.directionLights;
-        for (let i = 0; i < 8; i++) {
+        for (let i = 0; i < 16; i++) {
             if (i < directionalLights.length) {
                 const light = directionalLights[i];
                 offs += fillVec4(data, offs, -light.directionA.x, light.directionA.y, light.directionA.z, 0);
@@ -256,9 +253,6 @@ class RatchetAndClank1Scene implements SceneGfx {
                 offs += fillVec4(data, offs, 0, 0, 0, 0);
             }
         }
-
-        // debug selected directional light index (4 floats)
-        offs += fillVec4(data, offs, this.settings.dirLightIndex, 0, 0, 0);
     }
 
     private renderTfrag(cameraPosition: vec3): void {
@@ -314,12 +308,15 @@ class RatchetAndClank1Scene implements SceneGfx {
     }
 
     private renderTie(tieInstanceBatch: TieInstanceBatch, cameraPosition: vec3, cameraFrustum: Frustum): void {
+        if (!this.level.ready) return;
+
         const { tieClass, textureIndices, oClass } = tieInstanceBatch;
 
         const scratchVec3_1 = vec3.create();
         const scratchVec3_2 = vec3.create();
 
-        const tieInstancesToDrawByLod: { objectMatrix: mat4, lodMorphFactor: number, i: number }[][] = [[], [], []];
+        type TieDrawInstance = { objectMatrix: mat4, directionLights: number[], lodMorphFactor: number, i: number };
+        const tieInstancesToDrawByLod: TieDrawInstance[][] = [[], [], []];
         for (let i = 0; i < tieInstanceBatch.instances.length; i++) {
             const tieInstance = tieInstanceBatch.instances[i];
 
@@ -366,7 +363,14 @@ class RatchetAndClank1Scene implements SceneGfx {
             //     continue;
             // }
 
-            tieInstancesToDrawByLod[modelLodLevel].push({ objectMatrix, lodMorphFactor, i });
+
+            for (const dirLight of tieInstance.directionalLights) {
+                if (dirLight < 0 || (dirLight >= this.level.directionLights.length && dirLight !== 0xF)) {
+                    throw new Error(`Invalid directional light index ${dirLight}`);
+                }
+            }
+
+            tieInstancesToDrawByLod[modelLodLevel].push({ objectMatrix, directionLights: tieInstance.directionalLights, lodMorphFactor, i });
         }
 
         for (let i = 0; i < tieInstancesToDrawByLod.length; i++) {
@@ -409,17 +413,25 @@ class RatchetAndClank1Scene implements SceneGfx {
                 const uniformBufferSize =
                     // matrix
                     (16 * MAX_TIE_INSTANCES) +
-                    // morph factor
+                    // directional light indices
+                    (4 * MAX_TIE_INSTANCES) +
+                    // extras
                     (4 * MAX_TIE_INSTANCES);
                 const tieParams = template2.allocateUniformBufferF32(TieProgram.ub_TieParams, uniformBufferSize);
                 let tieParamsOffset = 0;
                 for (let j = 0; j < batchSize; j++) {
-                    tieParamsOffset += fillMatrix4x4(tieParams, tieParamsOffset, tieInstancesToDraw[ptr + j].objectMatrix);
+                    const inst = tieInstancesToDraw[ptr + j];
+                    tieParamsOffset += fillMatrix4x4(tieParams, tieParamsOffset, inst.objectMatrix);
                 }
                 tieParamsOffset = 16 * MAX_TIE_INSTANCES;
                 for (let j = 0; j < batchSize; j++) {
-                    tieParams[tieParamsOffset] = tieInstancesToDraw[ptr + j].lodMorphFactor;
-                    tieParamsOffset += 4;
+                    const inst = tieInstancesToDraw[ptr + j];
+                    tieParamsOffset += fillVec4(tieParams, tieParamsOffset, inst.directionLights[0], inst.directionLights[1], inst.directionLights[2], inst.directionLights[3]);
+                }
+                tieParamsOffset = 20 * MAX_TIE_INSTANCES;
+                for (let j = 0; j < batchSize; j++) {
+                    const inst = tieInstancesToDraw[ptr + j];
+                    tieParamsOffset += fillVec4(tieParams, tieParamsOffset, inst.lodMorphFactor, 0, 0, 0);
                 }
                 ptr += batchSize;
                 template2.setInstanceCount(batchSize);
@@ -453,13 +465,16 @@ class RatchetAndClank1Scene implements SceneGfx {
     }
 
     private renderShrubs(shrubInstanceBatch: ShrubInstanceBatch, cameraPosition: vec3, cameraFrustum: Frustum): void {
+        if (!this.level.ready) return;
+
         const { shrubClass, instances: shrubInstances, textureIndices } = shrubInstanceBatch;
         const oClass = shrubClass.header.oClass;
 
         const shrubGeometry = this.geometries.shrubs.get(oClass);
         if (!shrubGeometry) return;
 
-        const shrubInstancesToDraw: { objectMatrix: mat4, rgb: { r: number, g: number, b: number }, lodAlpha: number, i: number }[] = [];
+        type ShrubDrawInstance = { objectMatrix: mat4, directionalLights: number[], rgb: { r: number, g: number, b: number }, lodAlpha: number, i: number };
+        const shrubInstancesToDraw: ShrubDrawInstance[] = [];
         for (let i = 0; i < shrubInstances.length; i++) {
             const shrubInstance = shrubInstances[i];
 
@@ -488,8 +503,15 @@ class RatchetAndClank1Scene implements SceneGfx {
             //     continue;
             // }
 
+            for (const dirLightIndex of shrubInstance.directionalLights) {
+                if (dirLightIndex < 0 || (dirLightIndex >= this.level.directionLights.length && dirLightIndex !== 0xF)) {
+                    throw new Error("invalid directional light index");
+                }
+            }
+
             shrubInstancesToDraw.push({
                 objectMatrix,
+                directionalLights: shrubInstance.directionalLights,
                 rgb: shrubInstance.color,
                 lodAlpha,
                 i,
@@ -529,22 +551,30 @@ class RatchetAndClank1Scene implements SceneGfx {
                 (16 * MAX_SHRUB_INSTANCES) +
                 // rgb
                 (4 * MAX_SHRUB_INSTANCES) +
-                // lod alpha
+                // dir lights
+                (4 * MAX_SHRUB_INSTANCES) +
+                // extras
                 (4 * MAX_SHRUB_INSTANCES);
-            const shrubParams = template2.allocateUniformBufferF32(ShrubProgram.ub_ShrubParams, size);
+            const shrubParams = template2.allocateUniformBufferF32(ShrubProgram.ub_ShrubParams, size * 2);
             let shrubParamsOffset = 0;
             for (let j = 0; j < batchSize; j++) {
                 shrubParamsOffset += fillMatrix4x4(shrubParams, shrubParamsOffset, shrubInstancesToDraw[i + j].objectMatrix);
             }
             shrubParamsOffset = 16 * MAX_SHRUB_INSTANCES;
             for (let j = 0; j < batchSize; j++) {
-                const color = shrubInstancesToDraw[i + j].rgb;
+                const inst = shrubInstancesToDraw[i + j];
+                const color = inst.rgb;
                 shrubParamsOffset += fillVec4(shrubParams, shrubParamsOffset, color.r / 0x40, color.g / 0x40, color.b / 0x40, 1);
             }
             shrubParamsOffset = 20 * MAX_SHRUB_INSTANCES;
             for (let j = 0; j < batchSize; j++) {
-                shrubParams[shrubParamsOffset] = shrubInstancesToDraw[i + j].lodAlpha;
-                shrubParamsOffset += 4;
+                const inst = shrubInstancesToDraw[i + j];
+                shrubParamsOffset += fillVec4(shrubParams, shrubParamsOffset, inst.directionalLights[0], inst.directionalLights[1], inst.directionalLights[2], inst.directionalLights[3]);
+            }
+            shrubParamsOffset = 24 * MAX_SHRUB_INSTANCES;
+            for (let j = 0; j < batchSize; j++) {
+                const inst = shrubInstancesToDraw[i + j];
+                shrubParamsOffset += fillVec4(shrubParams, shrubParamsOffset, inst.lodAlpha, 0, 0, 0);
             }
             i += batchSize;
             template2.setInstanceCount(batchSize);
@@ -553,7 +583,7 @@ class RatchetAndClank1Scene implements SceneGfx {
             for (const draw of shrubGeometry.draws) {
                 const renderInst = this.renderHelper.renderInstManager.newRenderInst();
                 renderInst.setSamplerBindings(0, [
-                    { gfxTexture: this.textures.shrubTextures[textureIndices[draw.material]], gfxSampler: this.samplerWrap }
+                    { gfxTexture: this.textures.shrubTextures[textureIndices[draw.material.texture]], gfxSampler: draw.material.clamp ? this.samplerClamp : this.samplerWrap }
                 ]);
                 renderInst.setDrawCount(draw.vertexCount, vertexPtr);
                 this.renderInstList.submitRenderInst(renderInst);
@@ -742,6 +772,12 @@ class RatchetAndClank1Scene implements SceneGfx {
             this.settings.enableFog = enableFog.checked;
         };
         renderSettingsPanel.contents.appendChild(enableFog.elem);
+
+        const enableTextures = new UI.Checkbox('Enable Textures', this.settings.enableTextures);
+        enableTextures.onchanged = () => {
+            this.settings.enableTextures = enableTextures.checked;
+        };
+        renderSettingsPanel.contents.appendChild(enableTextures.elem);
 
         const enableSky = new UI.Checkbox('Enable Sky', this.settings.enableSky);
         enableSky.onchanged = () => {

@@ -8,7 +8,7 @@ import { assert } from "../util";
 import { RatchetShaderLib } from "./shader-lib";
 import { ShrubClass, ShrubPacketCommand, ShrubPacketCommandTypes, ShrubTexturePrimitive, ShrubVertex } from "./structs-core";
 
-export const MAX_SHRUB_INSTANCES = 128;
+export const MAX_SHRUB_INSTANCES = 32;
 
 export class ShrubProgram extends DeviceProgram {
     public static a_Position = 0;
@@ -34,15 +34,19 @@ out float v_LodAlpha;
 ${RatchetShaderLib.LightingFunctions}
 
 void main() {
-    mat4 instanceTransform = UnpackMatrix(u_shrubInstances[gl_InstanceID].transform);
+    mat4 instanceTransform = UnpackMatrix(u_ShrubInstances[gl_InstanceID].transform);
     vec4 t_PositionWorld = instanceTransform * vec4(a_Position.xyz, 1.0f);
     gl_Position = UnpackMatrix(u_ClipFromWorld) * t_PositionWorld;
-    v_TS = a_TS.xy;
     vec3 normal = normalize(inverse(transpose(mat3(instanceTransform))) * a_Normal);
-    // not sure about dividing by 4 here
-    v_Rgb = commonVertexLighting(u_shrubInstancesRgbs[gl_InstanceID].rgb / 4.0, normal, 0);
+
+    // not sure about dividing by 4
+    vec3 rgb = u_ShrubInstancesRgbs[gl_InstanceID].rgb / 4.0;
+    vec4 lights = u_ShrubInstancesDirLights[gl_InstanceID];
+
+    v_TS = a_TS.xy;
+    v_Rgb = commonVertexLighting(rgb, normal, lights, 1.0);
     v_Normal = normal;
-    v_LodAlpha = u_shrubLodAlphas[gl_InstanceID].x;
+    v_LodAlpha = u_ShrubExtraData[gl_InstanceID].x;
 }
 `;
 
@@ -72,9 +76,10 @@ struct ShrubInstance {
 
 layout(std140) uniform ub_ShrubParams {
     // this is laid out wierd because chrome got very laggy when I had the color in the ShrubInstance struct
-    ShrubInstance u_shrubInstances[${MAX_SHRUB_INSTANCES}];
-    vec4 u_shrubInstancesRgbs[${MAX_SHRUB_INSTANCES}];
-    vec4 u_shrubLodAlphas[${MAX_SHRUB_INSTANCES}]; // only x used
+    ShrubInstance u_ShrubInstances[${MAX_SHRUB_INSTANCES}];
+    vec4 u_ShrubInstancesRgbs[${MAX_SHRUB_INSTANCES}];
+    vec4 u_ShrubInstancesDirLights[${MAX_SHRUB_INSTANCES}]; // 4 dir lights per instance
+    vec4 u_ShrubExtraData[${MAX_SHRUB_INSTANCES}]; // x = lodAlpha
 };
 
 layout(location = 0) uniform sampler2D u_Texture;
@@ -89,7 +94,7 @@ export class ShrubGeometry {
     public static elementsPerVertex = 8; // position.xyz, normal.xyz, ts.xy
     public static bytesPerElement = 4;
 
-    public draws: { material: number, vertexCount: number }[] = [];
+    public draws: { material: { texture: number, clamp: number }, vertexCount: number }[] = [];
 
     public inputLayout: GfxInputLayout;
 
@@ -153,7 +158,7 @@ export function assembleShrubClassGeometry(shrub: ShrubClass) {
     const vertexArrayBuffer = new Float32Array(expectedSize);
     let ptr = 0;
 
-    let draws: { material: number, vertexCount: number }[] = [];
+    let draws: { material: { texture: number, clamp: number }, vertexCount: number }[] = [];
 
     for (const { vertices, material } of packets) {
         for (const vertex of vertices) {
@@ -167,7 +172,7 @@ export function assembleShrubClassGeometry(shrub: ShrubClass) {
             vertexArrayBuffer[ptr++] = texcoordScale * vertex.s;
             vertexArrayBuffer[ptr++] = texcoordScale * vertex.t;
         }
-        draws.push({ material: material.tex0.low, vertexCount: vertices.length });
+        draws.push({ material, vertexCount: vertices.length });
     }
 
     // merge adjacent draws with the same material
@@ -188,9 +193,9 @@ export function assembleShrubClassGeometry(shrub: ShrubClass) {
 
 function commandBufferToTriangles(commandBuffer: ShrubPacketCommand[]) {
     let currentPrimativeType: GsPrimitiveType | null = null;
-    let currentMaterial: ShrubTexturePrimitive | null = null;
+    let currentMaterial: { texture: number, clamp: number } | null = null;
 
-    const groups: { material: ShrubTexturePrimitive, strip: ShrubVertex[], triangleList: ShrubVertex[] }[] = [];
+    const groups: { material: { texture: number, clamp: number }, strip: ShrubVertex[], triangleList: ShrubVertex[] }[] = [];
 
     for (const command of commandBuffer) {
         switch (command.type) {
@@ -203,7 +208,10 @@ function commandBufferToTriangles(commandBuffer: ShrubPacketCommand[]) {
                 break;
             }
             case ShrubPacketCommandTypes.SET_MATERIAL: {
-                currentMaterial = command.value.adGif;
+                currentMaterial = {
+                    texture: command.value.adGif.tex0.low,
+                    clamp: command.value.adGif.clamp.low,
+                };
                 break;
             }
             case ShrubPacketCommandTypes.VERTEX: {
