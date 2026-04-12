@@ -20,6 +20,7 @@ import { SkyGeometry, SkyProgram } from "./sky";
 import { RatchetShaderLib } from "./shader-lib";
 import { Frustum } from "../Geometry";
 import { MobyInstance } from "./structs-gameplay";
+import { nArray } from "../util";
 
 const pathBase = `RatchetAndClank1`;
 
@@ -372,7 +373,13 @@ class RatchetAndClank1Scene implements SceneGfx {
             // can't find this data :(
             const rgba = vec4.fromValues(1, 1, 1, 1);
 
-            tieInstancesToDrawByLod[modelLodLevel].push({ objectMatrix, directionLights: tieInstance.directionalLights, rgba, lodMorphFactor, i });
+            tieInstancesToDrawByLod[modelLodLevel].push({
+                objectMatrix,
+                directionLights: tieInstance.directionalLights,
+                rgba,
+                lodMorphFactor,
+                i,
+            });
         }
 
         for (let i = 0; i < tieInstancesToDrawByLod.length; i++) {
@@ -411,7 +418,8 @@ class RatchetAndClank1Scene implements SceneGfx {
             let ptr = 0;
             for (let i = 0; i < batchSizes.length; i++) {
                 const batchSize = batchSizes[i];
-                const template2 = this.renderHelper.pushTemplateRenderInst();
+
+                const renderInst = this.renderHelper.renderInstManager.newRenderInst();
                 const uniformBufferSize =
                     // matrix
                     (16 * MAX_TIE_INSTANCES) +
@@ -421,42 +429,27 @@ class RatchetAndClank1Scene implements SceneGfx {
                     (4 * MAX_TIE_INSTANCES) +
                     // extras
                     (4 * MAX_TIE_INSTANCES);
-                const tieParams = template2.allocateUniformBufferF32(TieProgram.ub_TieParams, uniformBufferSize);
+                const tieParams = renderInst.allocateUniformBufferF32(TieProgram.ub_TieParams, uniformBufferSize);
                 let tieParamsOffset = 0;
                 for (let j = 0; j < batchSize; j++) {
                     const inst = tieInstancesToDraw[ptr + j];
                     tieParamsOffset += fillMatrix4x4(tieParams, tieParamsOffset, inst.objectMatrix);
-                }
-                tieParamsOffset = 16 * MAX_TIE_INSTANCES;
-                for (let j = 0; j < batchSize; j++) {
-                    const inst = tieInstancesToDraw[ptr + j];
                     tieParamsOffset += fillVec4(tieParams, tieParamsOffset, inst.directionLights[0], inst.directionLights[1], inst.directionLights[2], inst.directionLights[3]);
-                }
-                tieParamsOffset = 20 * MAX_TIE_INSTANCES;
-                for (let j = 0; j < batchSize; j++) {
-                    const inst = tieInstancesToDraw[ptr + j];
                     tieParamsOffset += fillVec4v(tieParams, tieParamsOffset, inst.rgba);
-                }
-                tieParamsOffset = 24 * MAX_TIE_INSTANCES;
-                for (let j = 0; j < batchSize; j++) {
-                    const inst = tieInstancesToDraw[ptr + j];
                     tieParamsOffset += fillVec4(tieParams, tieParamsOffset, inst.lodMorphFactor, 0, 0, 0);
                 }
                 ptr += batchSize;
-                template2.setInstanceCount(batchSize);
+                renderInst.setInstanceCount(batchSize);
 
-                let vertexPtr = 0;
-                for (const draw of tieGeometry.draws) {
-                    const renderInst = this.renderHelper.renderInstManager.newRenderInst();
-                    renderInst.setSamplerBindings(0, [
-                        { gfxTexture: this.textures.tieTextures[textureIndices[draw.material]], gfxSampler: this.samplerWrap }
-                    ]);
-                    renderInst.setDrawCount(draw.vertexCount, vertexPtr);
-                    this.renderInstList.submitRenderInst(renderInst);
-                    vertexPtr += draw.vertexCount;
-                }
+                let requiredSamplers = 16;
+                while (requiredSamplers && tieInstanceBatch.textureIndices[requiredSamplers - 1] === 0xFF) requiredSamplers--; // truncate the texture array at the last non-0xFF value
+                renderInst.setSamplerBindings(0, nArray(requiredSamplers, j => ({
+                    gfxTexture: this.textures.tieTextures[textureIndices[j]],
+                    gfxSampler: this.samplerWrap
+                })));
 
-                this.renderHelper.renderInstManager.popTemplate();
+                renderInst.setDrawCount(tieGeometry.triangleCount * 3, 0);
+                this.renderInstList.submitRenderInst(renderInst);
             }
             this.renderHelper.renderInstManager.popTemplate();
         }
@@ -567,37 +560,28 @@ class RatchetAndClank1Scene implements SceneGfx {
             const shrubParams = template2.allocateUniformBufferF32(ShrubProgram.ub_ShrubParams, size * 2);
             let shrubParamsOffset = 0;
             for (let j = 0; j < batchSize; j++) {
-                shrubParamsOffset += fillMatrix4x4(shrubParams, shrubParamsOffset, shrubInstancesToDraw[i + j].objectMatrix);
-            }
-            shrubParamsOffset = 16 * MAX_SHRUB_INSTANCES;
-            for (let j = 0; j < batchSize; j++) {
                 const inst = shrubInstancesToDraw[i + j];
                 const color = inst.rgb;
+                shrubParamsOffset += fillMatrix4x4(shrubParams, shrubParamsOffset, inst.objectMatrix);
                 shrubParamsOffset += fillVec4(shrubParams, shrubParamsOffset, color.r / 0x40, color.g / 0x40, color.b / 0x40, 1);
-            }
-            shrubParamsOffset = 20 * MAX_SHRUB_INSTANCES;
-            for (let j = 0; j < batchSize; j++) {
-                const inst = shrubInstancesToDraw[i + j];
                 shrubParamsOffset += fillVec4(shrubParams, shrubParamsOffset, inst.directionalLights[0], inst.directionalLights[1], inst.directionalLights[2], inst.directionalLights[3]);
-            }
-            shrubParamsOffset = 24 * MAX_SHRUB_INSTANCES;
-            for (let j = 0; j < batchSize; j++) {
-                const inst = shrubInstancesToDraw[i + j];
                 shrubParamsOffset += fillVec4(shrubParams, shrubParamsOffset, inst.lodAlpha, 0, 0, 0);
             }
+
             i += batchSize;
             template2.setInstanceCount(batchSize);
 
-            let vertexPtr = 0;
-            for (const draw of shrubGeometry.draws) {
-                const renderInst = this.renderHelper.renderInstManager.newRenderInst();
-                renderInst.setSamplerBindings(0, [
-                    { gfxTexture: this.textures.shrubTextures[textureIndices[draw.material.texture]], gfxSampler: draw.material.clamp ? this.samplerClamp : this.samplerWrap }
-                ]);
-                renderInst.setDrawCount(draw.vertexCount, vertexPtr);
-                this.renderInstList.submitRenderInst(renderInst);
-                vertexPtr += draw.vertexCount;
-            }
+            const renderInst = this.renderHelper.renderInstManager.newRenderInst();
+
+            let requiredSamplers = 16;
+            while (requiredSamplers && shrubInstanceBatch.textureIndices[requiredSamplers - 1] === 0xFF) requiredSamplers--; // truncate the texture array at the last non-0xFF value
+            renderInst.setSamplerBindings(0, nArray(requiredSamplers, j => ({
+                gfxTexture: this.textures.shrubTextures[textureIndices[j]],
+                gfxSampler: this.samplerWrap
+            })));
+
+            renderInst.setDrawCount(shrubGeometry.vertexCount, 0);
+            this.renderInstList.submitRenderInst(renderInst);
 
             this.renderHelper.renderInstManager.popTemplate();
         }
@@ -668,7 +652,7 @@ class RatchetAndClank1Scene implements SceneGfx {
 
         const template = this.renderHelper.pushTemplateRenderInst();
         template.setBindingLayouts([
-            { numSamplers: 1, numUniformBuffers: 2 },
+            { numSamplers: 16, numUniformBuffers: 2 },
         ]);
 
         this.fillSceneParams(template, viewerInput, cameraPosition);

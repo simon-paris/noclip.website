@@ -4,7 +4,7 @@ import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
 import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice, GfxFormat, GfxInputLayout, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { DeviceProgram } from "../Program";
-import { assert } from "../util";
+import { assert, nArray } from "../util";
 import { RatchetShaderLib } from "./shader-lib";
 import { ShrubClass, ShrubPacketCommand, ShrubPacketCommandTypes, ShrubTexturePrimitive, ShrubVertex } from "./structs-core";
 
@@ -13,8 +13,10 @@ export const MAX_SHRUB_INSTANCES = 32;
 export class ShrubProgram extends DeviceProgram {
     public static a_Position = 0;
     public static a_Normal = 1;
-    public static a_TS = 2;
-    public static a_Rgb = 3;
+    public static a_TextureIndex = 2;
+    public static a_ST = 3;
+
+    public static elementsPerVertex = 9; // position.xyz, normal.xyz, ts.xy, texture index
 
     public static ub_SceneParams = 0;
     public static ub_ShrubParams = 1;
@@ -24,9 +26,11 @@ ${ShrubProgram.Common}
 
 layout(location = ${ShrubProgram.a_Position}) in vec3 a_Position;
 layout(location = ${ShrubProgram.a_Normal}) in vec3 a_Normal;
-layout(location = ${ShrubProgram.a_TS}) in vec2 a_TS;
+layout(location = ${ShrubProgram.a_TextureIndex}) in float a_TextureIndex;
+layout(location = ${ShrubProgram.a_ST}) in vec2 a_ST;
 
-out vec2 v_TS;
+flat out int v_TextureIndex;
+out vec2 v_ST;
 out vec3 v_Rgb;
 out vec3 v_Normal;
 out float v_LodAlpha;
@@ -40,19 +44,21 @@ void main() {
     vec3 normal = normalize(inverse(transpose(mat3(instanceTransform))) * a_Normal);
 
     // not sure about dividing by 4
-    vec3 rgb = u_ShrubInstancesRgbs[gl_InstanceID].rgb / 4.0;
-    vec4 lights = u_ShrubInstancesDirLights[gl_InstanceID];
+    vec3 rgb = u_ShrubInstances[gl_InstanceID].ambientRgba.rgb / 4.0;
+    vec4 lights = u_ShrubInstances[gl_InstanceID].directionLights;
 
-    v_TS = a_TS.xy;
+    v_ST = a_ST.xy;
     v_Rgb = commonVertexLighting(rgb, normal, lights, 1.0);
     v_Normal = normal;
-    v_LodAlpha = u_ShrubExtraData[gl_InstanceID].x;
+    v_LodAlpha = u_ShrubInstances[gl_InstanceID].extraData.x;
+    v_TextureIndex = int(a_TextureIndex);
 }
 `;
 
     public override frag = `
 ${ShrubProgram.Common}
-in vec2 v_TS;
+flat in int v_TextureIndex;
+in vec2 v_ST;
 in vec3 v_Rgb;
 in vec3 v_Normal;
 in float v_LodAlpha;
@@ -60,7 +66,12 @@ in float v_LodAlpha;
 ${RatchetShaderLib.CommonFragmentShader}
 
 void main() {
-    gl_FragColor = commonFragmentShader(vec4(v_Rgb, v_LodAlpha), u_Texture, v_TS);
+    ${nArray(16, i => `
+        if (v_TextureIndex == ${i}) {
+            gl_FragColor = commonFragmentShader(vec4(v_Rgb, v_LodAlpha), u_Texture${i}, v_ST);
+            return;
+        }
+    `).join('\n')}
 }
 
 `;
@@ -71,17 +82,18 @@ ${RatchetShaderLib.SceneParams}
 
 struct ShrubInstance {
     Mat4x4 transform;
+    vec4 ambientRgba;
+    vec4 directionLights; // 4 dir lights per instance
+    vec4 extraData; // x = lodAlpha
 };
 
 layout(std140) uniform ub_ShrubParams {
-    // this is laid out wierd because chrome got very laggy when I had the color in the ShrubInstance struct
     ShrubInstance u_ShrubInstances[${MAX_SHRUB_INSTANCES}];
-    vec4 u_ShrubInstancesRgbs[${MAX_SHRUB_INSTANCES}];
-    vec4 u_ShrubInstancesDirLights[${MAX_SHRUB_INSTANCES}]; // 4 dir lights per instance
-    vec4 u_ShrubExtraData[${MAX_SHRUB_INSTANCES}]; // x = lodAlpha
 };
 
-layout(location = 0) uniform sampler2D u_Texture;
+${nArray(16, i => `
+layout(location = ${i}) uniform sampler2D u_Texture${i};
+`).join('\n')}
 `;
 
 }
@@ -90,11 +102,6 @@ export class ShrubGeometry {
     public vertexBuffer: GfxBuffer;
     public vertexCount: number;
 
-    public static elementsPerVertex = 8; // position.xyz, normal.xyz, ts.xy
-    public static bytesPerElement = 4;
-
-    public draws: { material: { texture: number, clamp: number }, vertexCount: number }[] = [];
-
     public inputLayout: GfxInputLayout;
 
     constructor(cache: GfxRenderCache, shrub: ShrubClass) {
@@ -102,9 +109,7 @@ export class ShrubGeometry {
 
         const assembled = assembleShrubClassGeometry(shrub);
         this.vertexBuffer = createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, assembled.vertexData.buffer);
-        this.vertexCount = assembled.vertexData.length / ShrubGeometry.elementsPerVertex;
-
-        this.draws = assembled.draws;
+        this.vertexCount = assembled.vertexData.length / ShrubProgram.elementsPerVertex;
 
         device.setResourceName(this.vertexBuffer, `Shrub Class ${shrub.header.oClass} (VB)`);
 
@@ -123,15 +128,21 @@ export class ShrubGeometry {
                     bufferIndex: 0,
                 },
                 {
-                    location: ShrubProgram.a_TS,
-                    format: GfxFormat.F32_RG,
+                    location: ShrubProgram.a_TextureIndex,
+                    format: GfxFormat.F32_R,
                     bufferByteOffset: 6 * 4,
+                    bufferIndex: 0,
+                },
+                {
+                    location: ShrubProgram.a_ST,
+                    format: GfxFormat.F32_RG,
+                    bufferByteOffset: 7 * 4,
                     bufferIndex: 0,
                 },
             ],
             vertexBufferDescriptors: [
                 {
-                    byteStride: ShrubGeometry.elementsPerVertex * ShrubGeometry.bytesPerElement,
+                    byteStride: ShrubProgram.elementsPerVertex * 0x4,
                     frequency: GfxVertexBufferFrequency.PerVertex,
                 },
             ],
@@ -157,12 +168,11 @@ export function assembleShrubClassGeometry(shrub: ShrubClass) {
         return a.material.clamp - b.material.clamp;
     });
 
-    const expectedSize = packets.reduce((a, b) => a + b.vertices.length, 0) * ShrubGeometry.elementsPerVertex;
+    const triangleCount = packets.reduce((a, b) => a + b.vertices.length, 0) / 3; // shrubs are triangle lists not strips
+    const expectedSize = triangleCount * 3 * ShrubProgram.elementsPerVertex;
     const vertexArrayBuffer = new Float32Array(expectedSize);
+
     let ptr = 0;
-
-    let draws: { material: { texture: number, clamp: number }, vertexCount: number }[] = [];
-
     for (const { vertices, material } of packets) {
         for (const vertex of vertices) {
             const normal = shrub.body.normals[vertex.n];
@@ -172,26 +182,15 @@ export function assembleShrubClassGeometry(shrub: ShrubClass) {
             vertexArrayBuffer[ptr++] = normalScale * normal.x;
             vertexArrayBuffer[ptr++] = normalScale * normal.y;
             vertexArrayBuffer[ptr++] = normalScale * normal.z;
+            vertexArrayBuffer[ptr++] = material.texture;
             vertexArrayBuffer[ptr++] = texcoordScale * vertex.s;
             vertexArrayBuffer[ptr++] = texcoordScale * vertex.t;
         }
-        draws.push({ material, vertexCount: vertices.length });
     }
-
-    // merge adjacent draws with the same material
-    for (let i = 0; i < draws.length - 1; i++) {
-        const d0 = draws[i]!;
-        const d1 = draws[i + 1]!;
-        if (d0.material.texture === d1.material.texture && d0.material.clamp === d1.material.clamp) {
-            d1.vertexCount += d0.vertexCount;
-            d0.vertexCount = 0;
-        }
-    }
-    draws = draws.filter(draw => draw.vertexCount > 0);
 
     assert(ptr == vertexArrayBuffer.length);
 
-    return { vertexData: vertexArrayBuffer, draws };
+    return { vertexData: vertexArrayBuffer };
 }
 
 function commandBufferToTriangles(commandBuffer: ShrubPacketCommand[]) {
