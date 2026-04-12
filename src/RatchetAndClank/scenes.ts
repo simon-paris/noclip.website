@@ -1,4 +1,4 @@
-import { mat4, quat, vec3 } from "gl-matrix";
+import { mat4, quat, vec3, vec4 } from "gl-matrix";
 import { makeBackbufferDescSimple, standardFullClearRenderPassDescriptor } from "../gfx/helpers/RenderGraphHelpers";
 import { fillMatrix4x4, fillVec3v, fillVec4, fillVec4v } from "../gfx/helpers/UniformBufferHelpers";
 import { GfxBlendFactor, GfxBlendMode, GfxChannelWriteMask, GfxCompareMode, GfxCullMode, GfxDevice, GfxMipFilterMode, GfxProgram, GfxSampler, GfxTexFilterMode, GfxTexture, GfxWrapMode } from "../gfx/platform/GfxPlatform";
@@ -242,9 +242,9 @@ class RatchetAndClank1Scene implements SceneGfx {
         for (let i = 0; i < 16; i++) {
             if (i < directionalLights.length) {
                 const light = directionalLights[i];
-                offs += fillVec4(data, offs, -light.directionA.x, light.directionA.y, light.directionA.z, 0);
+                offs += fillVec4(data, offs, -light.directionA.x, -light.directionA.z, light.directionA.y, 0);
                 offs += fillVec4(data, offs, light.colorA.r, light.colorA.g, light.colorA.b, 1);
-                offs += fillVec4(data, offs, -light.directionB.x, light.directionB.y, light.directionB.z, 0);
+                offs += fillVec4(data, offs, -light.directionB.x, -light.directionB.z, light.directionB.y, 0);
                 offs += fillVec4(data, offs, light.colorB.r, light.colorB.g, light.colorB.b, 1);
             } else {
                 offs += fillVec4(data, offs, 0, 0, 0, 0);
@@ -315,7 +315,7 @@ class RatchetAndClank1Scene implements SceneGfx {
         const scratchVec3_1 = vec3.create();
         const scratchVec3_2 = vec3.create();
 
-        type TieDrawInstance = { objectMatrix: mat4, directionLights: number[], lodMorphFactor: number, i: number };
+        type TieDrawInstance = { objectMatrix: mat4, directionLights: number[], rgba: vec4, lodMorphFactor: number, i: number };
         const tieInstancesToDrawByLod: TieDrawInstance[][] = [[], [], []];
         for (let i = 0; i < tieInstanceBatch.instances.length; i++) {
             const tieInstance = tieInstanceBatch.instances[i];
@@ -363,14 +363,16 @@ class RatchetAndClank1Scene implements SceneGfx {
             //     continue;
             // }
 
-
             for (const dirLight of tieInstance.directionalLights) {
                 if (dirLight < 0 || (dirLight >= this.level.directionLights.length && dirLight !== 0xF)) {
                     throw new Error(`Invalid directional light index ${dirLight}`);
                 }
             }
 
-            tieInstancesToDrawByLod[modelLodLevel].push({ objectMatrix, directionLights: tieInstance.directionalLights, lodMorphFactor, i });
+            // can't find this data :(
+            const rgba = vec4.fromValues(1, 1, 1, 1);
+
+            tieInstancesToDrawByLod[modelLodLevel].push({ objectMatrix, directionLights: tieInstance.directionalLights, rgba, lodMorphFactor, i });
         }
 
         for (let i = 0; i < tieInstancesToDrawByLod.length; i++) {
@@ -415,6 +417,8 @@ class RatchetAndClank1Scene implements SceneGfx {
                     (16 * MAX_TIE_INSTANCES) +
                     // directional light indices
                     (4 * MAX_TIE_INSTANCES) +
+                    // rgba
+                    (4 * MAX_TIE_INSTANCES) +
                     // extras
                     (4 * MAX_TIE_INSTANCES);
                 const tieParams = template2.allocateUniformBufferF32(TieProgram.ub_TieParams, uniformBufferSize);
@@ -429,6 +433,11 @@ class RatchetAndClank1Scene implements SceneGfx {
                     tieParamsOffset += fillVec4(tieParams, tieParamsOffset, inst.directionLights[0], inst.directionLights[1], inst.directionLights[2], inst.directionLights[3]);
                 }
                 tieParamsOffset = 20 * MAX_TIE_INSTANCES;
+                for (let j = 0; j < batchSize; j++) {
+                    const inst = tieInstancesToDraw[ptr + j];
+                    tieParamsOffset += fillVec4v(tieParams, tieParamsOffset, inst.rgba);
+                }
+                tieParamsOffset = 24 * MAX_TIE_INSTANCES;
                 for (let j = 0; j < batchSize; j++) {
                     const inst = tieInstancesToDraw[ptr + j];
                     tieParamsOffset += fillVec4(tieParams, tieParamsOffset, inst.lodMorphFactor, 0, 0, 0);

@@ -4,7 +4,6 @@ import { assert } from "../util";
 import { readGsRamTableEntry, readLevelCoreHeader, readShrubClass, readShrubClassEntry, readSky, readSkyHeader, readSkyShell, readSkyShellHeader, readSkyTextureEntry, readTextureEntry, readTfrag, readTfragBlockHeader, readTfragHeader, readTieClass, readTieOrMobyClassEntryArray, ShrubClass, SIZEOF_GS_RAM_TABLE_ENTRY, SIZEOF_SHRUB_CLASS_ENTRY, SIZEOF_SKY_TEXTURE_ENTRY, SIZEOF_TEXTURE_ENTRY, SIZEOF_TFRAG_HEADER, SkyHeader, SkyTexture, TextureEntry, TieClass } from "./structs-core";
 import { makeInstanceOClassMap } from "./utils";
 import ArrayBufferSlice from "../ArrayBufferSlice";
-import { ReadonlyVec3, vec3 } from "gl-matrix";
 import { Color } from "../Color";
 
 export type LevelFiles = {
@@ -32,15 +31,7 @@ export type ShrubInstanceBatch = {
     instances: ShrubInstance[],
 }
 
-type Locator = {
-    position: ReadonlyVec3,
-    color: Color,
-}
-
 export function buildLevelFromFiles(files: LevelFiles) {
-    const locators: Locator[] = [];
-    const lines = new Array<{ from: vec3, to: vec3, color: Color }>();
-
     // read gameplay data
     const gameplayHeader = readGameplayHeader(files.gameplay);
     console.log(gameplayHeader);

@@ -61,7 +61,6 @@ ${RatchetShaderLib.CommonFragmentShader}
 
 void main() {
     gl_FragColor = commonFragmentShader(vec4(v_Rgb, v_LodAlpha), u_Texture, v_TS);
-    // gl_FragColor = vec4(v_Normal, 1.0);
 }
 
 `;
@@ -151,8 +150,12 @@ export function assembleShrubClassGeometry(shrub: ShrubClass) {
     const normalScale = 1 / 0x7fff;
     const texcoordScale = 1 / 4096;
 
-    // TODO: sort by material id
+    // clean up command lists and sort by material
     const packets = shrub.body.packets.map(commandBufferToTriangles).flat(1);
+    packets.sort((a, b) => {
+        if (a.material.texture !== b.material.texture) return a.material.texture - b.material.texture;
+        return a.material.clamp - b.material.clamp;
+    });
 
     const expectedSize = packets.reduce((a, b) => a + b.vertices.length, 0) * ShrubGeometry.elementsPerVertex;
     const vertexArrayBuffer = new Float32Array(expectedSize);
@@ -179,7 +182,7 @@ export function assembleShrubClassGeometry(shrub: ShrubClass) {
     for (let i = 0; i < draws.length - 1; i++) {
         const d0 = draws[i]!;
         const d1 = draws[i + 1]!;
-        if (d0.material === d1.material) {
+        if (d0.material.texture === d1.material.texture && d0.material.clamp === d1.material.clamp) {
             d1.vertexCount += d0.vertexCount;
             d0.vertexCount = 0;
         }

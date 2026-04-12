@@ -7,7 +7,6 @@ export const RatchetShaderLib = {
         4, // sky color
         4 + 4, // fog params
         (4 + 4 + 4 + 4) * 16, // directional lights
-        4, // debugSelectedDirLight
     ].reduce((a, b) => a + b, 0),
     SceneParams: `
 
@@ -23,11 +22,11 @@ struct DirectionLight {
     vec3 directionA;
     float pad1;
     vec3 colorA;
-    float pad2;
+    float unknown1;
     vec3 directionB;
-    float pad3;
+    float pad2;
     vec3 colorB;
-    float pad4;
+    float unknown2;
 };
 
 layout(std140) uniform ub_SceneParams {
@@ -40,16 +39,13 @@ layout(std140) uniform ub_SceneParams {
     vec4 u_SkyColor;
     FogParams u_FogParams;
     DirectionLight u_DirectionLights[16];
-    vec4 u_DebugSelectedDirLight; // x = index
 };
 
     `,
     LightingFunctions: `
 
-float AMBIENT_LIGHT = 0.6;
-float ENVIRONMENT_LIGHT = 0.7;
-float DIRECTIONAL_LIGHT_A = 0.9;
-float DIRECTIONAL_LIGHT_B = 0.9;
+float ENVIRONMENT_LIGHT = 1.8;
+float DIRECTIONAL_LIGHT = 1.4;
 
 vec3 applyDirectionalLight(vec3 normal, int dirLightIndex) {
     DirectionLight dirlight = u_DirectionLights[dirLightIndex];
@@ -57,35 +53,35 @@ vec3 applyDirectionalLight(vec3 normal, int dirLightIndex) {
 
     vec3 light = vec3(0.0);
     float nDotL_A = dot(normal, dirlight.directionA);
-    light += DIRECTIONAL_LIGHT_A * nDotL_A * dirlight.colorA;
+    if (nDotL_A > 0.0) light += DIRECTIONAL_LIGHT * nDotL_A * dirlight.colorA;
     float nDotL_B = dot(normal, dirlight.directionB);
-    light += DIRECTIONAL_LIGHT_B * nDotL_B * dirlight.colorB;
+    if (nDotL_B > 0.0) light += DIRECTIONAL_LIGHT * nDotL_B * dirlight.colorB;
     return light;
 }
 
-vec3 commonVertexLighting(vec3 rgb, vec3 normal, vec4 dirLightIndices, float ambientMultiplier) {
+vec3 commonVertexLighting(vec3 rgb, vec3 normal, vec4 dirLightIndices, float environmentalLightMultiplier) {
     vec3 light = vec3(0.0);
 
     // directional
-    int lightsApplied = 0;
+    int lightCount = 0;
     for(int i = 0; i < 4; i++) {
         int dirLightIndex = int(dirLightIndices[i]);
-        if (dirLightIndex == 15) continue;
+        if (dirLightIndex == 15) break;
         if (i > 0 && int(dirLightIndex) == 0) break;
-        light += applyDirectionalLight(normal, dirLightIndex);
-        lightsApplied++;
+        lightCount++;
+    }
+    for(int i = 0; i < 4; i++) {
+        int dirLightIndex = int(dirLightIndices[i]);
+        if (dirLightIndex == 15) break;
+        if (i > 0 && int(dirLightIndex) == 0) break;
+        light += applyDirectionalLight(normalize(normal), dirLightIndex);
     }
 
-    ambientMultiplier *= 1.0 + float(4 - lightsApplied) * 0.1;
+    // make total directional light constant
+    light *= float(4 - lightCount) * (DIRECTIONAL_LIGHT / 4.0);
     
-    float environmentLightAmount = ENVIRONMENT_LIGHT * ambientMultiplier;
-    float ambientLightAmount = AMBIENT_LIGHT * ambientMultiplier;
-    vec3 ambientLightColor = vec3(1.0); // on some levels this could be the background color, but not all
-
-    // ambient
-    light += ambientLightAmount * ambientLightColor;
-
     // environmental
+    float environmentLightAmount = ENVIRONMENT_LIGHT * environmentalLightMultiplier;
     light += environmentLightAmount * rgb;
 
     return light;
@@ -94,7 +90,7 @@ vec3 commonVertexLighting(vec3 rgb, vec3 normal, vec4 dirLightIndices, float amb
     `,
     CommonFragmentShader: `
 
-const float SATURATION_ADJUST = 1.1;
+const float SATURATION_ADJUST = 1.15;
 
 float linearizeDepth(float depth, float near, float far) {
     float z = depth * 2.0 - 1.0;
