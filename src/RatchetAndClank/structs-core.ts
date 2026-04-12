@@ -305,7 +305,7 @@ export function readTieClass(view: DataViewExt, oClass: number) {
     const adGifs = view.subdivide(adGifsOffset, textureCount, SIZEOF_TIE_AD_GIFS).map(readTieAdGifs);
 
     const normalsOffset = view.getUint32(0xc);
-    const normalsData = view.subdivide(normalsOffset, 128, 8).map(view => view.getInt16_Xyzw(0));
+    const normalsData = view.subdivide(normalsOffset, 64, 8).map(view => view.getInt16_Xyzw(0));
 
     return {
         normalsOffset,
@@ -979,13 +979,13 @@ export function readTfragLight(view: DataViewExt) {
             s16 pad;
         )
     */
+
     return {
-        unknown0: view.getInt8(0x0),
-        intensity: view.getInt8(0x1), // this is not intensity, it might be a packet number
+        unknown0: view.getUint16(0x0), // looks like a write address. Between 300 and 1400, always increases, usually by 6 at a time, always divisible by 2.
         azimuth: view.getInt8(0x2),
         elevation: view.getInt8(0x3),
-        color: view.getUint16(0x4), // this is a brightness value
-        directionalLights: view.getNibbleArray(0x6, 2),
+        brightness: view.getUint16(0x4), // this looks like light intensity but I don't know why I'd need it
+        directionalLights: view.getNibbleArray(0x6, 2), // this is list of indices into the directional light array
     }
 }
 
@@ -1047,16 +1047,6 @@ export function readTfrag(view: DataViewExt, header: TfragHeader) {
     if (commonVuHeader.data.positionsCommonCount !== commonPositions.data.length) {
         throw new Error(`Positions count doesn't match header`);
     }
-    for (const index of lod2Indices.data) {
-        if (lod2Indices.data[index] >= commonVertexInfo.data.length) {
-            throw new Error(`LOD 2 index ${lod2Indices.data[index]} is out of bounds for info array of length ${commonPositions.data.length}`);
-        } else {
-            const vertexInfo = commonVertexInfo.data[lod2Indices.data[index]];
-            if (vertexInfo.vertex / 2 > commonPositions.data.length) {
-                throw new Error(`VertexInfo vertex ${vertexInfo.vertex} is out of bounds for positions array of length ${commonPositions.data.length}`);
-            }
-        }
-    }
 
     /*
     Lod1
@@ -1092,12 +1082,12 @@ export function readTfrag(view: DataViewExt, header: TfragHeader) {
     {
         let i = 0;
         if (i < lod01CommandListUnpacks.length && lod01CommandListUnpacks[i].unpack!.vnvl === VifVnVl.V4_8 && commonVuHeader.data.positionsLod01Count > 0) {
-            // TODO: load lod 01 parent indices
+            // don't care
             i++;
         }
 
         if (i < lod01CommandListUnpacks.length && lod01CommandListUnpacks[i].unpack!.vnvl === VifVnVl.V4_8 && lod01CommandListUnpacks[i].unpack!.addr) {
-            // TODO: load lod 01 unknown indices 2
+            // don't care
             i++;
         }
 
@@ -1170,13 +1160,12 @@ export function readTfrag(view: DataViewExt, header: TfragHeader) {
         i++;
 
         if (i < lod0CommandListUnpacks.length && lod0CommandListUnpacks[i].unpack!.vnvl === VifVnVl.V4_8 && commonVuHeader.data.positionsLod0Count > 0) {
-            // TODO: load parent indices
+            // don't care
             i++;
         }
 
         if (i < lod0CommandListUnpacks.length && lod0CommandListUnpacks[i].unpack!.vnvl === VifVnVl.V4_8) {
-            // TODO: load unknown indices 2 if required
-            // TODO: are these direction light indices? that'd be helpful
+            // don't care
             i++;
         }
 

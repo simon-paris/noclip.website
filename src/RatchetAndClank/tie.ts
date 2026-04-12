@@ -13,10 +13,9 @@ export class TieProgram extends DeviceProgram {
     public static a_Position = 0;
     public static a_STQ = 1;
     public static a_Normal = 2;
-    public static a_Rgba = 3;
-    public static a_LodMorphOffset = 4;
+    public static a_LodMorphOffset = 3;
 
-    public static elementsPerVertex = 16; // xyz, stq, normal, rgba, lowerLodOffset
+    public static elementsPerVertex = 12; // xyz, stq, normal, lowerLodOffset
 
     public static ub_SceneParams = 0;
     public static ub_TieParams = 1;
@@ -27,7 +26,6 @@ ${TieProgram.Common}
 layout(location = ${TieProgram.a_Position}) in vec3 a_Position;
 layout(location = ${TieProgram.a_STQ}) in vec3 a_STQ;
 layout(location = ${TieProgram.a_Normal}) in vec3 a_Normal;
-layout(location = ${TieProgram.a_Rgba}) in vec4 a_Rgba;
 layout(location = ${TieProgram.a_LodMorphOffset}) in vec3 a_LodMorphOffset;
 
 out vec2 v_UV;
@@ -45,11 +43,11 @@ void main() {
     gl_Position = UnpackMatrix(u_ClipFromWorld) * t_PositionWorld;
     v_UV = vec2(a_STQ.x, a_STQ.y) / a_STQ.z;
     
-    vec3 rgb = a_Rgba.rgb / 4.0;
+    vec3 rgb = u_TieRgbas[gl_InstanceID].rgb / 4.0;
     vec4 lights = u_TieDirectionLights[gl_InstanceID];
     
     v_Normal = normalize(inverse(transpose(mat3(instanceTransform))) * a_Normal);
-    v_Rgba = vec4(commonVertexLighting(rgb, v_Normal, lights, 1.0), a_Rgba.a);
+    v_Rgba = vec4(commonVertexLighting(rgb, v_Normal, lights, 1.0), 1.0);
 }
 
 `;
@@ -64,7 +62,6 @@ in vec3 v_Normal;
 
 void main() {
     gl_FragColor = commonFragmentShader(v_Rgba, u_Texture, v_UV);
-    // gl_FragColor = vec4(v_Normal, 1.0);
 }
 
 `;
@@ -80,6 +77,7 @@ struct TieInstance {
 layout(std140) uniform ub_TieParams {
     TieInstance u_TieInstances[${MAX_TIE_INSTANCES}];
     vec4 u_TieDirectionLights[${MAX_TIE_INSTANCES}]; // 4 direction light indices
+    vec4 u_TieRgbas[${MAX_TIE_INSTANCES}]; // rgba ambient light
     vec4 u_TieExtraData[${MAX_TIE_INSTANCES}]; // x = lod morph factor
 };
 
@@ -125,15 +123,9 @@ export class TieGeometry {
                     bufferIndex: 0,
                 },
                 {
-                    location: TieProgram.a_Rgba,
-                    format: GfxFormat.F32_RGBA,
-                    bufferByteOffset: 9 * 4,
-                    bufferIndex: 0,
-                },
-                {
                     location: TieProgram.a_LodMorphOffset,
                     format: GfxFormat.F32_RGB,
-                    bufferByteOffset: 13 * 4,
+                    bufferByteOffset: 9 * 4,
                     bufferIndex: 0,
                 },
             ],
@@ -209,12 +201,6 @@ export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: 
             vertexArrayBuffer[ptr++] = normalScale * normal.x;
             vertexArrayBuffer[ptr++] = normalScale * normal.y;
             vertexArrayBuffer[ptr++] = normalScale * normal.z;
-
-            // TODO: vertex colors come from instances not classes, also I don't know how to read them
-            vertexArrayBuffer[ptr++] = 1;
-            vertexArrayBuffer[ptr++] = 1;
-            vertexArrayBuffer[ptr++] = 1;
-            vertexArrayBuffer[ptr++] = 1;
 
             vertexArrayBuffer[ptr++] = positionScale * vert.lodMorphOffsetX;
             vertexArrayBuffer[ptr++] = positionScale * vert.lodMorphOffsetY;
