@@ -111,21 +111,18 @@ vec3 adjustSaturation(vec3 color, float adjustment) {
     return mix(grayscale, color, adjustment);
 }
 
-vec4 commonFragmentShader(vec4 rgba, sampler2D sampler, vec2 uv) {
-    vec4 tex;
-    if (u_EnableTextures != 0.0) {
-        tex = texture(SAMPLER_2D(sampler), uv);
-    } else {
-        tex = vec4(0.5, 0.5, 0.5, 1.0);
+vec4 commonFragmentShader(vec4 rgba, vec4 textureSample) {
+    if (u_EnableTextures == 0.0) {
+        textureSample = vec4(0.5, 0.5, 0.5, 1.0);
     }
-    vec3 texColor = vec3(tex.r, tex.g, tex.b);
-    if (tex.a < 0.01) { discard; }
+    vec3 textureColor = vec3(textureSample.r, textureSample.g, textureSample.b);
+    if (textureSample.a < 0.01) { discard; }
 
     float fogFactor = fogFactor();
     vec3 fogColor = u_FogParams.color.rgb;
 
     // initial color
-    vec3 color1 = texColor * rgba.rgb;
+    vec3 color1 = textureColor * rgba.rgb;
 
     // with fog
     vec3 color2 = mix(color1, fogColor, fogFactor);
@@ -133,7 +130,7 @@ vec4 commonFragmentShader(vec4 rgba, sampler2D sampler, vec2 uv) {
     // with saturation filter (not authentic but looks more accurate, not sure why)
     vec3 color3 = adjustSaturation(color2, SATURATION_ADJUST);
 
-    return vec4(color3, tex.a * rgba.a);
+    return vec4(color3, textureSample.a * rgba.a);
 }
 
     `,

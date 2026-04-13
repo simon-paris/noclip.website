@@ -66,12 +66,18 @@ in float v_LodAlpha;
 ${RatchetShaderLib.CommonFragmentShader}
 
 void main() {
+    // gross but fast
     ${nArray(16, i => `
-        if (v_TextureIndex == ${i}) {
-            gl_FragColor = commonFragmentShader(vec4(v_Rgb, v_LodAlpha), u_Texture${i}, v_ST);
-            return;
+            vec4 textureSample${i} = texture(SAMPLER_2D(u_Texture${i}), v_ST);
+    `).join('\n')
         }
-    `).join('\n')}
+    ${nArray(16, i => `
+            if (v_TextureIndex == ${i}) {
+                gl_FragColor = commonFragmentShader(vec4(v_Rgb, v_LodAlpha), textureSample${i});
+                return;
+            }
+    `).join('\n')
+        }
 }
 
 `;

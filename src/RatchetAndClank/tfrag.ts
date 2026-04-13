@@ -7,14 +7,14 @@ import { RatchetShaderLib } from "./shader-lib";
 import { Tfrag, TfragAdGifs, TfragLight, TfragStrip, TfragVertexInfo } from "./structs-core";
 
 export class TfragProgram extends DeviceProgram {
-    // position(3) + normal(3) + rgba(4) + texcoord(2) + debug(4) = 16
-    public static elementsPerVertex = 16;
-
+    // position(3) + normal(3) + rgba(4) + texture(1) + st(2) + debug(4) = 17
+    public static elementsPerVertex = 17;
     public static a_Position = 0;
     public static a_Normal = 1;
     public static a_Rgba = 2;
-    public static a_TS = 3;
-    public static a_DirLightIndices = 4;
+    public static a_TextureLayer = 3;
+    public static a_ST = 4;
+    public static a_DirLightIndices = 5;
 
     // Define the slot index for our uniform parameters. noclip's framework just assigns sequential indices to
     // uniform blocks seen in the shader, in-order, starting with 0.
@@ -27,12 +27,14 @@ ${TfragProgram.Common}
 layout(location = ${TfragProgram.a_Position}) in vec3 a_Position;
 layout(location = ${TfragProgram.a_Normal}) in vec3 a_Normal;
 layout(location = ${TfragProgram.a_Rgba}) in vec4 a_Rgba;
-layout(location = ${TfragProgram.a_TS}) in vec2 a_TS;
+layout(location = ${TfragProgram.a_TextureLayer}) in float a_TextureLayer;
+layout(location = ${TfragProgram.a_ST}) in vec2 a_ST;
 layout(location = ${TfragProgram.a_DirLightIndices}) in vec4 a_DirLightIndices;
 
 out vec3 v_Normal;
 out vec4 v_Rgba;
-out vec2 v_TS;
+out vec2 v_ST;
+flat out float v_TextureLayer;
 
 ${RatchetShaderLib.LightingFunctions}
 
@@ -46,8 +48,9 @@ void main() {
 
     v_Rgba = vec4(commonVertexLighting(a_Rgba.rgb, normal, lights, 1.0), a_Rgba.a);
 
-    v_TS = a_TS.xy;
+    v_ST = a_ST.xy;
     v_Normal = normal;
+    v_TextureLayer = a_TextureLayer;
 }
 `;
 
@@ -57,15 +60,18 @@ ${RatchetShaderLib.CommonFragmentShader}
 
 in vec3 v_Normal;
 in vec4 v_Rgba;
-in vec2 v_TS;
-in vec4 v_Debug;
+in vec2 v_ST;
+flat in float v_TextureLayer;
 
 void main() {
-    gl_FragColor = commonFragmentShader(v_Rgba, u_Texture, v_TS);
+    gl_FragColor = commonFragmentShader(v_Rgba, texture(SAMPLER_2DArray(u_Texture), vec3(v_ST, v_TextureLayer)));
 }
 `;
 
     public static Common = `
+precision highp float;
+precision highp sampler2DArray;
+
 ${GfxShaderLibrary.MatrixLibrary}
 ${RatchetShaderLib.SceneParams}
 
@@ -73,20 +79,17 @@ layout(std140) uniform ub_TfragParams {
     Mat4x4 u_WorldFromLocal;
 };
 
-layout(location = 0) uniform sampler2D u_Texture;
+layout(location = 0) uniform sampler2DArray u_Texture;
 
 `;
 
 }
 
 export class TfragGeometry {
-    public vertexBuffer: GfxBuffer;
-
-    // array of 3 index buffers, one per lod
+    // array of 3 vertex buffers, one per lod
     public lods: {
-        indexBuffer: GfxBuffer,
-        draws: { material: number, startIndex: number, indexCount: number }[],
-        totalIndexCount: number,
+        vertexBuffer: GfxBuffer,
+        vertexCount: number,
     }[];
 
     public assembled: ReturnType<typeof assembleTfragGeometry>;
@@ -98,14 +101,15 @@ export class TfragGeometry {
 
         const assembled = assembleTfragGeometry(tfrag);
         this.assembled = assembled;
-        this.vertexBuffer = createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, assembled.verts.buffer);
-        device.setResourceName(this.vertexBuffer, `Tfrag (VB)`);
 
-        this.lods = assembled.indices.map(({ indices, draws }, i) => {
-            const indexBuffer = createBufferFromData(device, GfxBufferUsage.Index, GfxBufferFrequencyHint.Static, indices.buffer);
-            device.setResourceName(indexBuffer, `Tfrag LOD ${i} (IB)`);
-            const totalIndexCount = indices.length;
-            return { indexBuffer, draws, totalIndexCount };
+        this.lods = assembled.vertexArrayBuffers.map((lod, i) => {
+            const vertexBuffer = createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, lod.buffer.buffer);
+            device.setResourceName(vertexBuffer, `Tfrag LOD ${i} (VB)`);
+
+            return {
+                vertexBuffer,
+                vertexCount: lod.vertexCount,
+            };
         });
 
         this.inputLayout = cache.createInputLayout({
@@ -129,15 +133,21 @@ export class TfragGeometry {
                     bufferIndex: 0,
                 },
                 {
-                    location: TfragProgram.a_TS,
-                    format: GfxFormat.F32_RG,
+                    location: TfragProgram.a_TextureLayer,
+                    format: GfxFormat.F32_R,
                     bufferByteOffset: 10 * 0x4,
+                    bufferIndex: 0,
+                },
+                {
+                    location: TfragProgram.a_ST,
+                    format: GfxFormat.F32_RG,
+                    bufferByteOffset: 11 * 0x4,
                     bufferIndex: 0,
                 },
                 {
                     location: TfragProgram.a_DirLightIndices,
                     format: GfxFormat.F32_RGBA,
-                    bufferByteOffset: 12 * 0x4,
+                    bufferByteOffset: 13 * 0x4,
                     bufferIndex: 0,
                 },
             ],
@@ -149,17 +159,21 @@ export class TfragGeometry {
                 },
             ],
 
-            indexBufferFormat: GfxFormat.U32_R,
+            indexBufferFormat: null,
         });
     }
 
     public destroy(device: GfxDevice): void {
-        device.destroyBuffer(this.vertexBuffer);
         for (const lod of this.lods) {
-            device.destroyBuffer(lod.indexBuffer);
+            device.destroyBuffer(lod.vertexBuffer);
         }
     }
 }
+
+type TfragIndexWithTexture = {
+    index: number,
+    textureLayer: number,
+};
 
 type TfragVertex = {
     x: number,
@@ -180,20 +194,48 @@ type TfragVertex = {
     light3: number,
 }
 
+type TfragVertexWithTexture = TfragVertex & {
+    textureLayer: number,
+}
+
 export function assembleTfragGeometry(tfrag: Tfrag[]) {
     const assembledTfragsFragments = tfrag.map((t, i) => assembleTfragFragment(i, t));
 
     const mergedVerts = mergeTfragVerts(assembledTfragsFragments);
-    const mergedIndicesAndDraws = [
+    const mergedIndicesWithTextures = [
         mergeGroupsIntoIndexBuffer(assembledTfragsFragments.map(f => f.indices[0]), mergedVerts.tfragVertexBaseIndices),
         mergeGroupsIntoIndexBuffer(assembledTfragsFragments.map(f => f.indices[1]), mergedVerts.tfragVertexBaseIndices),
         mergeGroupsIntoIndexBuffer(assembledTfragsFragments.map(f => f.indices[2]), mergedVerts.tfragVertexBaseIndices),
     ];
 
+    const vertsWithTextures = mergedIndicesWithTextures.map((lod) => {
+        return removeIndicesAndAddTextures(mergedVerts.verts, lod);
+    });
+
+    const vertexArrayBuffers = vertsWithTextures.map((verts) => {
+        return {
+            buffer: encodeVerts(verts),
+            vertexCount: verts.length,
+        };
+    });
+
     return {
-        verts: mergedVerts.verts,
-        indices: mergedIndicesAndDraws,
+        debug: assembledTfragsFragments,
+        vertexArrayBuffers,
     };
+}
+
+function removeIndicesAndAddTextures(verts: TfragVertex[], indices: TfragIndexWithTexture[]) {
+    const newVerts: TfragVertexWithTexture[] = [];
+    for (let i = 0; i < indices.length; i++) {
+        const idxAndTexture = indices[i];
+        const vert = verts[idxAndTexture.index];
+        newVerts.push({
+            ...vert,
+            textureLayer: idxAndTexture.textureLayer,
+        });
+    }
+    return newVerts;
 }
 
 function mergeTfragVerts(tfrags: ReturnType<typeof assembleTfragFragment>[]) {
@@ -208,15 +250,13 @@ function mergeTfragVerts(tfrags: ReturnType<typeof assembleTfragFragment>[]) {
     }
 
     return {
-        unencodedVerts: combinedVertexArrayBuffer,
-        verts: encodeVerts(combinedVertexArrayBuffer),
+        verts: combinedVertexArrayBuffer,
         tfragVertexBaseIndices,
     };
 }
 
-function mergeGroupsIntoIndexBuffer(fragmentGroups: TfragTriangleGroup[][], tfragVertexBaseIndices: number[]) {
-    const mergedIndices: number[] = [];
-    let draws: { material: number, startIndex: number, indexCount: number }[] = [];
+function mergeGroupsIntoIndexBuffer(fragmentGroups: TfragTriangleGroup[][], tfragVertexBaseIndices: number[]): TfragIndexWithTexture[] {
+    const mergedIndices: TfragIndexWithTexture[] = [];
 
     // add base index to each fragment
     for (let tfragIndex = 0; tfragIndex < fragmentGroups.length; tfragIndex++) {
@@ -228,37 +268,14 @@ function mergeGroupsIntoIndexBuffer(fragmentGroups: TfragTriangleGroup[][], tfra
         }
     }
 
-    // sort
-    const sorted = fragmentGroups.flat(1).sort((a, b) => a.material - b.material);
-
     // assemble into draw list
-    for (const group of sorted) {
-        draws.push({
-            material: group.material,
-            startIndex: mergedIndices.length,
-            indexCount: group.indices.length,
-        });
+    for (const group of fragmentGroups.flat(1)) {
         for (let i = 0; i < group.indices.length; i++) {
-            mergedIndices.push(group.indices[i]);
+            mergedIndices.push({ index: group.indices[i], textureLayer: group.material });
         }
     }
 
-    // merge adjacent draws with the same material
-    for (let i = 0; i < draws.length - 1; i++) {
-        const d0 = draws[i]!;
-        const d1 = draws[i + 1]!;
-        if (d0.material === d1.material) {
-            d1.indexCount += d0.indexCount;
-            d1.startIndex = d0.startIndex;
-            d0.indexCount = 0;
-        }
-    }
-    draws = draws.filter(draw => draw.indexCount > 0);
-
-    return {
-        indices: new Uint32Array(mergedIndices),
-        draws
-    };
+    return mergedIndices;
 }
 
 export function assembleTfragFragment(tfragId: number, tfrag: Tfrag) {
@@ -373,33 +390,53 @@ type TfragTriangleGroup = {
 function stripsIntoTriangles(tfragId: number, strips: TfragStrip[], indices: Uint8Array, adGifs: TfragAdGifs[]): TfragTriangleGroup[] {
     const groups: TfragTriangleGroup[] = [];
 
+    let stripPtr = 0;
+    let vertexPtr = 0;
     let activeMaterial = -1;
-    let stripStart = 0;
-    for (const strip of strips) {
+
+    outer: while (true) {
+        const strip = strips[stripPtr];
+        if (!strip) {
+            throw new Error("Ran out of strips");
+        }
+
+        switch (strip.endOfPacketFlag) {
+            case 0: break; // normal strip
+            case -1: break outer; // end
+            case -128: break; // end of packet but not end of this tfrag
+            default: throw new Error(`Unknown strip flag ${strip.endOfPacketFlag}`);
+        }
+
         let newIndices: number[] = [];
         let vertexCount = strip.vertexCountAndFlag;
         if (vertexCount <= 0) {
-            if (vertexCount === 0) {
-                break;
+            if (strip.adGifOffset === -1) {
+                // do nothing
             } else if (strip.adGifOffset >= 0) {
                 const localAdGifIndex = strip.adGifOffset / 0x5;
                 activeMaterial = adGifs[localAdGifIndex] ? adGifs[localAdGifIndex].tex0.low : -1;
+            } else {
+                throw new Error(`invalid adGifOffset`);
             }
             vertexCount += 128;
         }
         for (let i = 0; i < vertexCount - 2; i++) {
-            newIndices.push(indices[stripStart + i + 0]);
-            newIndices.push(indices[stripStart + i + 1]);
-            newIndices.push(indices[stripStart + i + 2]);
+            newIndices.push(indices[vertexPtr + 0]);
+            newIndices.push(indices[vertexPtr + 1]);
+            newIndices.push(indices[vertexPtr + 2]);
+            vertexPtr++;
         }
-        stripStart += vertexCount;
+        vertexPtr += 2;
+
         groups.push({ indices: newIndices, baseIndex: 0, material: activeMaterial });
+
+        stripPtr++;
     }
 
     return groups;
 }
 
-function encodeVerts(verts: TfragVertex[]) {
+function encodeVerts(verts: TfragVertexWithTexture[]) {
     const vertexArrayBuffer = new Float32Array(verts.length * TfragProgram.elementsPerVertex);
     let ptr = 0;
     for (const vert of verts) {
@@ -413,6 +450,7 @@ function encodeVerts(verts: TfragVertex[]) {
         vertexArrayBuffer[ptr++] = vert.g;
         vertexArrayBuffer[ptr++] = vert.b;
         vertexArrayBuffer[ptr++] = vert.a;
+        vertexArrayBuffer[ptr++] = vert.textureLayer;
         vertexArrayBuffer[ptr++] = vert.s;
         vertexArrayBuffer[ptr++] = vert.t;
         vertexArrayBuffer[ptr++] = vert.light0;

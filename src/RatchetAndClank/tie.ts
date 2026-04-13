@@ -66,15 +66,19 @@ in vec3 v_Normal;
 flat in int v_TextureIndex;
 
 void main() {
+    // gross but fast
+    ${nArray(16, i => `
+            vec4 textureSample${i} = texture(SAMPLER_2D(u_Texture${i}), v_UV);
+    `).join('\n')
+        }
     ${nArray(16, i => `
             if (v_TextureIndex == ${i}) {
-                gl_FragColor = commonFragmentShader(v_Rgba, u_Texture${i}, v_UV);
+                gl_FragColor = commonFragmentShader(v_Rgba, textureSample${i});
                 return;
             }
-        `).join('\n')
+    `).join('\n')
         }
 }
-
 `;
 
     public static Common = `

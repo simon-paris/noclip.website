@@ -1179,6 +1179,10 @@ export function readTfrag(view: DataViewExt, header: TfragHeader) {
 
     }
 
+    validateTfrag(lod2Indices.data, lod2Strips.data, commonVertexInfo.data, commonPositions.data);
+    validateTfrag(lod1Indices.data, lod1Strips.data, [...commonVertexInfo.data, ...(lod01VertexInfo?.data ?? [])], [...commonPositions.data, ...(lod01Positions?.data ?? [])]);
+    validateTfrag(lod0Indices.data, lod0Strips.data, [...commonVertexInfo.data, ...(lod01VertexInfo?.data ?? []), ...(lod0VertexInfo?.data ?? [])], [...commonPositions.data, ...(lod01Positions?.data ?? []), ...(lod0Positions?.data ?? [])]);
+
     return {
         lights,
         rgbas,
@@ -1198,6 +1202,67 @@ export function readTfrag(view: DataViewExt, header: TfragHeader) {
         lod0Indices,
         lod0VertexInfo,
     };
+}
+
+function validateTfrag(indices: Uint8Array, strips: TfragStrip[], vertexInfo: TfragVertexInfo[], positions: { x: number, y: number, z: number }[]) {
+    let stripPtr = 0;
+    let vertexPtr = 0;
+
+    outer: while (true) {
+        const strip = strips[stripPtr];
+        if (!strip) {
+            throw new Error(`Overran strip list`);
+        }
+        switch (strip.endOfPacketFlag) {
+            case -128:
+                // last strip of packet
+                break;
+            case -1:
+                // end
+                break outer;
+            case 0:
+                // normal strip
+                break;
+            default:
+                throw new Error(`Invalid strip flags`);
+        }
+        let vertexCount = strip.vertexCountAndFlag; // flag means change material
+        if (vertexCount <= 0) {
+            if (strip.adGifOffset >= 0) {
+                // this would update the material
+            }
+            vertexCount += 128;
+        }
+
+        if (vertexCount) {
+            for (let i = 0; i < vertexCount; i++) {
+                const index = indices[vertexPtr];
+                const info = vertexInfo[index];
+                if (!info) {
+                    throw new Error(`Overran vertex info list`);
+                }
+                if (info.vertex % 2 !== 0) {
+                    throw new Error(`Vertex index not divisible by 2`);
+                }
+                if (info.parent % 2 !== 0) {
+                    throw new Error(`Vertex index not divisible by 2`);
+                }
+                const position = positions[info.vertex / 2];
+                if (!position) {
+                    throw new Error(`Overran vertex positions list`);
+                }
+                if (info.parent !== 4096) {
+                    const parent = positions[info.parent / 2];
+                    if (!parent) {
+                        throw new Error(`Overran vertex positions list for parent`);
+                    }
+                }
+                vertexPtr++;
+            }
+        }
+
+        stripPtr++;
+    }
 }
 
 enum VifCmd {
@@ -1415,7 +1480,7 @@ export function readVifStrowData(vifCommand: VifCommand) {
         throw new Error(`Not a STROW command`);
     }
     // STROW packets are followed by 128 bits of data
-    return vifCommand.view.subview(0x4, 0x4 * 4).getTypedArrayView(Uint32Array);
+    return vifCommand.view.subview(0x4, 0x4 * 4).getTypedArrayView(Int32Array);
 }
 
 export function readVifStcyclData(vifCommand: VifCommand) {

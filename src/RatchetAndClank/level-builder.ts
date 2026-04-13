@@ -5,6 +5,7 @@ import { readGsRamTableEntry, readLevelCoreHeader, readShrubClass, readShrubClas
 import { makeInstanceOClassMap } from "./utils";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { Color } from "../Color";
+import { GfxDevice, GfxFormat, GfxTextureDimension, GfxTextureUsage } from "../gfx/platform/GfxPlatform";
 
 export type LevelFiles = {
     coreIndexBuffer: ArrayBufferSlice,
@@ -200,3 +201,67 @@ function mapPaletteIndices(index: number) {
     return (((index & 16) >> 1) != (index & 8)) ? (index ^ 0b00011000) : index;
 }
 
+function unpalettizeTexture(texture: PaletteTexture): Uint8Array {
+    const palettedPixels = new Uint32Array(texture.textureEntry.width * texture.textureEntry.height);
+    for (let i = 0; i < palettedPixels.length; i++) {
+        const paletteIndex = texture.pixels[i];
+        const rgba = texture.palette[paletteIndex];
+        palettedPixels[i] = rgba.r | (rgba.g << 8) | (rgba.b << 16) | (rgba.a << 24);
+    }
+    return new Uint8Array(palettedPixels.buffer, palettedPixels.byteOffset, palettedPixels.byteLength);
+}
+
+function upscale(textureData: Uint8Array): Uint8Array {
+    const originalDim = Math.sqrt(textureData.length / 4);
+    if (!Number.isInteger(originalDim)) {
+        throw new Error(`Texture data is not a square`);
+    }
+    const dim = originalDim * 2;
+    const upscaled = new Uint8Array(dim * dim * 4);
+    for (let y = 0; y < dim; y++) {
+        for (let x = 0; x < dim; x++) {
+            const srcX = Math.floor(x / 2);
+            const srcY = Math.floor(y / 2);
+            const srcIndex = (srcY * originalDim + srcX) * 4;
+            const dstIndex = (y * dim + x) * 4;
+            upscaled[dstIndex] = textureData[srcIndex];
+            upscaled[dstIndex + 1] = textureData[srcIndex + 1];
+            upscaled[dstIndex + 2] = textureData[srcIndex + 2];
+            upscaled[dstIndex + 3] = textureData[srcIndex + 3];
+        }
+    }
+    return upscaled;
+}
+
+export function createTextureArray(device: GfxDevice, textures: PaletteTexture[], dim: number) {
+    const gfxTexture = device.createTexture({
+        dimension: GfxTextureDimension.n2DArray,
+        pixelFormat: GfxFormat.U8_RGBA_NORM,
+        width: dim,
+        height: dim,
+        depthOrArrayLayers: textures.length,
+        numLevels: 1,
+        usage: GfxTextureUsage.Sampled,
+    });
+
+    const textureData = new Uint8Array(dim * dim * 4 * textures.length);
+    let ptr = 0;
+    for (const texture of textures) {
+        let textureDim = texture.textureEntry.width;
+        if (textureDim > dim) {
+            throw new Error(`Texture is bigger than the texture array`);
+        }
+        if (textureDim !== texture.textureEntry.height) {
+            throw new Error(`Texture is not square`);
+        }
+        let nextTextureData = unpalettizeTexture(texture);
+        while (textureDim < dim) {
+            textureDim *= 2;
+            nextTextureData = upscale(nextTextureData);
+        }
+        textureData.set(nextTextureData, ptr);
+        ptr += nextTextureData.byteLength;
+    }
+    device.uploadTextureData(gfxTexture, 0, [textureData]);
+    return gfxTexture;
+}

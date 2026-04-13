@@ -32,7 +32,8 @@ void main() {
     vec4 t_PositionWorld = UnpackMatrix(u_SkyTransform) * vec4(a_Position.xyz, 1.0f);
     gl_Position = (UnpackMatrix(u_ClipFromWorld) * t_PositionWorld).xyww; // infinite depth
 
-    if (u_Textured == 1.0) {
+    float isTextured = u_ExtraData.x;
+    if (isTextured == 1.0) {
         v_ST = a_ST;
         v_Rgba = vec4(1.0, 1.0, 1.0, a_Alpha);
     } else {
@@ -48,7 +49,8 @@ in vec2 v_ST;
 in vec4 v_Rgba;
 
 void main() {
-    if (u_Textured == 1.0) {
+    float isTextured = u_ExtraData.x;
+    if (isTextured == 1.0) {
         gl_FragColor = v_Rgba * texture(SAMPLER_2D(u_Texture), v_ST);
     } else {
         gl_FragColor = v_Rgba;
@@ -63,7 +65,7 @@ ${RatchetShaderLib.SceneParams}
 
 layout(std140) uniform ub_SkyParams {
     Mat4x4 u_SkyTransform;
-    float u_Textured;
+    vec4 u_ExtraData; // x = isTextured, yzw = padding
 };
 
 layout(location = 0) uniform sampler2D u_Texture;
@@ -133,6 +135,7 @@ export class SkyGeometry {
 
     public destroy(device: GfxDevice): void {
         device.destroyBuffer(this.vertexBuffer);
+        device.destroyBuffer(this.indexBuffer);
     }
 }
 
