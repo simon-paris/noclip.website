@@ -7,30 +7,54 @@ import { assert, nArray } from "../util";
 import { RatchetShaderLib } from "./shader-lib";
 import { TieClass, TiePacketCommand, TiePacketCommandTypes, TieVertex } from "./structs-core";
 
-export const MAX_TIE_INSTANCES = 32;
-
 export class TieProgram extends DeviceProgram {
     public static a_Position = 0;
     public static a_TextureIndex = 1;
-    public static a_STQ = 2;
+    public static a_ST = 2;
     public static a_Normal = 3;
     public static a_LodMorphOffset = 4;
 
-    public static elementsPerVertex = 13; // xyz, texture, stq, normal, lowerLodOffset
+    public static elementsPerVertex = 12; // position (3), texture index (1), st (2), normal (3), morph offset (3)
+
+    public static a_InstanceTransform0 = 5;
+    public static a_InstanceTransform1 = 6;
+    public static a_InstanceTransform2 = 7;
+    public static a_InstanceTransform3 = 8;
+    public static a_InstanceAmbientRgba = 9;
+    public static a_InstanceDirectionLights = 10;
+    public static a_InstanceLodMorphFactor = 11;
+
+    public static elementsPerInstance = 25; // transform (16), ambient (4), lights (4), extra (1)
 
     public static ub_SceneParams = 0;
     public static ub_TieParams = 1;
 
+    public override both = `
+${GfxShaderLibrary.MatrixLibrary}
+${RatchetShaderLib.SceneParams}
+
+${nArray(16, i => `
+layout(location = ${i}) uniform sampler2D u_Texture${i};
+`).join('\n')}
+`;
+
     public override vert = `
-${TieProgram.Common}
 
 layout(location = ${TieProgram.a_Position}) in vec3 a_Position;
 layout(location = ${TieProgram.a_TextureIndex}) in float a_TextureIndex;
-layout(location = ${TieProgram.a_STQ}) in vec3 a_STQ;
+layout(location = ${TieProgram.a_ST}) in vec3 a_ST;
 layout(location = ${TieProgram.a_Normal}) in vec3 a_Normal;
 layout(location = ${TieProgram.a_LodMorphOffset}) in vec3 a_LodMorphOffset;
 
-out vec2 v_UV;
+layout(location = ${TieProgram.a_InstanceTransform0}) in vec4 a_InstanceTransform0;
+layout(location = ${TieProgram.a_InstanceTransform1}) in vec4 a_InstanceTransform1;
+layout(location = ${TieProgram.a_InstanceTransform2}) in vec4 a_InstanceTransform2;
+layout(location = ${TieProgram.a_InstanceTransform3}) in vec4 a_InstanceTransform3;
+layout(location = ${TieProgram.a_InstanceAmbientRgba}) in vec4 a_InstanceAmbientRgba;
+layout(location = ${TieProgram.a_InstanceDirectionLights}) in vec4 a_InstanceDirectionLights;
+layout(location = ${TieProgram.a_InstanceLodMorphFactor}) in float a_LodMorphFactor;
+
+out vec2 v_ST;
 out vec4 v_Rgba;
 out vec3 v_Normal;
 flat out int v_TextureIndex;
@@ -39,15 +63,16 @@ flat out int v_TextureIndex;
 ${RatchetShaderLib.LightingFunctions}
 
 void main() {
-    vec3 morphedPosition = a_Position + a_LodMorphOffset * u_TieInstances[gl_InstanceID].extraData.x;
-    mat4 instanceTransform = UnpackMatrix(u_TieInstances[gl_InstanceID].transform);
+    vec3 morphedPosition = a_Position + a_LodMorphOffset * a_LodMorphFactor;
+    Mat4x4 _instanceTransform = Mat4x4(a_InstanceTransform0, a_InstanceTransform1, a_InstanceTransform2, a_InstanceTransform3);
+    mat4 instanceTransform = UnpackMatrix(_instanceTransform);
     vec4 t_PositionWorld = instanceTransform * vec4(morphedPosition, 1.0f);
 
     gl_Position = UnpackMatrix(u_ClipFromWorld) * t_PositionWorld;
-    v_UV = vec2(a_STQ.x, a_STQ.y) / a_STQ.z;
+    v_ST = vec2(a_ST.x, a_ST.y);
     
-    vec3 rgb = u_TieInstances[gl_InstanceID].ambientRgba.rgb / 4.0;
-    vec4 lights = u_TieInstances[gl_InstanceID].directionLights;
+    vec3 rgb = a_InstanceAmbientRgba.rgb / 4.0;
+    vec4 lights = a_InstanceDirectionLights;
     
     v_Normal = normalize(inverse(transpose(mat3(instanceTransform))) * a_Normal);
     v_Rgba = vec4(commonVertexLighting(rgb, v_Normal, lights, 1.0), 1.0);
@@ -57,10 +82,9 @@ void main() {
 `;
 
     public override frag = `
-${TieProgram.Common}
 ${RatchetShaderLib.CommonFragmentShader}
 
-in vec2 v_UV;
+in vec2 v_ST;
 in vec4 v_Rgba;
 in vec3 v_Normal;
 flat in int v_TextureIndex;
@@ -68,7 +92,7 @@ flat in int v_TextureIndex;
 void main() {
     // gross but fast
     ${nArray(16, i => `
-            vec4 textureSample${i} = texture(SAMPLER_2D(u_Texture${i}), v_UV);
+            vec4 textureSample${i} = texture(SAMPLER_2D(u_Texture${i}), v_ST);
     `).join('\n')
         }
     ${nArray(16, i => `
@@ -81,33 +105,13 @@ void main() {
 }
 `;
 
-    public static Common = `
-${GfxShaderLibrary.MatrixLibrary}
-${RatchetShaderLib.SceneParams}
-
-struct TieInstance {
-    Mat4x4 transform;
-    vec4 directionLights;
-    vec4 ambientRgba;
-    vec4 extraData; // x = lod morph factor
-};
-
-layout(std140) uniform ub_TieParams {
-    TieInstance u_TieInstances[${MAX_TIE_INSTANCES}];
-};
-
-${nArray(16, i => `
-layout(location = ${i}) uniform sampler2D u_Texture${i};
-`).join('\n')}
-`;
-
 }
 
 export class TieGeometry {
     public vertexBuffer: GfxBuffer;
     public inputLayout: GfxInputLayout;
 
-    public triangleCount: number;
+    public vertexCount: number;
 
     constructor(cache: GfxRenderCache, tieOClass: number, tie: TieClass, lodLevel: number) {
         const device = cache.device;
@@ -117,49 +121,29 @@ export class TieGeometry {
         this.vertexBuffer = createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, vertexData.vertexArrayBuffer.buffer);
         device.setResourceName(this.vertexBuffer, `Tie Class ${tieOClass} (VB)`);
 
-        this.triangleCount = vertexData.triangleCount;
+        this.vertexCount = vertexData.vertexCount;
 
         this.inputLayout = cache.createInputLayout({
             vertexAttributeDescriptors: [
-                {
-                    location: TieProgram.a_Position,
-                    format: GfxFormat.F32_RGB,
-                    bufferByteOffset: 0,
-                    bufferIndex: 0,
-                },
-                {
-                    location: TieProgram.a_TextureIndex,
-                    format: GfxFormat.F32_R,
-                    bufferByteOffset: 3 * 4,
-                    bufferIndex: 0,
-                },
-                {
-                    location: TieProgram.a_STQ,
-                    format: GfxFormat.F32_RGB,
-                    bufferByteOffset: 4 * 4,
-                    bufferIndex: 0,
-                },
-                {
-                    location: TieProgram.a_Normal,
-                    format: GfxFormat.F32_RGB,
-                    bufferByteOffset: 7 * 4,
-                    bufferIndex: 0,
-                },
-                {
-                    location: TieProgram.a_LodMorphOffset,
-                    format: GfxFormat.F32_RGB,
-                    bufferByteOffset: 10 * 4,
-                    bufferIndex: 0,
-                },
+                // per vertex
+                { location: TieProgram.a_Position, format: GfxFormat.F32_RGB, bufferByteOffset: 0, bufferIndex: 0, },
+                { location: TieProgram.a_TextureIndex, format: GfxFormat.F32_R, bufferByteOffset: 3 * 4, bufferIndex: 0, },
+                { location: TieProgram.a_ST, format: GfxFormat.F32_RG, bufferByteOffset: 4 * 4, bufferIndex: 0, },
+                { location: TieProgram.a_Normal, format: GfxFormat.F32_RGB, bufferByteOffset: 6 * 4, bufferIndex: 0, },
+                { location: TieProgram.a_LodMorphOffset, format: GfxFormat.F32_RGB, bufferByteOffset: 9 * 4, bufferIndex: 0, },
+                // per instance
+                { location: TieProgram.a_InstanceTransform0, format: GfxFormat.F32_RGBA, bufferByteOffset: 0 * 4, bufferIndex: 1, },
+                { location: TieProgram.a_InstanceTransform1, format: GfxFormat.F32_RGBA, bufferByteOffset: 4 * 4, bufferIndex: 1, },
+                { location: TieProgram.a_InstanceTransform2, format: GfxFormat.F32_RGBA, bufferByteOffset: 8 * 4, bufferIndex: 1, },
+                { location: TieProgram.a_InstanceTransform3, format: GfxFormat.F32_RGBA, bufferByteOffset: 12 * 4, bufferIndex: 1, },
+                { location: TieProgram.a_InstanceAmbientRgba, format: GfxFormat.F32_RGBA, bufferByteOffset: 16 * 4, bufferIndex: 1, },
+                { location: TieProgram.a_InstanceDirectionLights, format: GfxFormat.F32_RGBA, bufferByteOffset: 20 * 4, bufferIndex: 1, },
+                { location: TieProgram.a_InstanceLodMorphFactor, format: GfxFormat.F32_R, bufferByteOffset: 24 * 4, bufferIndex: 1, },
             ],
-
             vertexBufferDescriptors: [
-                {
-                    byteStride: TieProgram.elementsPerVertex * 0x4,
-                    frequency: GfxVertexBufferFrequency.PerVertex,
-                },
+                { byteStride: TieProgram.elementsPerVertex * 0x4, frequency: GfxVertexBufferFrequency.PerVertex, },
+                { byteStride: TieProgram.elementsPerInstance * 0x4, frequency: GfxVertexBufferFrequency.PerInstance, },
             ],
-
             indexBufferFormat: null,
         });
     }
@@ -179,8 +163,8 @@ export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: 
     const strips = commnadBufferToStrips(tieOClass, commandLists);
     strips.sort((a, b) => a.material - b.material);
 
-    const triangleCount = strips.reduce((a, b) => a + (b.verts.length - 2), 0);
-    const vertexBufferSize = triangleCount * 3 * TieProgram.elementsPerVertex;
+    const vertexCount = strips.reduce((a, b) => a + (b.verts.length - 2), 0) * 3;
+    const vertexBufferSize = vertexCount * TieProgram.elementsPerVertex;
 
     const vertexArrayBuffer = new Float32Array(vertexBufferSize);
     let ptr = 0;
@@ -221,7 +205,7 @@ export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: 
             vertexArrayBuffer[ptr++] = material;
             vertexArrayBuffer[ptr++] = texcoordScale * vert.s;
             vertexArrayBuffer[ptr++] = texcoordScale * vert.t;
-            vertexArrayBuffer[ptr++] = texcoordScale * vert.q;
+            if (vert.q !== 4096) throw new Error(`Unexpected non-1 q in vertex`);
 
             vertexArrayBuffer[ptr++] = normalScale * normal.x;
             vertexArrayBuffer[ptr++] = normalScale * normal.y;
@@ -241,7 +225,7 @@ export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: 
 
     assert(ptr == vertexArrayBuffer.length);
 
-    return { vertexArrayBuffer, triangleCount };
+    return { vertexArrayBuffer, vertexCount };
 }
 
 function commnadBufferToStrips(tieOClass: number, packets: TiePacketCommand[][]) {

@@ -1,5 +1,63 @@
 import { DataViewExt } from "./DataViewExt.ts";
 
+/*
+https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/compression.cpp#L65
+*/
+
+/*
+uint8 magic[3];
+uint32 compressedSize;
+uint8 pad[9];
+while( !FEof() ) {
+
+    uint8 flag;
+    
+    if (flag == 0) {
+        struct {
+            uint8 literal_size;
+            uint8 literal[literal_size];
+        } big_literal;
+    }
+    
+    else if (flag < 0x10) {
+        struct {
+            local int literal_size = flag + 3;
+            uint8 literal[literal_size];
+        } medium_literal;
+    }
+    
+    else if (flag < 0x20) {
+        struct {
+            if (flag & 7) {
+                uint8 match_size;
+            }
+            uint8 b0;
+            uint8 b1;
+            uint8 little_literal[b0 & 3];
+            // something complicated happens here
+        } far_match;
+    }
+    
+    else if (flag < 0x40) {
+        struct {
+            if (flag & 7) {
+                uint8 match_size;
+            }
+            uint8 b0;
+            uint8 b1;
+            uint8 little_literal[b0 & 3];
+        } medium_match;
+    }
+    
+    else {
+        struct {
+            uint8 b1;
+            uint8 little_literal[flag & 3];
+        } little_match;
+    }
+}
+*/
+
 export function decompressWad(srcView: DataViewExt) {
     const beginPtr = 0x10;
     let srcPtr = beginPtr;

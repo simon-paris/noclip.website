@@ -1,100 +1,14 @@
 import { IS_DEVELOPMENT } from "../BuildVersion";
 import { GsPrimitiveType } from "../Common/PS2/GS";
 import { DataViewExt } from "../DataViewExt";
-import { getBit, getBits } from "./utils";
+import { getBit, getBits, truncateTrailing0xFF } from "./utils";
+import { isUnpackCommand, readVifCommandList, readVifStrowData, readVifUnpackData, VifVnVl } from "./vif";
 
 export type LevelCoreHeader = ReturnType<typeof readLevelCoreHeader>;
+export const SIZEOF_LEVEL_CORE_HEADER = 0xbc;
 export function readLevelCoreHeader(view: DataViewExt) {
     /*
-      // size 0xbc
-      packed_struct(LevelCoreHeader,
-        // 0x00
-        ArrayRange gs_ram;
-        // 0x08
-        s32 tfrags;
-        // 0x0c
-        s32 occlusion;
-        // 0x10
-        s32 sky;
-        // 0x14
-        s32 collision;
-        // 0x18
-        ArrayRange moby_classes;
-        // 0x20
-        ArrayRange tie_classes;
-        // 0x28
-        ArrayRange shrub_classes;
-        // 0x30
-        ArrayRange tfrag_textures;
-        // 0x38
-        ArrayRange moby_textures;
-        // 0x40
-        ArrayRange tie_textures;
-        // 0x48
-        ArrayRange shrub_textures;
-        // 0x50
-        ArrayRange part_textures;
-        // 0x58
-        ArrayRange fx_textures;
-        // 0x60
-        s32 textures_base_offset;
-        // 0x64
-        s32 part_bank_offset;
-        // 0x68
-        s32 fx_bank_offset;
-        // 0x6c
-        s32 part_defs_offset;
-        // 0x70
-        s32 sound_remap_offset;
-        // 0x74
-        s32 unknown_74;
-        union(
-          // 0x78
-          s32 ratchet_seqs_rac123;
-          // 0x78
-          s32 light_cuboids_offset_dl;
-        )
-        // 0x7c
-        s32 scene_view_size;
-        union(
-          // 0x80
-          s32 gadget_count_rac1;
-          // 0x80
-          s32 index_into_some1_texs_rac2_maybe3;
-        )
-        union(
-          // 0x84
-          s32 gadget_offset_rac1;
-          // 0x84
-          s32 moby_gs_stash_count_rac23dl;
-        )
-        // 0x88
-        s32 assets_compressed_size;
-        // 0x8c
-        s32 assets_decompressed_size;
-        // 0x90
-        s32 chrome_map_texture;
-        // 0x94
-        s32 chrome_map_palette;
-        // 0x98
-        s32 glass_map_texture;
-        // 0x9c
-        s32 glass_map_palette;
-        // 0xa0
-        s32 unknown_a0;
-        // 0xa4
-        s32 heightmap_offset;
-        // 0xa8
-        s32 occlusion_oct_offset;
-        // 0xac
-        s32 moby_gs_stash_list;
-        // 0xb0
-        s32 occlusion_rad_offset;
-        // 0xb4
-        s32 moby_sound_remap_offset;
-        // 0xb8
-        s32 occlusion_rad2_offset;
-      )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/wrenchbuild/level/level_core.h#L27
     */
 
     return {
@@ -133,17 +47,17 @@ export function readLevelCoreHeader(view: DataViewExt) {
     }
 }
 
-export type GsRamTableEntry = ReturnType<typeof readGsRamTableEntry>;
+export type GsRamTableEntry = {
+    psm: number,
+    width: number,
+    height: number,
+    address: number,
+    offset: number,
+}
 export const SIZEOF_GS_RAM_TABLE_ENTRY = 0x10;
 export function readGsRamTableEntry(view: DataViewExt) {
     /*    
-        packed_struct(GsRamEntry,
-            s32 psm; // 0 == palette RGBA32, 1 == palette RGBA16, 0x13 == IDTEX8
-            s16 width;
-            s16 height;
-            s32 address;
-            s32 offset; // For stashed moby textures, this is relative to the start of the stash.
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/wrenchbuild/level/level_textures.h#L29
     */
     return {
         psm: view.getInt32(0x0),
@@ -154,57 +68,40 @@ export function readGsRamTableEntry(view: DataViewExt) {
     }
 }
 
-const SIZEOF_MOBY_OR_TIE_CLASS_ENTRY = 0x20;
-export function readTieOrMobyClassEntryArray(view: DataViewExt, count: number) {
+// for ties, mobys, and shrubs
+export type ClassEntry = {
+    offsetInCoreData: number,
+    oClass: number,
+    textures: number[],
+}
+export const SIZEOF_TIE_CLASS_ENTRY = 0x20;
+export const SIZEOF_MOBY_CLASS_ENTRY = 0x20;
+export const SIZEOF_SHRUB_CLASS_ENTRY = 0x30;
+export function readClassEntry(view: DataViewExt): ClassEntry {
     /*
-        packed_struct(TieOrMobyClassEntry,
-            // 0x00
-            s32 offset_in_asset_wad;
-            // 0x04
-            s32 o_class;
-            // 0x08
-            s32 unknown_8;
-            // 0x0c
-            s32 unknown_c;
-            // 0x10
-            u8 textures[16];
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/wrenchbuild/level/level_core.h#L81-L104
+    Tie and moby class entries are the same. Shrubs have an extra field for billboard info that we don't need.
     */
-
-    return view.subdivide(0, count, SIZEOF_MOBY_OR_TIE_CLASS_ENTRY).map(view => {
-        return {
-            offsetInAssetWad: view.getInt32(0x0),
-            oClass: view.getInt32(0x4),
-            textures: view.getArrayOfNumbers(0x10, 16, Uint8Array),
-        }
-    })
+    return {
+        offsetInCoreData: view.getInt32(0x0),
+        oClass: view.getInt32(0x4),
+        textures: truncateTrailing0xFF(view.getArrayOfNumbers(0x10, 16, Uint8Array)),
+    };
 }
 
-export function readTieOrMobyTextureEntryArray(view: DataViewExt, count: number) {
-    return view.subdivide(0, count, SIZEOF_TEXTURE_ENTRY).map(readTextureEntry)
+export type TextureEntry = {
+    dataOffset: number,
+    width: number,
+    height: number,
+    type: number,
+    palette: number,
+    mipmap: number,
+    pad: number,
 }
-
 export const SIZEOF_TEXTURE_ENTRY = 0x10;
-export type TextureEntry = ReturnType<typeof readTextureEntry>;
-export function readTextureEntry(view: DataViewExt) {
+export function readTextureEntry(view: DataViewExt): TextureEntry {
     /*
-      // size 0x10
-      packed_struct(TextureEntry,
-        // 0x0
-        s32 data_offset;
-        // 0x4
-        s16 width;
-        // 0x6
-        s16 height;
-        // 0x8
-        s16 type;
-        // 0xa
-        s16 palette;
-        // 0xc
-        s16 mipmap = -1;
-        // 0xe
-        s16 pad = -1;
-      )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/wrenchbuild/level/level_textures.h#L37
     */
     return {
         dataOffset: view.getInt32(0x0),
@@ -217,70 +114,33 @@ export function readTextureEntry(view: DataViewExt) {
     };
 }
 
-export type TieClass = ReturnType<typeof readTieClass>;
-export type TiePacket = { header: TiePacketHeader, body: TiePacketBody, vertCount: number };
-// tie classes are unsized objects, there is an unknown amount of additional data concatted onto the end of the tie class header
-export function readTieClass(view: DataViewExt, oClass: number) {
+export type TieClass = {
+    normalsData: { x: number, y: number, z: number }[],
+    nearDist: number,
+    midDist: number,
+    farDist: number,
+    bsphere: { x: number, y: number, z: number, w: number },
+    scale: number,
+    packets: TiePacket[][], // [lod][packet]
+    adGifs: TieAdGifs[],
+};
+export type TiePacket = {
+    header: TiePacketHeader,
+    body: TiePacketBody,
+};
+export function readTieClass(view: DataViewExt, oClass: number): TieClass {
     /*
-      // header size is 0x80
-      packed_struct(TieClassHeader,
-        // 0x00
-        s32 packets[3];
-        // 0x0c
-        u32 vert_normals;
-        // 0x10
-        f32 near_dist;
-        // 0x14
-        f32 mid_dist;
-        // 0x18
-        f32 far_dist;
-        // 0x1c
-        u32 unknown_1c;
-        // 0x20 
-        u8 packet_count[3];
-        // 0x23
-        u8 texture_count;
-        // 0x24
-        u32 unknown_24;
-        // 0x28
-        u32 unknown_28;
-        // 0x2c
-        u32 ad_gif_ofs;
-        // 0x30
-        Vec4f bsphere;
-        // 0x40
-        f32 scale;
-        // 0x44
-        u32 unknown_44;
-        // 0x48
-        u32 unknown_48;
-        // 0x4c
-        u32 unknown_4c;
-        // 0x50
-        u32 unknown_50;
-        // 0x54
-        u32 unknown_54;
-        // 0x58
-        u32 unknown_58;
-        // 0x5c
-        u32 unknown_5c;
-        // 0x60
-        u32 unknown_60;
-        // 0x64
-        u32 unknown_64;
-        // 0x68
-        u32 unknown_68;
-        // 0x6c
-        u32 unknown_6c;
-      )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/tie.h#L37
     */
 
-    // these are pointers relative to this struct header, we'll treat them like part of this struct
+    // `packetOffsets[i]` points to `TiePacketHeader headers[packetCount[i]]`
+    // (relative to this struct)
     const packetOffsets = view.getArrayOfNumbers(0x0, 3, Uint32Array);
     const packetCounts = view.getArrayOfNumbers(0x20, 3, Uint8Array);
 
     const packets: TiePacket[][] = [];
-    // loop 3 times because there are 3 lods
+
+    // there are always 3 lods
     for (let i = 0; i < 3; i++) {
         const packetOffset = packetOffsets[i];
         const packetCount = packetCounts[i];
@@ -293,7 +153,6 @@ export function readTieClass(view: DataViewExt, oClass: number) {
             packetsInThisLod.push({
                 header: packetHeaders[j],
                 body: packetBody,
-                vertCount: packetBody.debugData.tieUnpackHeader.dinkyVertexCount + packetBody.debugData.tieUnpackHeader.fatVertexCount,
             })
         }
 
@@ -308,54 +167,36 @@ export function readTieClass(view: DataViewExt, oClass: number) {
     const normalsData = view.subdivide(normalsOffset, 64, 8).map(view => view.getInt16_Xyzw(0));
 
     return {
-        normalsOffset,
         normalsData,
         nearDist: view.getFloat32(0x10),
         midDist: view.getFloat32(0x14),
         farDist: view.getFloat32(0x18),
-        textureCount,
-        adGifsOffset,
         bsphere: view.getFloat32_Xyzw(0x30),
         scale: view.getFloat32(0x40),
-        packetOffsets,
-        packetCounts,
         packets,
         adGifs,
     };
 }
 
+export type TiePacketHeader = {
+    data: number,
+    shaderCount: number,
+    bfcDistance: number,
+    controlCount: number,
+    controlSize: number,
+    vertOffset: number,
+    vertSize: number,
+    rgbaCount: number,
+    multipassOffset: number,
+    scissorOffset: number,
+    scissorSize: number,
+    multipassType: number,
+    multipassUvSize: number,
+}
 export const SIZEOF_TIE_PACKET_HEADER = 0x10;
-export type TiePacketHeader = ReturnType<typeof readTiePacketHeader>;
-export function readTiePacketHeader(view: DataViewExt) {
+export function readTiePacketHeader(view: DataViewExt): TiePacketHeader {
     /*
-        packed_struct(TiePacketHeader,
-            // 0x0
-            s32 data;
-            // 0x4
-            u8 shader_count;
-            // 0x5
-            u8 bfc_distance;
-            // 0x6
-            u8 control_count;
-            // 0x7
-            u8 control_size;
-            // 0x8
-            u8 vert_ofs;
-            // 0x9
-            u8 vert_size;
-            // 0xa
-            u8 rgba_count;
-            // 0xb
-            u8 multipass_ofs;
-            // 0xc
-            u8 scissor_ofs;
-            // 0xd
-            u8 scissor_size;
-            // 0xe
-            u8 nultipass_type;
-            // 0xf
-            u8 multipass_uv_size;
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/tie.h#L92
     */
 
     return {
@@ -796,7 +637,7 @@ export function readGifAdData16(view: DataViewExt) {
     return readGifAdData12(view);
 }
 
-
+export type TieAdGifs = ReturnType<typeof readTieAdGifs>;
 export const SIZEOF_TIE_AD_GIFS = 0x50;
 export function readTieAdGifs(view: DataViewExt) {
     /*
@@ -1265,236 +1106,6 @@ function validateTfrag(indices: Uint8Array, strips: TfragStrip[], vertexInfo: Tf
     }
 }
 
-enum VifCmd {
-    NOP = 0b0000000,
-    STCYCL = 0b0000001,
-    OFFSET = 0b0000010,
-    BASE = 0b0000011,
-    ITOP = 0b0000100,
-    STMOD = 0b0000101,
-    MSKPATH3 = 0b0000110,
-    MARK = 0b0000111,
-    FLUSHE = 0b0010000,
-    FLUSH = 0b0010001,
-    FLUSHA = 0b0010011,
-    MSCAL = 0b0010100,
-    MSCNT = 0b0010111,
-    MSCALF = 0b0010101,
-    STMASK = 0b0100000,
-    STROW = 0b0110000,
-    STCOL = 0b0110001,
-    MPG = 0b1001010,
-    DIRECT = 0b1010000,
-    DIRECTHL = 0b1010001
-};
-
-enum VifVnVl {
-    S_32 = 0b0000,
-    S_16 = 0b0001,
-    ERR_0010 = 0b0010,
-    ERR_0011 = 0b0011,
-    V2_32 = 0b0100,
-    V2_16 = 0b0101,
-    V2_8 = 0b0110,
-    ERR_0111 = 0b0111,
-    V3_32 = 0b1000,
-    V3_16 = 0b1001,
-    V3_8 = 0b1010,
-    ERR_1011 = 0b1011,
-    V4_32 = 0b1100,
-    V4_16 = 0b1101,
-    V4_8 = 0b1110,
-    V4_5 = 0b1111
-};
-
-function readVifCommandList(view: DataViewExt) {
-    const out: VifCommand[] = [];
-
-    if (view.byteLength % 4 !== 0) {
-        throw new Error(`VIF command list byte length must be a multiple of 4`);
-    }
-
-    // not sure what the initial values should be
-    let wl = 1, cl = 1;
-
-    while (view.byteLength) {
-        const command = readVifCommand(view, wl, cl);
-        const size = vifCommandSizeInBytes(command.cmd, command.num, command.immediate, wl, cl);
-        if (size > view.byteLength) {
-            throw new Error(`VIF command size exceeds remaining buffer size`);
-        }
-        out.push(command);
-
-        switch (command.cmd) {
-            case VifCmd.STCYCL: {
-                const stcycl = readVifStcyclData(command);
-                wl = stcycl.wl;
-                cl = stcycl.cl;
-                break;
-            }
-        }
-
-        const align = size % 4 !== 0 ? 4 - (size % 4) : 0
-        view = view.subview(size + align);
-    }
-
-    return out;
-}
-
-type VifCommand = ReturnType<typeof readVifCommand>;
-function readVifCommand(view: DataViewExt, wl: number, cl: number) {
-    /*
-        struct VifCommand {
-            u8 cmd;
-            u8 num;
-            u16 immediate;
-            // data follows depending on command
-        }
-    */
-
-    const code = view.getUint32(0x0);
-
-    const cmd = getBits(code, 24, 30);
-    const immediate = getBits(code, 0, 15);
-    const num = getBits(code, 16, 23);
-
-    const isUnpack = isUnpackCommand(cmd);
-    const cmdString = VifCmd[cmd] ?? (isUnpack ? "UNPACK" : null);
-    if (!cmdString) {
-        throw new Error(`Unknown VIF command: 0b${cmd.toString(16).padStart(2, "0")}`);
-    }
-
-    const size = vifCommandSizeInBytes(cmd, num, immediate, wl, cl);
-    if (size > view.byteLength) {
-        throw new Error(`VIF command size exceeds remaining buffer size`);
-    }
-
-    return {
-        view: view.subview(0, size),
-        size,
-
-        // main fields
-        cmd,
-        num,
-        immediate,
-
-        // computed fields
-        cmdString,
-
-        // command-specific fields
-        unpack: isUnpack ? {
-            vnvl: cmd & 0x0F,
-            vnvlStr: VifVnVl[cmd & 0x0F] ?? `Unknown`,
-            /** multiply by 16 to get an actual address */
-            addr: getBits(immediate, 0, 9),
-        } : null,
-    };
-}
-
-export function vifCommandSizeInBytes(cmd: number, num: number, immediate: number, wl: number, cl: number) {
-    switch (cmd) {
-        case VifCmd.NOP:
-        case VifCmd.STCYCL:
-        case VifCmd.OFFSET:
-        case VifCmd.BASE:
-        case VifCmd.ITOP:
-        case VifCmd.STMOD:
-        case VifCmd.MSKPATH3:
-        case VifCmd.MARK:
-        case VifCmd.FLUSHE:
-        case VifCmd.FLUSH:
-        case VifCmd.FLUSHA:
-        case VifCmd.MSCAL:
-        case VifCmd.MSCNT:
-        case VifCmd.MSCALF:
-            return 0x4;
-        case VifCmd.STMASK:
-            // 20h STMASK
-            // Sets the MASK register to the next 32-bit word in the stream. This is used for UNPACK write masking.
-            return 0x4 + 0x4;
-        case VifCmd.STROW:
-        case VifCmd.STCOL:
-            // 30h STROW
-            // Sets the R0-R3 row registers to the next 4 32-bit words in the stream. This is used for UNPACK write filling.
-            // 31h STCOL
-            // Sets the C0-C3 column registers to the next 4 32-bit words in the stream. This is used for UNPACK write filling.
-            return 0x4 + (0x4 * 4);
-        case VifCmd.MPG:
-            // 4Ah MPG
-            // Loads NUM*8 bytes into VU micro memory, starting at the given address IMMEDIATE*8. If the VU is currently active, MPG stalls until the VU is finished before uploading data.
-            // If NUM is 0, then 2048 bytes are loaded.
-            return 0x4 + ((num * 8) || 2048);
-        case VifCmd.DIRECT:
-        case VifCmd.DIRECTHL:
-            // 50h DIRECT (VIF1)
-            // Transfers IMMEDIATE quadwords to the GIF through PATH2. If PATH2 cannot take control of the GIF, the VIF stalls until PATH2 is activated.
-            // If IMMEDIATE is 0, 65,536 quadwords are transferred.
-            return 0x4 + ((immediate || 65536) * 16);
-        default: {
-            // 60h-7Fh UNPACK
-            // Decompresses data in various formats to the given address in bits 0-9 of IMMEDIATE multiplied by 16.
-            // If bit 14 of IMMEDIATE is set, the decompressed data is zero-extended. Otherwise, it is sign-extended.
-            // If bit 15 of IMMEDIATE is set, TOPS is added to the starting address. This is only applicable for VIF1.
-            // Bits 0-3 of CMD determine the type of UNPACK that occurs. See VIF UNPACK for details.
-            // Bit 4 of CMD performs UNPACK write masking if set.
-
-            // https://github.com/PCSX2/pcsx2/blob/e14b4475ffbea0ecf184deb76ec6d4c8b3ee273b/pcsx2/Vif_Unpack.cpp#L219
-
-            num = num || 0x100;
-            wl = wl || 0x100;
-
-            // these bits of the cmd determine the data type and vector size
-            const vl = cmd & 0x03;
-            const vn = (cmd >> 2) & 0x3;
-
-            const bytesPerElement = (32 >> vl) / 8;
-            const elementsPerVector = vn + 1;
-
-            const gsize = elementsPerVector * bytesPerElement;
-
-            let size = 0;
-            if (wl <= cl) {
-                // Skipping write
-                // wl is the number of qwords written to the output per write cycle, and cl is the stride between write cycles in qwords.
-                // if cl>wl, then all of the vector elements are written and no data is skipped, so we can just multiply to get the input size
-                size = num * gsize;
-            } else {
-                // Filling write
-                // if wl>cl, then only wl elements of the input vector are present, so the input will be smaller
-                size = (cl * Math.trunc(num / wl) + (num % wl > cl ? cl : num % wl)) * gsize;
-            }
-            return 0x4 + size;
-        }
-    }
-}
-
-export function readVifUnpackData(vifCommand: VifCommand) {
-    if (!isUnpackCommand(vifCommand.cmd)) {
-        throw new Error(`Not an UNPACK command`);
-    }
-    return vifCommand.view.subview(0x4);
-}
-
-export function readVifStrowData(vifCommand: VifCommand) {
-    if (vifCommand.cmd !== VifCmd.STROW) {
-        throw new Error(`Not a STROW command`);
-    }
-    // STROW packets are followed by 128 bits of data
-    return vifCommand.view.subview(0x4, 0x4 * 4).getTypedArrayView(Int32Array);
-}
-
-export function readVifStcyclData(vifCommand: VifCommand) {
-    if (vifCommand.cmd !== VifCmd.STCYCL) {
-        throw new Error(`Not a STCYCL command`);
-    }
-    // Sets the CYCLE register to IMMEDIATE. In particular, CYCLE.CL is set to bits 0-7 and CYCLE.WL is set to bits 8-15.
-    const imm = vifCommand.immediate;
-    return {
-        cl: getBits(imm, 0, 7),
-        wl: getBits(imm, 8, 15),
-    };
-}
-
 export const SIZEOF_TFRAG_HEADER_UNPACK = 0x28;
 export type TfragHeaderUnpack = ReturnType<typeof readTfragHeaderUnpack>;
 export function readTfragHeaderUnpack(view: DataViewExt) {
@@ -1639,37 +1250,6 @@ export function readTfragStrip(view: DataViewExt) {
         adGifOffset: view.getInt8(0x2),
     }
 }
-
-function isUnpackCommand(cmd: number) {
-    return cmd >= 0x60 && cmd <= 0x7f;
-}
-
-export const SIZEOF_SHRUB_CLASS_ENTRY = 0x30;
-export type ShrubClassEntry = ReturnType<typeof readShrubClassEntry>;
-export function readShrubClassEntry(view: DataViewExt) {
-    /*
-        packed_struct(ShrubClassEntry,
-            // 0x00
-            s32 offset_in_asset_wad;
-            // 0x04
-            s32 o_class;
-            // 0x08
-            s32 pad_8;
-            // 0x0c
-            s32 pad_c;
-            // 0x10
-            u8 textures[16];
-            // 0x20 (this has size 0x10)
-            ShrubBillboardInfo billboard;
-        )
-    */
-    return {
-        offsetInAssetWad: view.getInt32(0x0),
-        oClass: view.getInt32(0x4),
-        textures: view.getArrayOfNumbers(0x10, 16, Uint8Array),
-        // billboard: ...
-    }
-};
 
 export const SIZEOF_SHRUB_CLASS_HEADER = 0x40;
 export function readShrubClassHeader(view: DataViewExt) {

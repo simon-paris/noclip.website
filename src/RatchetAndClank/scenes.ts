@@ -9,18 +9,19 @@ import { SceneContext, SceneDesc, SceneGroup } from "../SceneBase";
 import { SceneGfx, ViewerRenderInput } from "../viewer";
 import * as UI from "../ui";
 import { FakeTextureHolder } from "../TextureHolder";
-import { MAX_TIE_INSTANCES, TieGeometry, TieProgram } from "./tie";
+import { TieGeometry, TieProgram } from "./tie";
 import { CameraController } from "../Camera";
-import { buildLevelFromFiles, createTextureArray, LevelFiles, ShrubInstanceBatch, TieInstanceBatch } from "./level-builder";
-import { batches, distanceToCamera, makeTextureWithPalette, noclipSpaceFromRatchetSpace, pathToDebugLines } from "./utils";
+import { buildLevelFromFiles, LevelFiles, ShrubInstanceBatch, TieInstanceBatch } from "./level-builder";
+import { createMegaBuffer, distanceToCamera, MegaBuffer, noclipSpaceFromRatchetSpace, pathToDebugLines } from "./utils";
 import { TfragGeometry, TfragProgram } from "./tfrag";
-import { MAX_SHRUB_INSTANCES, ShrubGeometry, ShrubProgram } from "./shrub";
-import { Blue, colorNewFromRGBA, Green, Red, White } from "../Color";
+import { ShrubGeometry, ShrubProgram } from "./shrub";
+import { colorNewFromRGBA, White } from "../Color";
 import { SkyGeometry, SkyProgram } from "./sky";
 import { RatchetShaderLib } from "./shader-lib";
 import { Frustum } from "../Geometry";
 import { MobyInstance } from "./structs-gameplay";
 import { nArray } from "../util";
+import { createGfxTextureArrayForPaletteTextures, createGfxTextureForPaletteTexture } from "./textures";
 
 const pathBase = `RatchetAndClank1`;
 
@@ -68,7 +69,7 @@ class RatchetAndClank1Scene implements SceneGfx {
         };
 
     private textures = {
-        tfragTextures: null as null | GfxTexture,
+        tfragTextures: null as null | GfxTexture, // one array texture
         tieTextures: new Array<GfxTexture>(),
         shrubTextures: new Array<GfxTexture>(),
         skyTextures: new Array<GfxTexture>(),
@@ -81,6 +82,8 @@ class RatchetAndClank1Scene implements SceneGfx {
         shrubs: new Map<number, ShrubGeometry>(),
         skyShells: new Array<SkyGeometry>(),
     };
+
+    private instanceDataBuffer: MegaBuffer;
 
     constructor(private sceneContext: SceneContext, public levelNumber: number) {
         this.renderHelper = new GfxRenderHelper(sceneContext.device, sceneContext);
@@ -105,6 +108,8 @@ class RatchetAndClank1Scene implements SceneGfx {
             wrapS: GfxWrapMode.Clamp,
             wrapT: GfxWrapMode.Clamp,
         });
+
+        this.instanceDataBuffer = createMegaBuffer(cache.device, "Instance Data", 1024 * 1024);
 
         this.fetchLevelFiles().then(() => {
             if (!this.files.ready) {
@@ -138,7 +143,6 @@ class RatchetAndClank1Scene implements SceneGfx {
             gsRamBuffer,
             gsRam: gsRamBuffer.createDataViewExt({ littleEndian: true }),
         };
-
     }
 
     private buildAssetGeometry() {
@@ -149,13 +153,12 @@ class RatchetAndClank1Scene implements SceneGfx {
         const cache = this.renderHelper.renderCache;
 
         const { tfrags, tfragTextures } = this.level;
-        this.textures.tfragTextures = createTextureArray(cache.device, tfragTextures, 128);
+        this.textures.tfragTextures = createGfxTextureArrayForPaletteTextures(cache.device, "Tfrag texture", tfragTextures);
         this.geometries.tfrag = new TfragGeometry(cache, tfrags);
 
         const { ties, tieTextures } = this.level;
         for (let i = 0; i < tieTextures.length; i++) {
-            const tieTexture = tieTextures[i];
-            const gfxTextures = makeTextureWithPalette(cache.device, tieTexture);
+            const gfxTextures = createGfxTextureForPaletteTexture(cache.device, tieTextures[i]);
             this.textures.tieTextures.push(gfxTextures.pixelsTexture);
             this.textureHolder.viewerTextures.push({ gfxTexture: gfxTextures.pixelsTexture });
         }
@@ -173,7 +176,7 @@ class RatchetAndClank1Scene implements SceneGfx {
         }
         for (let i = 0; i < shrubTextures.length; i++) {
             const shrubTexture = shrubTextures[i];
-            const gfxTextures = makeTextureWithPalette(cache.device, shrubTexture);
+            const gfxTextures = createGfxTextureForPaletteTexture(cache.device, shrubTexture);
             this.textures.shrubTextures.push(gfxTextures.pixelsTexture);
             this.textureHolder.viewerTextures.push({ gfxTexture: gfxTextures.pixelsTexture });
         }
@@ -184,7 +187,7 @@ class RatchetAndClank1Scene implements SceneGfx {
         }
         for (let i = 0; i < skyTextures.length; i++) {
             const skyTexture = skyTextures[i];
-            const gfxTextures = makeTextureWithPalette(cache.device, skyTexture);
+            const gfxTextures = createGfxTextureForPaletteTexture(cache.device, skyTexture);
             this.textures.skyTextures.push(gfxTextures.pixelsTexture);
             this.textureHolder.viewerTextures.push({ gfxTexture: gfxTextures.pixelsTexture });
         }
@@ -273,22 +276,6 @@ class RatchetAndClank1Scene implements SceneGfx {
             }
         ]);
         renderInst.setGfxProgram(this.tfragProgram);
-        renderInst.setMegaStateFlags({
-            cullMode: GfxCullMode.None,
-            attachmentsState: [{
-                channelWriteMask: GfxChannelWriteMask.AllChannels,
-                rgbBlendState: {
-                    blendMode: GfxBlendMode.Add,
-                    blendSrcFactor: GfxBlendFactor.SrcAlpha,
-                    blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
-                },
-                alphaBlendState: {
-                    blendMode: GfxBlendMode.Add,
-                    blendSrcFactor: GfxBlendFactor.One,
-                    blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
-                },
-            }]
-        });
 
         const tfragParams = renderInst.allocateUniformBufferF32(TfragProgram.ub_TfragParams, 16);
         let offs = 0;
@@ -391,71 +378,38 @@ class RatchetAndClank1Scene implements SceneGfx {
             const tieGeometry = this.geometries.ties.get(oClass)?.[lodLevel];
             if (!tieGeometry) continue;
 
-            const template1 = this.renderHelper.pushTemplateRenderInst();
-            template1.setBindingLayouts([
-                { numSamplers: 16, numUniformBuffers: 2 },
+            const renderInst = this.renderHelper.renderInstManager.newRenderInst();
+            renderInst.setBindingLayouts([
+                { numSamplers: 16, numUniformBuffers: 1 },
             ]);
-            template1.setGfxProgram(this.tieProgram);
-            template1.setMegaStateFlags({
-                cullMode: GfxCullMode.None,
-                attachmentsState: [{
-                    channelWriteMask: GfxChannelWriteMask.AllChannels,
-                    rgbBlendState: {
-                        blendMode: GfxBlendMode.Add,
-                        blendSrcFactor: GfxBlendFactor.SrcAlpha,
-                        blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
-                    },
-                    alphaBlendState: {
-                        blendMode: GfxBlendMode.Add,
-                        blendSrcFactor: GfxBlendFactor.One,
-                        blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
-                    },
-                }]
-            });
-            template1.setVertexInput(
+            renderInst.setGfxProgram(this.tieProgram);
+
+            const instanceDataStartBytes = this.instanceDataBuffer.ptr * 4;
+            for (let i = 0; i < tieInstancesToDraw.length; i++) {
+                const inst = tieInstancesToDraw[i];
+                this.instanceDataBuffer.ptr += fillMatrix4x4(this.instanceDataBuffer.f32View, this.instanceDataBuffer.ptr, inst.objectMatrix);
+                this.instanceDataBuffer.ptr += fillVec4v(this.instanceDataBuffer.f32View, this.instanceDataBuffer.ptr, inst.rgba);
+                this.instanceDataBuffer.ptr += fillVec4(this.instanceDataBuffer.f32View, this.instanceDataBuffer.ptr, inst.directionLights[0], inst.directionLights[1], inst.directionLights[2], inst.directionLights[3]);
+                this.instanceDataBuffer.f32View[this.instanceDataBuffer.ptr++] = inst.lodMorphFactor;
+            }
+
+            renderInst.setVertexInput(
                 tieGeometry.inputLayout,
-                [{ buffer: tieGeometry.vertexBuffer, byteOffset: 0 }],
+                [
+                    { buffer: tieGeometry.vertexBuffer, byteOffset: 0 },
+                    { buffer: this.instanceDataBuffer.gfxBuffer, byteOffset: instanceDataStartBytes },
+                ],
                 null,
             );
 
-            const batchSizes = batches(tieInstancesToDraw.length, MAX_TIE_INSTANCES);
-            let ptr = 0;
-            for (let i = 0; i < batchSizes.length; i++) {
-                const batchSize = batchSizes[i];
+            renderInst.setSamplerBindings(0, nArray(tieInstanceBatch.textureIndices.length, j => ({
+                gfxTexture: this.textures.tieTextures[textureIndices[j]],
+                gfxSampler: this.samplerWrap
+            })));
 
-                const renderInst = this.renderHelper.renderInstManager.newRenderInst();
-                const uniformBufferSize =
-                    // matrix
-                    (16 * MAX_TIE_INSTANCES) +
-                    // directional light indices
-                    (4 * MAX_TIE_INSTANCES) +
-                    // rgba
-                    (4 * MAX_TIE_INSTANCES) +
-                    // extras
-                    (4 * MAX_TIE_INSTANCES);
-                const tieParams = renderInst.allocateUniformBufferF32(TieProgram.ub_TieParams, uniformBufferSize);
-                let tieParamsOffset = 0;
-                for (let j = 0; j < batchSize; j++) {
-                    const inst = tieInstancesToDraw[ptr + j];
-                    tieParamsOffset += fillMatrix4x4(tieParams, tieParamsOffset, inst.objectMatrix);
-                    tieParamsOffset += fillVec4(tieParams, tieParamsOffset, inst.directionLights[0], inst.directionLights[1], inst.directionLights[2], inst.directionLights[3]);
-                    tieParamsOffset += fillVec4v(tieParams, tieParamsOffset, inst.rgba);
-                    tieParamsOffset += fillVec4(tieParams, tieParamsOffset, inst.lodMorphFactor, 0, 0, 0);
-                }
-                ptr += batchSize;
-                renderInst.setInstanceCount(batchSize);
-
-                let requiredSamplers = 16;
-                while (requiredSamplers && tieInstanceBatch.textureIndices[requiredSamplers - 1] === 0xFF) requiredSamplers--; // truncate the texture array at the last non-0xFF value
-                renderInst.setSamplerBindings(0, nArray(requiredSamplers, j => ({
-                    gfxTexture: this.textures.tieTextures[textureIndices[j]],
-                    gfxSampler: this.samplerWrap
-                })));
-
-                renderInst.setDrawCount(tieGeometry.triangleCount * 3, 0);
-                this.renderInstList.submitRenderInst(renderInst);
-            }
-            this.renderHelper.renderInstManager.popTemplate();
+            renderInst.setInstanceCount(tieInstancesToDraw.length);
+            renderInst.setDrawCount(tieGeometry.vertexCount, 0);
+            this.renderInstList.submitRenderInst(renderInst);
         }
     }
 
@@ -524,76 +478,42 @@ class RatchetAndClank1Scene implements SceneGfx {
             })
         }
 
-        const template1 = this.renderHelper.pushTemplateRenderInst();
-        template1.setBindingLayouts([
-            { numSamplers: 16, numUniformBuffers: 2 },
+        if (!shrubInstancesToDraw.length) return;
+
+        const renderInst = this.renderHelper.renderInstManager.newRenderInst();
+        renderInst.setBindingLayouts([
+            { numSamplers: 16, numUniformBuffers: 1 },
         ]);
-        template1.setGfxProgram(this.shrubProgram);
-        template1.setMegaStateFlags({
-            cullMode: GfxCullMode.None,
-            attachmentsState: [{
-                channelWriteMask: GfxChannelWriteMask.AllChannels,
-                rgbBlendState: {
-                    blendMode: GfxBlendMode.Add,
-                    blendSrcFactor: GfxBlendFactor.SrcAlpha,
-                    blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
-                },
-                alphaBlendState: {
-                    blendMode: GfxBlendMode.Add,
-                    blendSrcFactor: GfxBlendFactor.One,
-                    blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
-                },
-            }]
-        });
-        template1.setVertexInput(
+        renderInst.setGfxProgram(this.shrubProgram);
+
+        // per instance data
+        const instanceDataStartBytes = this.instanceDataBuffer.ptr * 4;
+        for (let i = 0; i < shrubInstancesToDraw.length; i++) {
+            const inst = shrubInstancesToDraw[i];
+            const color = inst.rgb;
+            this.instanceDataBuffer.ptr += fillMatrix4x4(this.instanceDataBuffer.f32View, this.instanceDataBuffer.ptr, inst.objectMatrix);
+            this.instanceDataBuffer.ptr += fillVec4(this.instanceDataBuffer.f32View, this.instanceDataBuffer.ptr, color.r / 0x40, color.g / 0x40, color.b / 0x40, 1);
+            this.instanceDataBuffer.ptr += fillVec4(this.instanceDataBuffer.f32View, this.instanceDataBuffer.ptr, inst.directionalLights[0], inst.directionalLights[1], inst.directionalLights[2], inst.directionalLights[3]);
+            this.instanceDataBuffer.f32View[this.instanceDataBuffer.ptr++] = inst.lodAlpha;
+        }
+
+        renderInst.setVertexInput(
             shrubGeometry.inputLayout,
-            [{ buffer: shrubGeometry.vertexBuffer, byteOffset: 0 }],
+            [
+                { buffer: shrubGeometry.vertexBuffer, byteOffset: 0 },
+                { buffer: this.instanceDataBuffer.gfxBuffer, byteOffset: instanceDataStartBytes },
+            ],
             null,
         );
 
-        const batchSizes = batches(shrubInstancesToDraw.length, MAX_SHRUB_INSTANCES);
-        let i = 0;
-        for (const batchSize of batchSizes) {
-            const template2 = this.renderHelper.pushTemplateRenderInst();
-            const size =
-                // matrix
-                (16 * MAX_SHRUB_INSTANCES) +
-                // rgb
-                (4 * MAX_SHRUB_INSTANCES) +
-                // dir lights
-                (4 * MAX_SHRUB_INSTANCES) +
-                // extras
-                (4 * MAX_SHRUB_INSTANCES);
-            const shrubParams = template2.allocateUniformBufferF32(ShrubProgram.ub_ShrubParams, size * 2);
-            let shrubParamsOffset = 0;
-            for (let j = 0; j < batchSize; j++) {
-                const inst = shrubInstancesToDraw[i + j];
-                const color = inst.rgb;
-                shrubParamsOffset += fillMatrix4x4(shrubParams, shrubParamsOffset, inst.objectMatrix);
-                shrubParamsOffset += fillVec4(shrubParams, shrubParamsOffset, color.r / 0x40, color.g / 0x40, color.b / 0x40, 1);
-                shrubParamsOffset += fillVec4(shrubParams, shrubParamsOffset, inst.directionalLights[0], inst.directionalLights[1], inst.directionalLights[2], inst.directionalLights[3]);
-                shrubParamsOffset += fillVec4(shrubParams, shrubParamsOffset, inst.lodAlpha, 0, 0, 0);
-            }
+        renderInst.setSamplerBindings(0, nArray(shrubInstanceBatch.textureIndices.length, j => ({
+            gfxTexture: this.textures.shrubTextures[textureIndices[j]],
+            gfxSampler: this.samplerWrap
+        })));
 
-            i += batchSize;
-            template2.setInstanceCount(batchSize);
-
-            const renderInst = this.renderHelper.renderInstManager.newRenderInst();
-
-            let requiredSamplers = 16;
-            while (requiredSamplers && shrubInstanceBatch.textureIndices[requiredSamplers - 1] === 0xFF) requiredSamplers--; // truncate the texture array at the last non-0xFF value
-            renderInst.setSamplerBindings(0, nArray(requiredSamplers, j => ({
-                gfxTexture: this.textures.shrubTextures[textureIndices[j]],
-                gfxSampler: this.samplerWrap
-            })));
-
-            renderInst.setDrawCount(shrubGeometry.vertexCount, 0);
-            this.renderInstList.submitRenderInst(renderInst);
-
-            this.renderHelper.renderInstManager.popTemplate();
-        }
-
-        this.renderHelper.renderInstManager.popTemplate();
+        renderInst.setDrawCount(shrubGeometry.vertexCount, 0);
+        renderInst.setInstanceCount(shrubInstancesToDraw.length);
+        this.renderInstList.submitRenderInst(renderInst);
     }
 
     private renderSky(cameraPosition: vec3, skyShellIndex: number): void {
@@ -661,6 +581,22 @@ class RatchetAndClank1Scene implements SceneGfx {
         this.renderHelper.debugDraw.beginFrame(viewerInput.camera.projectionMatrix, viewerInput.camera.viewMatrix, viewerInput.backbufferWidth, viewerInput.backbufferHeight);
 
         const template = this.renderHelper.pushTemplateRenderInst();
+        template.setMegaStateFlags({
+            cullMode: GfxCullMode.None,
+            attachmentsState: [{
+                channelWriteMask: GfxChannelWriteMask.AllChannels,
+                rgbBlendState: {
+                    blendMode: GfxBlendMode.Add,
+                    blendSrcFactor: GfxBlendFactor.SrcAlpha,
+                    blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
+                },
+                alphaBlendState: {
+                    blendMode: GfxBlendMode.Add,
+                    blendSrcFactor: GfxBlendFactor.One,
+                    blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
+                },
+            }]
+        })
         template.setBindingLayouts([
             { numSamplers: 1, numUniformBuffers: 2 },
         ]);
@@ -705,6 +641,7 @@ class RatchetAndClank1Scene implements SceneGfx {
             }
         }
 
+        this.instanceDataBuffer.upload();
 
         const builder = this.renderHelper.renderGraph.newGraphBuilder();
         const mainColorDesc = makeBackbufferDescSimple(GfxrAttachmentSlot.Color0, viewerInput, standardFullClearRenderPassDescriptor);
@@ -826,6 +763,8 @@ class RatchetAndClank1Scene implements SceneGfx {
                 device.destroyTexture(texture);
             }
         }
+
+        this.instanceDataBuffer.destroy();
 
         this.textureHolder.destroy(device);
 

@@ -1,6 +1,5 @@
 import { mat4, ReadonlyMat4, vec3, vec4 } from "gl-matrix";
-import { PaletteTexture } from "./level-builder";
-import { GfxDevice, GfxFormat, GfxTexture, makeTextureDescriptor2D } from "../gfx/platform/GfxPlatform";
+import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice, GfxFormat, GfxTexture, makeTextureDescriptor2D } from "../gfx/platform/GfxPlatform";
 import { Color } from "../Color";
 
 // rotate the whole world 90 degrees
@@ -29,38 +28,10 @@ export function getBits(value: number, startBit: number, endBit: number) {
     return (value >> startBit) & ((1 << (endBit - startBit + 1)) - 1);
 }
 
-export function makeTextureWithPalette(device: GfxDevice, texture: PaletteTexture): { pixelsTexture: GfxTexture } {
-    const gfxTexture = device.createTexture(makeTextureDescriptor2D(GfxFormat.U8_RGBA_NORM, texture.textureEntry.width, texture.textureEntry.height, 1));
-    device.setResourceName(gfxTexture, texture.name);
-    const palettedPixels = new Uint32Array(texture.textureEntry.width * texture.textureEntry.height);
-    for (let i = 0; i < palettedPixels.length; i++) {
-        const paletteIndex = texture.pixels[i];
-        const rgba = texture.palette[paletteIndex];
-        palettedPixels[i] = rgba.r | (rgba.g << 8) | (rgba.b << 16) | (rgba.a << 24);
-    }
-    const asUint8 = new Uint8Array(palettedPixels.buffer, palettedPixels.byteOffset, palettedPixels.byteLength);
-    device.uploadTextureData(gfxTexture, 0, [asUint8]);
-    return {
-        pixelsTexture: gfxTexture
-    };
-}
-
-
 export function distanceToCamera(position: vec3, cameraPosition: vec3) {
     const toCamera = vec3.create();
     vec3.sub(toCamera, position, cameraPosition);
     return vec3.len(toCamera);
-}
-
-// divide count into batches of at most batchSize, returning an array of sizes
-export function batches(count: number, batchSize: number) {
-    if (batchSize <= 0) throw new Error('batchSize must be greater than 0');
-    const result = [];
-    while (count > 0) {
-        result.push(Math.min(count, batchSize));
-        count -= batchSize;
-    }
-    return result;
 }
 
 export function pathToDebugLines(points: { x: number, y: number, z: number }[], color: Color): { from: vec3, to: vec3, color: Color }[] {
@@ -75,4 +46,65 @@ export function pathToDebugLines(points: { x: number, y: number, z: number }[], 
         lines.push({ from, to, color });
     }
     return lines;
+}
+
+export function truncateTrailing0xFF(arr: number[]): number[] {
+    const copy = arr.slice();
+    while (copy.length > 0 && copy[copy.length - 1] === 0xFF) {
+        copy.pop();
+    }
+    return copy;
+}
+
+export type MegaBuffer = {
+    /**
+     * Pointer in floats.
+     */
+    ptr: number,
+    buffer: ArrayBuffer,
+    f32View: Float32Array,
+    u8View: Uint8Array,
+    gfxBuffer: GfxBuffer,
+
+    /**
+     * Uploads the used portion of the buffer and resets the pointer to 0.
+     */
+    upload: () => void,
+
+    destroy: () => void,
+};
+
+/**
+ * Create a shared buffer for uploading instance data.
+ */
+export function createMegaBuffer(device: GfxDevice, name: string, initialSizeInBytes: number): MegaBuffer {
+    let byteSize = initialSizeInBytes;
+    const gfxBuffer = device.createBuffer(byteSize, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Dynamic);
+    device.setResourceName(gfxBuffer, name);
+
+    const arrayBuffer = new ArrayBuffer(byteSize);
+    const f32View = new Float32Array(arrayBuffer);
+    const u8View = new Uint8Array(arrayBuffer);
+
+    const megaBuffer: MegaBuffer = {
+        ptr: 0,
+        buffer: arrayBuffer,
+        f32View,
+        u8View,
+        gfxBuffer,
+
+        upload() {
+            if (this.ptr === 0) return;
+            if (this.ptr * 4 > byteSize) {
+                throw new Error(`Buffer overflow`);
+            }
+            device.uploadBufferData(this.gfxBuffer, 0, this.u8View, 0, this.ptr * 4);
+            this.ptr = 0;
+        },
+
+        destroy() {
+            device.destroyBuffer(this.gfxBuffer);
+        }
+    };
+    return megaBuffer;
 }

@@ -6,9 +6,7 @@ import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { DeviceProgram } from "../Program";
 import { assert, nArray } from "../util";
 import { RatchetShaderLib } from "./shader-lib";
-import { ShrubClass, ShrubPacketCommand, ShrubPacketCommandTypes, ShrubTexturePrimitive, ShrubVertex } from "./structs-core";
-
-export const MAX_SHRUB_INSTANCES = 32;
+import { ShrubClass, ShrubPacketCommand, ShrubPacketCommandTypes, ShrubVertex } from "./structs-core";
 
 export class ShrubProgram extends DeviceProgram {
     public static a_Position = 0;
@@ -16,18 +14,44 @@ export class ShrubProgram extends DeviceProgram {
     public static a_TextureIndex = 2;
     public static a_ST = 3;
 
-    public static elementsPerVertex = 9; // position.xyz, normal.xyz, ts.xy, texture index
+    public static elementsPerVertex = 9; // position (3), normal (3), texture index (1), st (2)
+
+    public static a_InstanceTransform0 = 4;
+    public static a_InstanceTransform1 = 5;
+    public static a_InstanceTransform2 = 6;
+    public static a_InstanceTransform3 = 7;
+    public static a_InstanceAmbientRgba = 8;
+    public static a_InstanceDirectionLights = 9;
+    public static a_InstanceLodAlpha = 10;
+
+    public static elementsPerInstance = 25; // transform (16), ambient rgba (4), directional lights (4), lod alpha (1)
 
     public static ub_SceneParams = 0;
     public static ub_ShrubParams = 1;
 
+    public override both = `
+${GfxShaderLibrary.MatrixLibrary}
+${RatchetShaderLib.SceneParams}
+
+${nArray(16, i => `
+layout(location = ${i}) uniform sampler2D u_Texture${i};
+`).join('\n')}
+`;
+
     public override vert = `
-${ShrubProgram.Common}
 
 layout(location = ${ShrubProgram.a_Position}) in vec3 a_Position;
 layout(location = ${ShrubProgram.a_Normal}) in vec3 a_Normal;
 layout(location = ${ShrubProgram.a_TextureIndex}) in float a_TextureIndex;
 layout(location = ${ShrubProgram.a_ST}) in vec2 a_ST;
+
+layout(location = ${ShrubProgram.a_InstanceTransform0}) in vec4 a_InstanceTransform0;
+layout(location = ${ShrubProgram.a_InstanceTransform1}) in vec4 a_InstanceTransform1;
+layout(location = ${ShrubProgram.a_InstanceTransform2}) in vec4 a_InstanceTransform2;
+layout(location = ${ShrubProgram.a_InstanceTransform3}) in vec4 a_InstanceTransform3;
+layout(location = ${ShrubProgram.a_InstanceAmbientRgba}) in vec4 a_InstanceAmbientRgba;
+layout(location = ${ShrubProgram.a_InstanceDirectionLights}) in vec4 a_InstanceDirectionLights;
+layout(location = ${ShrubProgram.a_InstanceLodAlpha}) in float a_InstanceLodAlpha;
 
 flat out int v_TextureIndex;
 out vec2 v_ST;
@@ -38,25 +62,26 @@ out float v_LodAlpha;
 ${RatchetShaderLib.LightingFunctions}
 
 void main() {
-    mat4 instanceTransform = UnpackMatrix(u_ShrubInstances[gl_InstanceID].transform);
+    Mat4x4 _instanceTransform = Mat4x4(a_InstanceTransform0, a_InstanceTransform1, a_InstanceTransform2, a_InstanceTransform3);
+    mat4 instanceTransform = UnpackMatrix(_instanceTransform);
     vec4 t_PositionWorld = instanceTransform * vec4(a_Position.xyz, 1.0f);
     gl_Position = UnpackMatrix(u_ClipFromWorld) * t_PositionWorld;
     vec3 normal = normalize(inverse(transpose(mat3(instanceTransform))) * a_Normal);
 
     // not sure about dividing by 4
-    vec3 rgb = u_ShrubInstances[gl_InstanceID].ambientRgba.rgb / 4.0;
-    vec4 lights = u_ShrubInstances[gl_InstanceID].directionLights;
+    vec3 rgb = a_InstanceAmbientRgba.rgb / 4.0;
+    vec4 lights = a_InstanceDirectionLights;
 
     v_ST = a_ST.xy;
     v_Rgb = commonVertexLighting(rgb, normal, lights, 1.0);
     v_Normal = normal;
-    v_LodAlpha = u_ShrubInstances[gl_InstanceID].extraData.x;
+    v_LodAlpha = a_InstanceLodAlpha;
     v_TextureIndex = int(a_TextureIndex);
 }
 `;
 
     public override frag = `
-${ShrubProgram.Common}
+
 flat in int v_TextureIndex;
 in vec2 v_ST;
 in vec3 v_Rgb;
@@ -82,26 +107,6 @@ void main() {
 
 `;
 
-    public static Common = `
-${GfxShaderLibrary.MatrixLibrary}
-${RatchetShaderLib.SceneParams}
-
-struct ShrubInstance {
-    Mat4x4 transform;
-    vec4 ambientRgba;
-    vec4 directionLights; // 4 dir lights per instance
-    vec4 extraData; // x = lodAlpha
-};
-
-layout(std140) uniform ub_ShrubParams {
-    ShrubInstance u_ShrubInstances[${MAX_SHRUB_INSTANCES}];
-};
-
-${nArray(16, i => `
-layout(location = ${i}) uniform sampler2D u_Texture${i};
-`).join('\n')}
-`;
-
 }
 
 export class ShrubGeometry {
@@ -121,36 +126,23 @@ export class ShrubGeometry {
 
         this.inputLayout = cache.createInputLayout({
             vertexAttributeDescriptors: [
-                {
-                    location: ShrubProgram.a_Position,
-                    format: GfxFormat.F32_RGB,
-                    bufferByteOffset: 0,
-                    bufferIndex: 0,
-                },
-                {
-                    location: ShrubProgram.a_Normal,
-                    format: GfxFormat.F32_RGB,
-                    bufferByteOffset: 3 * 4,
-                    bufferIndex: 0,
-                },
-                {
-                    location: ShrubProgram.a_TextureIndex,
-                    format: GfxFormat.F32_R,
-                    bufferByteOffset: 6 * 4,
-                    bufferIndex: 0,
-                },
-                {
-                    location: ShrubProgram.a_ST,
-                    format: GfxFormat.F32_RG,
-                    bufferByteOffset: 7 * 4,
-                    bufferIndex: 0,
-                },
+                // per vertex
+                { location: ShrubProgram.a_Position, format: GfxFormat.F32_RGB, bufferByteOffset: 0, bufferIndex: 0, },
+                { location: ShrubProgram.a_Normal, format: GfxFormat.F32_RGB, bufferByteOffset: 3 * 4, bufferIndex: 0, },
+                { location: ShrubProgram.a_TextureIndex, format: GfxFormat.F32_R, bufferByteOffset: 6 * 4, bufferIndex: 0, },
+                { location: ShrubProgram.a_ST, format: GfxFormat.F32_RG, bufferByteOffset: 7 * 4, bufferIndex: 0, },
+                // per instance
+                { location: ShrubProgram.a_InstanceTransform0, format: GfxFormat.F32_RGBA, bufferByteOffset: 0 * 4, bufferIndex: 1, },
+                { location: ShrubProgram.a_InstanceTransform1, format: GfxFormat.F32_RGBA, bufferByteOffset: 4 * 4, bufferIndex: 1, },
+                { location: ShrubProgram.a_InstanceTransform2, format: GfxFormat.F32_RGBA, bufferByteOffset: 8 * 4, bufferIndex: 1, },
+                { location: ShrubProgram.a_InstanceTransform3, format: GfxFormat.F32_RGBA, bufferByteOffset: 12 * 4, bufferIndex: 1, },
+                { location: ShrubProgram.a_InstanceAmbientRgba, format: GfxFormat.F32_RGBA, bufferByteOffset: 16 * 4, bufferIndex: 1, },
+                { location: ShrubProgram.a_InstanceDirectionLights, format: GfxFormat.F32_RGBA, bufferByteOffset: 20 * 4, bufferIndex: 1, },
+                { location: ShrubProgram.a_InstanceLodAlpha, format: GfxFormat.F32_R, bufferByteOffset: 24 * 4, bufferIndex: 1, },
             ],
             vertexBufferDescriptors: [
-                {
-                    byteStride: ShrubProgram.elementsPerVertex * 0x4,
-                    frequency: GfxVertexBufferFrequency.PerVertex,
-                },
+                { byteStride: ShrubProgram.elementsPerVertex * 0x4, frequency: GfxVertexBufferFrequency.PerVertex, },
+                { byteStride: ShrubProgram.elementsPerInstance * 0x4, frequency: GfxVertexBufferFrequency.PerInstance, },
             ],
 
             indexBufferFormat: null,
