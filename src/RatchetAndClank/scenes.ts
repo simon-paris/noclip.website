@@ -561,9 +561,11 @@ class RatchetAndClank1Scene implements SceneGfx {
                 [{ buffer: skyShellGeometry.vertexBuffer, byteOffset: 0 }],
                 { buffer: skyShellGeometry.indexBuffer, byteOffset: 0 },
             );
-            renderInst.setSamplerBindings(0, [
-                { gfxTexture: this.textures.skyTextures[draw.material], gfxSampler: this.samplerClamp }
-            ]);
+            if (skyShellGeometry.hasTexture) {
+                renderInst.setSamplerBindings(0, [
+                    { gfxTexture: this.textures.skyTextures[draw.material], gfxSampler: this.samplerClamp }
+                ]);
+            }
             renderInst.setDrawCount(draw.indexCount, draw.startIndex);
             this.renderInstList.submitRenderInst(renderInst);
         }

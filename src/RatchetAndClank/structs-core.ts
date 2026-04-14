@@ -1,8 +1,9 @@
 import { IS_DEVELOPMENT } from "../BuildVersion";
 import { GsPrimitiveType } from "../Common/PS2/GS";
 import { DataViewExt } from "../DataViewExt";
-import { getBit, getBits, truncateTrailing0xFF } from "./utils";
-import { isUnpackCommand, readVifCommandList, readVifStrowData, readVifUnpackData, VifVnVl } from "./vif";
+import { assert } from "../util";
+import { getBits, ImaginaryGsCommand, ImaginaryGsCommandBuffer, truncateTrailing0xFF } from "./utils";
+import { readVifCommandList, readVifStrowData, vifUnpacks, VifVnVl } from "./vif";
 
 export type LevelCoreHeader = ReturnType<typeof readLevelCoreHeader>;
 export const SIZEOF_LEVEL_CORE_HEADER = 0xbc;
@@ -122,7 +123,7 @@ export type TieClass = {
     bsphere: { x: number, y: number, z: number, w: number },
     scale: number,
     packets: TiePacket[][], // [lod][packet]
-    adGifs: TieAdGifs[],
+    adGifs: TieGifAds[],
 };
 export type TiePacket = {
     header: TiePacketHeader,
@@ -216,59 +217,40 @@ export function readTiePacketHeader(view: DataViewExt): TiePacketHeader {
     };
 }
 
-export const TiePacketCommandTypes = {
-    PRIMITIVE_RESET: 1,
-    SET_MATERIAL: 2,
-    VERTEX: 3,
-} as const;
+export type TieImaginaryGsCommand = ImaginaryGsCommand<TieStrip, number, { vertex: TieVertex, normalIndex: number }>
 
-export type TiePacketCommand = {
-    type: typeof TiePacketCommandTypes.PRIMITIVE_RESET,
-    size: number,
-    value: TieStrip
-} | {
-    type: typeof TiePacketCommandTypes.SET_MATERIAL,
-    size: number,
-    value: number
-} | {
-    type: typeof TiePacketCommandTypes.VERTEX,
-    size: number,
-    value: { vertex: TieVertex, normalIndex: number }
-}
-
-const TieCommandSizes = {
-    [TiePacketCommandTypes.PRIMITIVE_RESET]: 1,
-    [TiePacketCommandTypes.SET_MATERIAL]: 6,
-    [TiePacketCommandTypes.VERTEX]: 3,
+const tieCommandSizes = {
+    primativeReset: 1,
+    setMaterial: 6,
+    vertex: 3,
 }
 
 export type TiePacketBody = ReturnType<typeof readTiePacketBody>;
 export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketHeader, oClass: number, lod: number, packetIndex: number) {
     /*
-        // unsized
-        packed struct TiePacketBody {
-            // 0x0
-            i32 adGifDestOffsets[4];
-            // 0x10
-            i32 adGifSrcOffsets[4];
-            // 0x20
-            TieUnpackHeader tieUnpackHeader;
-            // 0x2c
-            TieStrip tieStrips[tieUnpackHeader.stripCount];
-            // align 0x10
-            TieDinkyVertex dinkyVerts[tieUnpackHeader.dinkyVertexCount];
-            TieFatVertex fatVerts[tieUnpackHeader.fatVertexCount];
-            // align 0x10
-            u8 dinkyNormalIndices[tieUnpackHeader.dinkyVertexCount];
-            // align 0x4
-            uint8vec4 fatNormalIndices[tieUnpackHeader.fatVertexCount];
-            // align 0x10
-            u8 dinkyNormalIndices[tieUnpackHeader.dinkyVertexCount];
-            // align 0x4
-            uint8vec4 fatNormalIndices[tieUnpackHeader.fatVertexCount];
-            // align 0x10
-            u8 unknown[?];
-        }
+    packed struct TiePacketBody {
+        // 0x0
+        i32 adGifDestOffsets[4];
+        // 0x10
+        i32 adGifSrcOffsets[4];
+        // 0x20
+        TieUnpackHeader tieVuHeader;
+        // 0x2c
+        TieStrip tieStrips[tieVuHeader.stripCount];
+        // align 0x10
+        TieRegularVertex regularVerts[tieVuHeader.regularVertexCount];
+        TieMorphingVertex morphingVerts[tieVuHeader.morphingVertexCount];
+        // align 0x10
+        u8 regularNormalIndices[tieVuHeader.regularVertexCount];
+        // align 0x4
+        uint8vec4 morphingNormalIndices[tieVuHeader.morphingVertexCount];
+        // align 0x10
+        u8 regularUnknown[tieVuHeader.regularVertexCount];
+        // align 0x4
+        uint8vec4 morphingUnknown[tieVuHeader.morphingVertexCount];
+        // align 0x10
+        u8 unknown[?];
+    }
     */
 
     let ptr = 0;
@@ -284,91 +266,69 @@ export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketH
     const adGifSrcOffsets = view.getArrayOfNumbers(ptr, AD_GIFS, Int32Array)
     ptr += AD_GIFS * 0x4;
 
-    const tieUnpackHeader = readTieUnpackHeader(view.subview(ptr));
+    const tieVuHeader = readTieVuHeader(view.subview(ptr));
     ptr += SIZEOF_TIE_UNPACK_HEADER;
 
-    const tieStrips = view.subdivide(ptr, tieUnpackHeader.stripCount, SIZEOF_TIE_STRIP).map(readTieStrip);
-    ptr += tieUnpackHeader.stripCount * SIZEOF_TIE_STRIP;
+    const tieStrips = view.subdivide(ptr, tieVuHeader.stripCount, SIZEOF_TIE_STRIP).map(readTieStrip);
+    ptr += tieVuHeader.stripCount * SIZEOF_TIE_STRIP;
 
     // dinky verts
     alignTo(0x10);
-    const dinkyVertexCount = tieUnpackHeader.dinkyVertexCount;
-    const dinkyVerts = view.subdivide(ptr, dinkyVertexCount, SIZEOF_TIE_DINKY_VERTEX).map(readTieDinkyVertex);
-    ptr += dinkyVertexCount * SIZEOF_TIE_DINKY_VERTEX;
+    const regularVertexCount = tieVuHeader.regularVertexCount;
+    const regularVerts = view.subdivide(ptr, regularVertexCount, SIZEOF_TIE_REGULAR_VERTEX).map(readTieRegularVertex);
+    ptr += regularVertexCount * SIZEOF_TIE_REGULAR_VERTEX;
 
     // fat verts
-    const fatVertexCount = tieUnpackHeader.fatVertexCount;
-    const fatVerts = view.subdivide(ptr, fatVertexCount, SIZEOF_TIE_FAT_VERTEX).map(readTieFatVertex);
-    ptr += fatVertexCount * SIZEOF_TIE_FAT_VERTEX;
+    const morphingVertexCount = tieVuHeader.morphingVertexCount;
+    const morphingVerts = view.subdivide(ptr, morphingVertexCount, SIZEOF_TIE_MORPHING_VERTEX).map(readTieMorphingVertex);
+    ptr += morphingVertexCount * SIZEOF_TIE_MORPHING_VERTEX;
 
     // indices into the tie's normal array
     alignTo(0x10);
-    const dinkyNormalIndices = view.subdivide(ptr, tieUnpackHeader.dinkyVertexCount, 0x1).map(view => view.getUint8(0));
-    ptr += tieUnpackHeader.dinkyVertexCount * 0x1;
+    const regularNormalIndices = view.subdivide(ptr, tieVuHeader.regularVertexCount, 0x1).map(view => view.getUint8(0));
+    ptr += tieVuHeader.regularVertexCount * 0x1;
     alignTo(0x4);
-    const fatNormalIndices = view.subdivide(ptr, tieUnpackHeader.fatVertexCount, 0x4).map(view => view.getUint8_Xyz(0));
-    ptr += tieUnpackHeader.fatVertexCount * 0x4;
+    const morphingNormalIndices = view.subdivide(ptr, tieVuHeader.morphingVertexCount, 0x4).map(view => view.getUint8_Xyz(0));
+    ptr += tieVuHeader.morphingVertexCount * 0x4;
 
     // no idea what these are
     alignTo(0x10);
-    const unknownBuffer2A = view.subdivide(ptr, tieUnpackHeader.dinkyVertexCount, 0x1).map(view => view.getUint8(0));
-    ptr += tieUnpackHeader.dinkyVertexCount * 0x1;
+    const regularUnknown = view.subdivide(ptr, tieVuHeader.regularVertexCount, 0x1).map(view => view.getUint8(0));
+    ptr += tieVuHeader.regularVertexCount * 0x1;
     alignTo(0x4);
-    const unknownBuffer2B = view.subdivide(ptr, tieUnpackHeader.fatVertexCount, 0x4).map(view => view.getUint8_Xyzw(0));
-    ptr += tieUnpackHeader.fatVertexCount * 0x4;
+    const morphingUnknown = view.subdivide(ptr, tieVuHeader.morphingVertexCount, 0x4).map(view => view.getUint8_Xyzw(0));
+    ptr += tieVuHeader.morphingVertexCount * 0x4;
 
     // there's one more array of bytes after this but not sure what it is or what its length is (usually 50-60 bytes)
     alignTo(0x10);
 
-    // build command buffer
-    let bufferEnd = 0;
-    const MAX_BUFFER_SIZE = 0x100; // the max size seems to be ~185 so I'll use 256 to be safe
-    const imaginaryGpuCommandBuffer: (TiePacketCommand | null)[] = Array(MAX_BUFFER_SIZE).fill(null);
-
-    function writeCommand(offset: number, type: typeof TiePacketCommandTypes.PRIMITIVE_RESET, value: TieStrip): void;
-    function writeCommand(offset: number, type: typeof TiePacketCommandTypes.SET_MATERIAL, value: number): void;
-    function writeCommand(offset: number, type: typeof TiePacketCommandTypes.VERTEX, value: { vertex: TieVertex, normalIndex: number }): void;
-    function writeCommand(offset: number, type: TiePacketCommand["type"], value: any) {
-        if (offset >= MAX_BUFFER_SIZE) {
-            throw new Error(`Command buffer exceeds max size`);
-        }
-        if (type !== TiePacketCommandTypes.VERTEX && imaginaryGpuCommandBuffer[offset]) {
-            // vertex commands are allowed to be overwritten, other commands are not
-            throw new Error(`Expected commnad buffer slot 0x${offset.toString(16)} to be empty`);
-        }
-        if (type === TiePacketCommandTypes.SET_MATERIAL && !Number.isInteger(value)) {
-            throw new Error(`Material ID is not an integer`);
-        }
-        const size = TieCommandSizes[type];
-        imaginaryGpuCommandBuffer[offset] = { type, size, value };
-        bufferEnd = Math.max(bufferEnd, offset + size);
-    }
+    const imaginaryGsBuffer = new ImaginaryGsCommandBuffer<TieStrip, number, { vertex: TieVertex, normalIndex: number }>();
 
     // first command always sets the material to the first material
-    writeCommand(0, TiePacketCommandTypes.SET_MATERIAL, adGifSrcOffsets[0] / SIZEOF_TIE_AD_GIFS);
+    imaginaryGsBuffer.writeSetMaterial(0, tieCommandSizes.setMaterial, adGifSrcOffsets[0] / SIZEOF_TIE_AD_GIFS);
 
     // Write verts into command buffer
     // Some are written twice.
-    for (let i = 0; i < dinkyVerts.length; i++) {
-        const vertex = dinkyVerts[i];
-        const normalIndex = dinkyNormalIndices[i];
-        writeCommand(vertex.gsPacketWriteOffset, TiePacketCommandTypes.VERTEX, { vertex, normalIndex });
+    for (let i = 0; i < regularVerts.length; i++) {
+        const vertex = regularVerts[i];
+        const normalIndex = regularNormalIndices[i];
+        imaginaryGsBuffer.writeVertex(vertex.gsPacketWriteOffset, tieCommandSizes.vertex, { vertex, normalIndex }, true);
         if (vertex.gsPacketWriteOffset2 !== 0 && vertex.gsPacketWriteOffset !== vertex.gsPacketWriteOffset2) {
-            writeCommand(vertex.gsPacketWriteOffset2, TiePacketCommandTypes.VERTEX, { vertex, normalIndex });
+            imaginaryGsBuffer.writeVertex(vertex.gsPacketWriteOffset2, tieCommandSizes.vertex, { vertex, normalIndex }, true);
         }
     }
-    for (let i = 0; i < fatVerts.length; i++) {
-        const vertex = fatVerts[i];
-        const normalIndex = fatNormalIndices[i].x; // all 3 components are normal indices, not sure why there are 3, maybe to do with lod morphing
-        writeCommand(vertex.gsPacketWriteOffset, TiePacketCommandTypes.VERTEX, { vertex, normalIndex });
+    for (let i = 0; i < morphingVerts.length; i++) {
+        const vertex = morphingVerts[i];
+        const normalIndex = morphingNormalIndices[i].x; // all 3 components are normal indices, not sure why there are 3, maybe to do with lod morphing
+        imaginaryGsBuffer.writeVertex(vertex.gsPacketWriteOffset, tieCommandSizes.vertex, { vertex, normalIndex }, true);
         if (vertex.gsPacketWriteOffset2 !== 0 && vertex.gsPacketWriteOffset !== vertex.gsPacketWriteOffset2) {
-            writeCommand(vertex.gsPacketWriteOffset2, TiePacketCommandTypes.VERTEX, { vertex, normalIndex });
+            imaginaryGsBuffer.writeVertex(vertex.gsPacketWriteOffset2, tieCommandSizes.vertex, { vertex, normalIndex }, true);
         }
     }
 
     // Write primative reset commands
     for (const strip of tieStrips) {
-        writeCommand(strip.gifTagOffset, TiePacketCommandTypes.PRIMITIVE_RESET, strip);
+        imaginaryGsBuffer.writePrimativeReset(strip.gifTagOffset, tieCommandSizes.primativeReset, strip);
     }
 
     // Write material change commands
@@ -377,89 +337,49 @@ export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketH
         if (destAddr === 0) continue; // unused slot
         // destOffset[i] corresponds to srcOffset[i+1] because the first destOffset is for the first material which is implicit
         const materialId = adGifSrcOffsets[i + 1] / SIZEOF_TIE_AD_GIFS;
-        writeCommand(destAddr, TiePacketCommandTypes.SET_MATERIAL, materialId);
+        imaginaryGsBuffer.writeSetMaterial(destAddr, tieCommandSizes.setMaterial, materialId);
     }
-
-    if (IS_DEVELOPMENT) {
-        // validate
-        let expectedEmptySlots = 0;
-        let expectPrimativeRestart = true;
-        imaginaryGpuCommandBuffer.length = bufferEnd;
-        for (let i = 0; i < imaginaryGpuCommandBuffer.length; i++) {
-            const command = imaginaryGpuCommandBuffer[i];
-            if (command) {
-                if (expectedEmptySlots !== 0) {
-                    throw new Error(`Didn't expect a write to GPU command buffer at offset 0x${i.toString(16)}`);
-                }
-                if (command.type === TiePacketCommandTypes.VERTEX && expectPrimativeRestart) {
-                    throw new Error(`Expected a primative restart command before first vertex`);
-                }
-                if (command.type === TiePacketCommandTypes.PRIMITIVE_RESET) {
-                    expectPrimativeRestart = false;
-                }
-                if (command.type === TiePacketCommandTypes.SET_MATERIAL) {
-                    expectPrimativeRestart = true;
-                }
-                expectedEmptySlots += command.size;
-            } else {
-                if (expectedEmptySlots === 0) {
-                    throw new Error(`Expected a write to GPU command buffer at offset 0x${i.toString(16)}`);
-                }
-            }
-            expectedEmptySlots--;
-        }
-    }
-
-    const filteredCommandBuffer = imaginaryGpuCommandBuffer.filter((c) => !!c);
 
     return {
-        debugData: {
-            adGifDestOffsets,
-            adGifSrcOffsets,
-            tieUnpackHeader,
-            tieStrips,
-            dinkyVertexCount,
-            dinkyVerts,
-            fatVerts,
-            dinkyNormalIndices,
-            fatNormalIndices,
-            unknownBuffer2A,
-            unknownBuffer2B,
-        },
-        commandBuffer: filteredCommandBuffer,
+        adGifDestOffsets,
+        adGifSrcOffsets,
+        tieVuHeader,
+        tieStrips,
+        regularVertexCount,
+        regularVerts,
+        morphingVerts,
+        regularNormalIndices,
+        morphingNormalIndices,
+        regularUnknown,
+        morphingUnknown,
+        commandBuffer: imaginaryGsBuffer.finish(),
     }
 }
 
+export type TieVuHeader = {
+    stripCount: number,
+    dinkyVerticesSizePlusFourOverTwo: number,
+    fatVerticesSizePlusFourOverTwo: number,
+    regularVertexCount: number,
+    morphingVertexCount: number,
+}
 export const SIZEOF_TIE_UNPACK_HEADER = 0xc;
-export type TieUnpackHeader = ReturnType<typeof readTieUnpackHeader>;
-export function readTieUnpackHeader(view: DataViewExt) {
+export function readTieVuHeader(view: DataViewExt) {
     /*
-        packed_struct(TieUnpackHeader,
-            // 0x00
-            u8 unknown_0;
-            // 0x01
-            u8 unknown_2;
-            // 0x02
-            u8 unknown_4;
-            // 0x03
-            u8 strip_count;
-            // 0x04
-            u8 unknown_8;
-            // 0x05
-            u8 unknown_a;
-            // 0x06
-            u8 unknown_c;
-            // 0x07
-            u8 unknown_e;
-            // 0x08
-            u8 dinky_vertices_size_plus_four_over_two;
-            // 0x09
-            u8 fat_vertices_size_plus_four_over_two;
-            // 0x0a
-            u8 dinky_vertex_count;
-            // 0x0b
-            u8 fat_vertex_count;
-        )
+    struct TieVuHeader {
+        u8 unknown0;
+        u8 unknown1;
+        u8 unknown2;
+        u8 stripCount;
+        u8 unknown4;
+        u8 unknown5;
+        u8 unknown6;
+        u8 unknown7;
+        u8 dinkyVerticesSizePlusFourOverTwo;
+        u8 fatVerticesSizePlusFourOverTwo;
+        u8 regularVertexCount;
+        u8 morphingVertexCount;
+    }
     */
 
     return {
@@ -473,31 +393,26 @@ export function readTieUnpackHeader(view: DataViewExt) {
         unknown7: view.getUint8(0x7),
         dinkyVerticesSizePlusFourOverTwo: view.getUint8(0x8),
         fatVerticesSizePlusFourOverTwo: view.getUint8(0x9),
-        dinkyVertexCount: view.getUint8(0xa),
-        fatVertexCount: view.getUint8(0xb),
+        regularVertexCount: view.getUint8(0xa),
+        morphingVertexCount: view.getUint8(0xb),
     };
 }
 
+export type TieStrip = {
+    vertexCount: number,
+    gifTagOffset: number,
+    windingOrder: number,
+};
 export const SIZEOF_TIE_STRIP = 0x4;
-export type TieStrip = ReturnType<typeof readTieStrip>;
 export function readTieStrip(view: DataViewExt) {
     /*
-        packed_struct(TieStrip,
-            // 0x00
-            u8 vertex_count;
-            // 0x01
-            u8 pad_1;
-            // 0x02
-            u8 gif_tag_offset;
-            // 0x03
-            u8 rc34_winding_order;
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/tie.h#L124
     */
 
     return {
         vertexCount: view.getUint8(0x0),
         gifTagOffset: view.getUint8(0x2),
-        windingOrder: view.getUint8(0x1),
+        windingOrder: view.getUint8(0x1), // rac3+ only
     };
 }
 
@@ -515,27 +430,10 @@ export type TieVertex = {
     lodMorphOffsetZ: number,
 }
 
-export const SIZEOF_TIE_DINKY_VERTEX = 0x10;
-export function readTieDinkyVertex(view: DataViewExt): TieVertex {
+export const SIZEOF_TIE_REGULAR_VERTEX = 0x10;
+export function readTieRegularVertex(view: DataViewExt): TieVertex {
     /*
-        packed_struct(TieDinkyVertex,
-            // 0x00
-            s16 x;
-            // 0x02
-            s16 y;
-            // 0x04
-            s16 z;
-            // 0x06
-            u16 gs_packet_write_ofs;
-            // 0x08
-            u16 s;
-            // 0x0a
-            u16 t;
-            // 0x0c
-            u16 q;
-            // 0x0e
-            u16 gs_packet_write_ofs_2;
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/tie.h#L132
     */
 
     return {
@@ -553,35 +451,10 @@ export function readTieDinkyVertex(view: DataViewExt): TieVertex {
     };
 }
 
-export const SIZEOF_TIE_FAT_VERTEX = 0x18;
-export function readTieFatVertex(view: DataViewExt): TieVertex {
+export const SIZEOF_TIE_MORPHING_VERTEX = 0x18;
+export function readTieMorphingVertex(view: DataViewExt): TieVertex {
     /*
-        packed_struct(TieFatVertex,
-            // 0x00
-            u16 unknown_0;
-            // 0x02
-            u16 unknown_2;
-            // 0x04
-            u16 unknown_4;
-            // 0x06
-            u16 gs_packet_write_ofs;
-            // 0x08
-            s16 x;
-            // 0x0a
-            s16 y;
-            // 0x0c
-            s16 z;
-            // 0x0e
-            u16 pad_e;
-            // 0x10
-            u16 s;
-            // 0x12
-            u16 t;
-            // 0x14
-            u16 q;
-            // 0x16
-            u16 gs_packet_write_ofs_2;
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/tie.h#L144
     */
 
     return {
@@ -599,68 +472,47 @@ export function readTieFatVertex(view: DataViewExt): TieVertex {
     };
 }
 
-export type GifAdData = ReturnType<typeof readGifAdData12>;
-export function readGifAdData12(view: DataViewExt) {
-    /*  
-        packed_struct(GifAdData12,
-            // 0x0
-            s32 data_lo;
-            // 0x4
-            s32 data_hi;
-            // 0x8
-            u8 address;
-            // 0x9
-            u8 pad[3];
-        )
+export type GifAd = {
+    low: number,
+    high: number,
+    address: number,
+};
+export function readGifAdData(view: DataViewExt): GifAd {
+    /*
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/gif.h#L113
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/gif.h#L121
+    struct GifAd {
+        int32 low;
+        int32 high;
+        uint8 address;
+    }
     */
     return {
         low: view.getInt32(0x0),
         high: view.getInt32(0x4),
         address: view.getUint8(0x8),
-    }
+    };
 }
 
-export function readGifAdData16(view: DataViewExt) {
-    /*
-        // size 0x10
-        packed_struct(GifAdData16,
-            // 0x0
-            s32 data_lo;
-            // 0x4
-            s32 data_hi;
-            // 0x8
-            u8 address;
-            // 0x9
-            u8 pad[7];
-        )
-    */
-    return readGifAdData12(view);
-}
-
-export type TieAdGifs = ReturnType<typeof readTieAdGifs>;
+export type TieGifAds = {
+    tex0: GifAd,
+    tex1: GifAd,
+    miptbp1: GifAd,
+    clamp: GifAd,
+    miptbp2: GifAd,
+};
 export const SIZEOF_TIE_AD_GIFS = 0x50;
 export function readTieAdGifs(view: DataViewExt) {
     /*
-        // size 0x50
-        packed_struct(TieAdGifs,
-            // 0x00
-            GifAdData16 d1_tex0_1;
-            // 0x10
-            GifAdData16 d2_tex1_1;
-            // 0x20
-            GifAdData16 d3_miptbp1_1;
-            // 0x30
-            GifAdData16 d4_clamp_1;
-            // 0x40
-            GifAdData16 d5_miptbp2_1;
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/tie.h#L179
+    Each padded to 16 bytes
     */
     return {
-        tex0: readGifAdData16(view.subview(0x0)),
-        tex1: readGifAdData16(view.subview(0x10)),
-        miptbp1: readGifAdData16(view.subview(0x20)),
-        clamp: readGifAdData16(view.subview(0x30)),
-        miptbp2: readGifAdData16(view.subview(0x40)),
+        tex0: readGifAdData(view.subview(0x0)),
+        tex1: readGifAdData(view.subview(0x10)),
+        miptbp1: readGifAdData(view.subview(0x20)),
+        clamp: readGifAdData(view.subview(0x30)),
+        miptbp2: readGifAdData(view.subview(0x40)),
     }
 }
 
@@ -668,16 +520,7 @@ export const SIZEOF_TFRAG_BLOCK_HEADER = 0x10;
 export type TfragBlockHeader = ReturnType<typeof readTfragBlockHeader>;
 export function readTfragBlockHeader(view: DataViewExt) {
     /*
-        packed_struct(TfragBlockHeader,
-            // 0x0
-            s32 table_offset;
-            // 0x4
-            s32 tfrag_count;
-            // 0x8
-            f32 thingy;
-            // 0xc
-            u32 mysterious_second_thingy;
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/tfrag_low.h#L29
     */
 
     return {
@@ -690,78 +533,7 @@ export const SIZEOF_TFRAG_HEADER = 0x40;
 export type TfragHeader = ReturnType<typeof readTfragHeader>;
 export function readTfragHeader(view: DataViewExt) {
     /*
-        packed_struct(TfragHeader,
-            // 0x00
-            Vec4f bsphere;
-            // 0x10
-            s32 data;
-            // 0x14
-            u16 lod_2_ofs;
-            // 0x16
-            u16 shared_ofs;
-            // 0x18
-            u16 lod_1_ofs;
-            // 0x1a
-            u16 lod_0_ofs;
-            // 0x1c
-            u16 tex_ofs;
-            // 0x1e
-            u16 rgba_ofs;
-            // 0x20
-            u8 common_size;
-            // 0x21
-            u8 lod_2_size;
-            // 0x22
-            u8 lod_1_size;
-            // 0x23
-            u8 lod_0_size;
-            // 0x24
-            u8 lod_2_rgba_count;
-            // 0x25
-            u8 lod_1_rgba_count;
-            // 0x26
-            u8 lod_0_rgba_count;
-            // 0x27
-            u8 base_only;
-            // 0x28
-            u8 texture_count;
-            // 0x29
-            u8 rgba_size;
-            // 0x2a
-            u8 rgba_verts_loc;
-            // 0x2b
-            u8 occl_index_stash;
-            // 0x2c
-            u8 msphere_count;
-            // 0x2d
-            u8 flags;
-            // 0x2e
-            u16 msphere_ofs;
-            // 0x30
-            u16 light_ofs;
-            union(
-                // 0x32
-                u16 light_end_ofs_rac_gc_uya;
-                // 0x32
-                u16 light_vert_start_ofs_dl;
-            )
-            // 0x34
-            u8 dir_lights_one;
-            // 0x35
-            u8 dir_lights_upd;
-            // 0x36
-            u16 point_lights;
-            // 0x38
-            u16 cube_ofs;
-            // 0x3a
-            u16 occl_index;
-            // 0x3c
-            u8 vert_count;
-            // 0x3d
-            u8 tri_count;
-            // 0x3e
-            u16 mip_dist;
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/tfrag_low.h#L36
     */
 
     return {
@@ -801,247 +573,292 @@ export function readTfragHeader(view: DataViewExt) {
     }
 }
 
+export type TfragLight = {
+    unknown0: number,
+    azimuth: number,
+    elevation: number,
+    brightness: number,
+    directionalLights: number[],
+};
 export const SIZEOF_TFRAG_LIGHT = 0x8;
-export type TfragLight = ReturnType<typeof readTfragLight>;
-export function readTfragLight(view: DataViewExt) {
+export function readTfragLight(view: DataViewExt): TfragLight {
     /*
-        packed_struct(TfragLight,
-            // 0x0
-            s8 unknown_0;
-            // 0x1
-            s8 intensity;
-            // 0x2
-            s8 azimuth;
-            // 0x3
-            s8 elevation;
-            // 0x4
-            s16 color;
-            // 0x6
-            s16 pad;
-        )
+    struct TfragLight {
+        uint16 unknown0; // looks like a write address. Between 300 and 1400, always increases, usually by 6 at a time, always divisible by 2.
+        int8 azimuth;
+        int8 elevation;
+        uint16 brightness; // this looks like light intensity but I don't know why I'd need it
+        uint16 directionalLights; // nibble[4], list of indices into the directional light array
+    }
     */
 
     return {
-        unknown0: view.getUint16(0x0), // looks like a write address. Between 300 and 1400, always increases, usually by 6 at a time, always divisible by 2.
+        unknown0: view.getUint16(0x0),
         azimuth: view.getInt8(0x2),
         elevation: view.getInt8(0x3),
-        brightness: view.getUint16(0x4), // this looks like light intensity but I don't know why I'd need it
-        directionalLights: view.getNibbleArray(0x6, 2), // this is list of indices into the directional light array
+        brightness: view.getUint16(0x4),
+        directionalLights: view.getNibbleArray(0x6, 2),
     }
 }
 
-export type Tfrag = ReturnType<typeof readTfrag>;
+export type TfragLod = {
+    indices: Uint8Array,
+    strips: TfragStrip[],
+};
+
+export type Tfrag = {
+    header: TfragHeader,
+    rgbas: { r: number, g: number, b: number, a: number }[],
+    lights: TfragLight[],
+    dataGroup1: {
+        lod2: TfragLod,
+    },
+    dataGroup2: {
+        vuHeader: TfragVuHeader,
+        basePosition: Int32Array,
+        textures: TfragAdGifs[],
+        vertexInfoPart1: TfragVertexInfo[],
+        vertexPositionsPart1: { x: number, y: number, z: number }[],
+    },
+    dataGroup3: {
+        lod1: TfragLod,
+    },
+    dataGroup4: {
+        vertexInfoPart2: TfragVertexInfo[],
+        vertexPositionsPart2: { x: number, y: number, z: number }[],
+    },
+    dataGroup5: {
+        vertexInfoPart3: TfragVertexInfo[],
+        vertexPositionsPart3: { x: number, y: number, z: number }[],
+        lod0: TfragLod,
+    },
+}
+
 export function readTfrag(view: DataViewExt, header: TfragHeader) {
     const rgbas = view.subdivide(header.rgbaOffset, header.rgbaSize * 4, 0x4).map(view => view.getUint8_Rgba(0));
-    const lights = view.subdivide(header.lightOfs + 0x10, header.vertCount, SIZEOF_TFRAG_LIGHT).map(readTfragLight);
+    const lights = view.subdivide(header.lightOfs + 0x10, header.vertCount, SIZEOF_TFRAG_LIGHT).map(readTfragLight); // why plus 0x10?
 
     /*
-    Lod2
+    There are 5 VIF buffers concatted together
+
+    LOD2 - buffers 1 to 2
+    LOD1 - buffers 2 to 4
+    LOD0 - buffers 4 to 5
+
+    There are 4 offset/size pairs, but they overlap.
+    lod2Offset/lod2Size cover buffers 1-2
+    sharedOffset/commonSize covers buffer 2
+    lod1Offset/lod1Size cover buffers 2-4
+    lod0Offset/lod0Size cover buffers 4-5
+
+    | Buffers |---------------|---------------|---------------|---------------|---------------|
+    |     LOD2|<----------------------------->|
+    |                  Shared |<------------->|
+    |                    LOD1 |<--------------------------------------------->|
+    |                                                    LOD0 |<----------------------------->|
+
+    So we have pointers to the start of buffers 1, 2, and 4.
+    For 3, we need to use the end of the shared buffer
+    For 5, we need to use the end of the lod1 buffer
+
+    NOP padding is included, we can assume the start of one buffer is the end of the previous buffer.
+    
     */
-
-    const lod2Buffer = view.subview(header.lod2Offset, header.sharedOffset - header.lod2Offset);
-    const lod2CommandList = readVifCommandList(lod2Buffer);
-    const lod2CommandListUnpacks = lod2CommandList.filter(cmd => isUnpackCommand(cmd.cmd));
-    if (lod2CommandListUnpacks.length !== 2) {
-        throw new Error(`Incorrect number of LOD 2 VIF unpacks`);
-    }
-    const lod2Indices = {
-        data: readVifUnpackData(lod2CommandListUnpacks[0]).getTypedArrayView(Uint8Array),
-        addr: lod2CommandListUnpacks[0].unpack!.addr,
-    };
-    const lod2Strips = {
-        data: readVifUnpackData(lod2CommandListUnpacks[1]).subdivide(0, 0xFFFF, SIZEOF_TFRAG_STRIP).map(readTfragStrip),
-        addr: lod2CommandListUnpacks[1].unpack!.addr,
-    };
-
-
-    /*
-    Common
-    */
-
-    const commonBuffer = view.subview(header.sharedOffset, header.lod1Offset - header.sharedOffset);
-    const commonCommandList = readVifCommandList(commonBuffer);
-    if (commonCommandList.length <= 5) {
-        throw new Error(`Too few shared VIF commands`);
-    }
-    const basePosition = readVifStrowData(commonCommandList[5]);
-    const commonCommandListUnpacks = commonCommandList.filter(cmd => isUnpackCommand(cmd.cmd));
-    if (commonCommandListUnpacks.length !== 4) {
-        throw new Error(`Incorrect number of shared VIF unpacks`);
-    }
-    const commonVuHeader = {
-        data: readTfragHeaderUnpack(readVifUnpackData(commonCommandListUnpacks[0])),
-        addr: commonCommandListUnpacks[0].unpack!.addr,
-    };
-    const commonTextures = {
-        data: readVifUnpackData(commonCommandListUnpacks[1]).subdivide(0, 0xFFFF, SIZEOF_TFRAG_AD_GIFS).map(readTfragAdGifs),
-        addr: commonCommandListUnpacks[1].unpack!.addr,
-    };
-    const commonVertexInfo = {
-        data: readVifUnpackData(commonCommandListUnpacks[2]).subdivide(0, 0xFFFF, SIZEOF_TFRAG_VERTEX_INFO).map(readTfragVertexInfo),
-        addr: commonCommandListUnpacks[2].unpack!.addr,
-    };
-    const commonPositions = {
-        data: readVifUnpackData(commonCommandListUnpacks[3]).subdivide(0, 0xFFFF, 0x6).map(view => view.getInt16_Xyz(0)),
-        addr: commonCommandListUnpacks[3].unpack!.addr,
-    };
-    if (commonVuHeader.data.positionsCommonCount !== commonPositions.data.length) {
-        throw new Error(`Positions count doesn't match header`);
-    }
-
-    /*
-    Lod1
-    */
-
-    const lod1Buffer = view.subview(header.lod1Offset, header.lod0Offset - header.lod1Offset);
-    const lod1CommandList = readVifCommandList(lod1Buffer);
-    const lod1CommandListUnpacks = lod1CommandList.filter(cmd => isUnpackCommand(cmd.cmd));
-
-    if (lod1CommandListUnpacks.length !== 2) {
-        throw new Error(`Incorrect number of LOD 1 VIF unpacks`);
-    }
-
-    const lod1Strips = {
-        data: readVifUnpackData(lod1CommandListUnpacks[0]).subdivide(0, 0xFFFF, SIZEOF_TFRAG_STRIP).map(readTfragStrip),
-        addr: lod1CommandListUnpacks[0].unpack!.addr,
-    };
-    const lod1Indices = {
-        data: readVifUnpackData(lod1CommandListUnpacks[1]).getTypedArrayView(Uint8Array),
-        addr: lod1CommandListUnpacks[1].unpack!.addr,
-    };
-
-    /*
-    Lod 1 and 0 shared
-    */
-
-    const lod01Buffer = view.subview(header.lod0Offset, header.sharedOffset + header.lod1Size * 0x10 - header.lod0Offset);
-    const lod01CommandList = readVifCommandList(lod01Buffer);
-    const lod01CommandListUnpacks = lod01CommandList.filter(cmd => isUnpackCommand(cmd.cmd));
-
-    let lod01Positions: { data: { x: number, y: number, z: number }[]; addr: number } | null = null;
-    let lod01VertexInfo: { data: TfragVertexInfo[]; addr: number } | null = null;
-    {
-        let i = 0;
-        if (i < lod01CommandListUnpacks.length && lod01CommandListUnpacks[i].unpack!.vnvl === VifVnVl.V4_8 && commonVuHeader.data.positionsLod01Count > 0) {
-            // don't care
-            i++;
-        }
-
-        if (i < lod01CommandListUnpacks.length && lod01CommandListUnpacks[i].unpack!.vnvl === VifVnVl.V4_8 && lod01CommandListUnpacks[i].unpack!.addr) {
-            // don't care
-            i++;
-        }
-
-        if (i < lod01CommandListUnpacks.length && lod01CommandListUnpacks[i].unpack!.vnvl === VifVnVl.V4_16) {
-            lod01VertexInfo = {
-                data: readVifUnpackData(lod01CommandListUnpacks[i]).subdivide(0, 0xFFFF, SIZEOF_TFRAG_VERTEX_INFO).map(readTfragVertexInfo),
-                addr: lod01CommandListUnpacks[i].unpack!.addr,
-            };
-            i++;
-        }
-
-        if (i < lod01CommandListUnpacks.length && lod01CommandListUnpacks[i].unpack!.vnvl === VifVnVl.V3_16) {
-            lod01Positions = {
-                data: readVifUnpackData(lod01CommandListUnpacks[i]).subdivide(0, 0xFFFF, 0x6).map(view => view.getInt16_Xyz(0)),
-                addr: lod01CommandListUnpacks[i].unpack!.addr,
-            };
-            if (lod01Positions.data.length !== commonVuHeader.data.positionsLod01Count) {
-                throw new Error(`LOD 01 positions count doesn't match expected count`);
-            }
-            i++;
-        }
-    }
-
-    /*
-    Lod0
-    */
-
-    const lod0Buffer = view.subview(
+    const vifBufferPointers = [
+        header.lod2Offset,
+        header.sharedOffset,
+        header.sharedOffset + header.commonSize * 0x10,
+        header.lod0Offset,
         header.sharedOffset + header.lod1Size * 0x10,
-        header.rgbaOffset - (header.lod1Size + header.lod2Size - header.commonSize) * 0x10
-    );
-    const lod0CommandList = readVifCommandList(lod0Buffer);
-    const lod0CommandListUnpacks = lod0CommandList.filter(cmd => isUnpackCommand(cmd.cmd));
+        header.lod0Offset + header.lod0Size * 0x10,
+    ];
 
-    let i = 0;
-    let lod0Positions: { data: { x: number, y: number, z: number }[]; addr: number } | null = null;
-    let lod0Strips: { data: TfragStrip[]; addr: number } | null = null;
-    let lod0Indices: { data: Uint8Array; addr: number } | null = null;
-    let lod0VertexInfo: { data: TfragVertexInfo[]; addr: number } | null = null;
-    {
-        if (i < lod0CommandListUnpacks.length && lod0CommandListUnpacks[i].unpack!.vnvl === VifVnVl.V3_16) {
-            lod0Positions = {
-                data: readVifUnpackData(lod0CommandListUnpacks[i]).subdivide(0, 0xFFFF, 0x6).map(view => view.getInt16_Xyz(0)),
-                addr: lod0CommandListUnpacks[i].unpack!.addr,
-            };
-            if (lod0Positions.data.length !== commonVuHeader.data.positionsLod0Count) {
-                throw new Error(`LOD 0 positions count doesn't match expected count`);
-            }
-            i++;
-        }
-
-        if (i >= lod0CommandListUnpacks.length) {
-            throw new Error(`Too few LOD 0 VIF unpacks`);
-        }
-
-        lod0Strips = {
-            data: readVifUnpackData(lod0CommandListUnpacks[i]).subdivide(0, 0xFFFF, SIZEOF_TFRAG_STRIP).map(readTfragStrip),
-            addr: lod0CommandListUnpacks[i].unpack!.addr,
-        };
-        i++;
-
-        if (i >= lod0CommandListUnpacks.length) {
-            throw new Error(`Too few LOD 0 VIF unpacks`);
-        }
-
-        lod0Indices = {
-            data: readVifUnpackData(lod0CommandListUnpacks[i]).getTypedArrayView(Uint8Array),
-            addr: lod0CommandListUnpacks[i].unpack!.addr,
-        };
-        i++;
-
-        if (i < lod0CommandListUnpacks.length && lod0CommandListUnpacks[i].unpack!.vnvl === VifVnVl.V4_8 && commonVuHeader.data.positionsLod0Count > 0) {
-            // don't care
-            i++;
-        }
-
-        if (i < lod0CommandListUnpacks.length && lod0CommandListUnpacks[i].unpack!.vnvl === VifVnVl.V4_8) {
-            // don't care
-            i++;
-        }
-
-        if (i < lod0CommandListUnpacks.length && lod0CommandListUnpacks[i].unpack!.vnvl === VifVnVl.V4_16) {
-            lod0VertexInfo = {
-                data: readVifUnpackData(lod0CommandListUnpacks[i]).subdivide(0, 0xFFFF, SIZEOF_TFRAG_VERTEX_INFO).map(readTfragVertexInfo),
-                addr: lod0CommandListUnpacks[i].unpack!.addr,
-            };
-            i++;
-        }
-
+    const vifBuffers = [];
+    for (let i = 0; i < vifBufferPointers.length - 1; i++) {
+        const size = vifBufferPointers[i + 1] - vifBufferPointers[i];
+        assert(size > 0);
+        const buf = view.subview(vifBufferPointers[i], size);
+        vifBuffers.push(buf);
     }
 
-    validateTfrag(lod2Indices.data, lod2Strips.data, commonVertexInfo.data, commonPositions.data);
-    validateTfrag(lod1Indices.data, lod1Strips.data, [...commonVertexInfo.data, ...(lod01VertexInfo?.data ?? [])], [...commonPositions.data, ...(lod01Positions?.data ?? [])]);
-    validateTfrag(lod0Indices.data, lod0Strips.data, [...commonVertexInfo.data, ...(lod01VertexInfo?.data ?? []), ...(lod0VertexInfo?.data ?? [])], [...commonPositions.data, ...(lod01Positions?.data ?? []), ...(lod0Positions?.data ?? [])]);
+    const [vifBuffer1, vifBuffer2, vifBuffer3, vifBuffer4, vifBuffer5] = vifBuffers;
+
+    /*
+    VIF buffer 1
+    */
+    let dataGroup1: Tfrag["dataGroup1"];
+    {
+        const vifCommands = readVifCommandList(vifBuffer1);
+        const nextUnpack = vifUnpacks(vifCommands);
+        const lod2Indices = nextUnpack().getTypedArrayView(Uint8Array);
+        const lod2Strips = nextUnpack().subdivide(0, 0xFFFF, SIZEOF_TFRAG_STRIP).map(readTfragStrip);
+        dataGroup1 = {
+            lod2: {
+                indices: lod2Indices,
+                strips: lod2Strips,
+            },
+        };
+    }
+
+
+    /*
+    VIF buffer 2
+    */
+    let dataGroup2: Tfrag["dataGroup2"];
+    let vuHeader: TfragVuHeader;
+    {
+        const vifCommands = readVifCommandList(vifBuffer2);
+        const nextUnpack = vifUnpacks(vifCommands);
+
+        assert(vifCommands.length >= 6);
+        const basePosition = readVifStrowData(vifCommands[5]);
+
+        vuHeader = readTfragVuHeader(nextUnpack());
+        const textures = nextUnpack().subdivide(0, 0xFFFF, SIZEOF_TFRAG_AD_GIFS).map(readTfragAdGifs);
+        const vertexInfoPart1 = nextUnpack().subdivide(0, 0xFFFF, SIZEOF_TFRAG_VERTEX_INFO).map(readTfragVertexInfo);
+        const vertexPositionsPart1 = nextUnpack().subdivide(0, 0xFFFF, 0x6).map(view => view.getInt16_Xyz(0));
+        assert(vertexPositionsPart1.length === vuHeader.positionsCommonCount);
+
+        dataGroup2 = {
+            vuHeader,
+            basePosition,
+            textures,
+            vertexInfoPart1,
+            vertexPositionsPart1,
+        };
+
+        if (IS_DEVELOPMENT) {
+            validateTfrag(
+                dataGroup1.lod2.indices,
+                dataGroup1.lod2.strips,
+                dataGroup2.vertexInfoPart1,
+                dataGroup2.vertexPositionsPart1,
+            );
+        }
+    }
+
+    /*
+    VIF buffer 3
+    */
+    let dataGroup3: Tfrag["dataGroup3"];
+    {
+        const vifCommands = readVifCommandList(vifBuffer3);
+        const nextUnpack = vifUnpacks(vifCommands);
+        const lod1Strips = nextUnpack().subdivide(0, 0xFFFF, SIZEOF_TFRAG_STRIP).map(readTfragStrip)
+        const lod1Indices = nextUnpack().getTypedArrayView(Uint8Array);
+        dataGroup3 = {
+            lod1: {
+                strips: lod1Strips,
+                indices: lod1Indices,
+            },
+        };
+    }
+
+    /*
+    VIF buffer 4
+    */
+    let dataGroup4: Tfrag["dataGroup4"];
+    {
+        const vifCommands = readVifCommandList(vifBuffer4);
+        const nextUnpack = vifUnpacks(vifCommands);
+
+        if (vuHeader.positionsLod01Count > 0) {
+            assert(nextUnpack.nextVnvl() === VifVnVl.V4_8);
+            nextUnpack(); // ignore it
+        }
+
+        if (nextUnpack.hasNext() && nextUnpack.nextVnvl() === VifVnVl.V4_8 && nextUnpack.nextAddr() !== 0) {
+            nextUnpack(); // ignore it
+        }
+
+        let vertexInfoPart2: TfragVertexInfo[] | null = null;
+        if (nextUnpack.hasNext() && nextUnpack.nextVnvl() === VifVnVl.V4_16) {
+            vertexInfoPart2 = nextUnpack().subdivide(0, 0xFFFF, SIZEOF_TFRAG_VERTEX_INFO).map(readTfragVertexInfo);
+        }
+
+        let vertexPositionsPart2: { x: number, y: number, z: number }[] | null = null;
+        if (nextUnpack.hasNext() && nextUnpack.nextVnvl() === VifVnVl.V3_16) {
+            vertexPositionsPart2 = nextUnpack().subdivide(0, 0xFFFF, 0x6).map(view => view.getInt16_Xyz(0));
+            assert(vertexPositionsPart2.length === vuHeader.positionsLod01Count);
+        }
+
+        dataGroup4 = {
+            vertexInfoPart2: vertexInfoPart2 ?? [],
+            vertexPositionsPart2: vertexPositionsPart2 ?? [],
+        };
+
+        if (IS_DEVELOPMENT) {
+            validateTfrag(
+                dataGroup3.lod1.indices,
+                dataGroup3.lod1.strips,
+                [...dataGroup2.vertexInfoPart1, ...dataGroup4.vertexInfoPart2],
+                [...dataGroup2.vertexPositionsPart1, ...dataGroup4.vertexPositionsPart2],
+            );
+        }
+    }
+
+    /*
+    VIF buffer 5
+    */
+    let dataGroup5: Tfrag["dataGroup5"];
+    {
+        const vifCommands = readVifCommandList(vifBuffer5);
+        const nextUnpack = vifUnpacks(vifCommands);
+
+        let vertexPositionsPart3: { x: number, y: number, z: number }[] | null = null;
+        if (vuHeader.positionsLod0Count > 0) {
+            assert(nextUnpack.nextVnvl() === VifVnVl.V3_16);
+            const unpack = nextUnpack();
+            vertexPositionsPart3 = unpack.subdivide(0, 0xFFFF, 0x6).map(view => view.getInt16_Xyz(0));
+            assert(vertexPositionsPart3.length === vuHeader.positionsLod0Count);
+        }
+
+        const strips = nextUnpack().subdivide(0, 0xFFFF, SIZEOF_TFRAG_STRIP).map(readTfragStrip)
+        const indices = nextUnpack().getTypedArrayView(Uint8Array);
+
+        if (vuHeader.positionsLod0Count > 0) {
+            assert(nextUnpack.nextVnvl() === VifVnVl.V4_8);
+            nextUnpack(); // ignore it
+        }
+
+        if (nextUnpack.hasNext() && nextUnpack.nextVnvl() === VifVnVl.V4_8) {
+            nextUnpack(); // ignore it
+        }
+
+        let vertexInfoPart3: TfragVertexInfo[] | null = null;
+        if (vuHeader.positionsLod0Count > 0) {
+            assert(nextUnpack.nextVnvl() === VifVnVl.V4_16);
+            vertexInfoPart3 = nextUnpack().subdivide(0, 0xFFFF, SIZEOF_TFRAG_VERTEX_INFO).map(readTfragVertexInfo);
+        }
+
+        dataGroup5 = {
+            vertexInfoPart3: vertexInfoPart3 ?? [],
+            vertexPositionsPart3: vertexPositionsPart3 ?? [],
+            lod0: {
+                strips: strips,
+                indices: indices,
+            },
+        }
+
+        if (IS_DEVELOPMENT) {
+            validateTfrag(
+                dataGroup5.lod0.indices,
+                dataGroup5.lod0.strips,
+                [...dataGroup2.vertexInfoPart1, ...dataGroup4.vertexInfoPart2, ...dataGroup5.vertexInfoPart3],
+                [...dataGroup2.vertexPositionsPart1, ...dataGroup4.vertexPositionsPart2, ...dataGroup5.vertexPositionsPart3],
+            );
+        }
+    }
 
     return {
+        header,
         lights,
         rgbas,
-        lod2Indices,
-        lod2Strips,
-        basePosition,
-        commonVuHeader,
-        commonTextures,
-        commonVertexInfo,
-        commonPositions,
-        lod1Indices,
-        lod1Strips,
-        lod01Positions,
-        lod01VertexInfo,
-        lod0Positions,
-        lod0Strips,
-        lod0Indices,
-        lod0VertexInfo,
+        dataGroup1,
+        dataGroup2,
+        dataGroup3,
+        dataGroup4,
+        dataGroup5,
     };
 }
 
@@ -1051,52 +868,28 @@ function validateTfrag(indices: Uint8Array, strips: TfragStrip[], vertexInfo: Tf
 
     outer: while (true) {
         const strip = strips[stripPtr];
-        if (!strip) {
-            throw new Error(`Overran strip list`);
-        }
+        assert(strip !== undefined);
+
         switch (strip.endOfPacketFlag) {
-            case -128:
-                // last strip of packet
-                break;
-            case -1:
-                // end
-                break outer;
-            case 0:
-                // normal strip
-                break;
-            default:
-                throw new Error(`Invalid strip flags`);
-        }
-        let vertexCount = strip.vertexCountAndFlag; // flag means change material
-        if (vertexCount <= 0) {
-            if (strip.adGifOffset >= 0) {
-                // this would update the material
-            }
-            vertexCount += 128;
+            case 0: break; // normal strip
+            case 0x80: break; // end of packet but not end of this tfrag
+            case 0xFF: break outer; // end
+            default: throw new Error(`Unknown strip flag`);
         }
 
+        const vertexCount = strip.vertexCount;
         if (vertexCount) {
             for (let i = 0; i < vertexCount; i++) {
                 const index = indices[vertexPtr];
                 const info = vertexInfo[index];
-                if (!info) {
-                    throw new Error(`Overran vertex info list`);
-                }
-                if (info.vertex % 2 !== 0) {
-                    throw new Error(`Vertex index not divisible by 2`);
-                }
-                if (info.parent % 2 !== 0) {
-                    throw new Error(`Vertex index not divisible by 2`);
-                }
+                assert(info !== undefined);
+                assert(info.vertex % 2 === 0);
+                assert(info.parent % 2 === 0);
                 const position = positions[info.vertex / 2];
-                if (!position) {
-                    throw new Error(`Overran vertex positions list`);
-                }
-                if (info.parent !== 4096) {
+                assert(position !== undefined);
+                if (info.parent !== 4096) { // 4096 means null
                     const parent = positions[info.parent / 2];
-                    if (!parent) {
-                        throw new Error(`Overran vertex positions list for parent`);
-                    }
+                    assert(parent !== undefined);
                 }
                 vertexPtr++;
             }
@@ -1106,52 +899,24 @@ function validateTfrag(indices: Uint8Array, strips: TfragStrip[], vertexInfo: Tf
     }
 }
 
-export const SIZEOF_TFRAG_HEADER_UNPACK = 0x28;
-export type TfragHeaderUnpack = ReturnType<typeof readTfragHeaderUnpack>;
-export function readTfragHeaderUnpack(view: DataViewExt) {
+export type TfragVuHeader = {
+    positionsCommonCount: number,
+    positionsLod01Count: number,
+    positionsLod0Count: number,
+    positionsCommonAddr: number,
+    vertexInfoCommonAddr: number,
+    vertexInfoLod01Addr: number,
+    vertexInfoLod0Addr: number,
+    indicesAddr: number,
+    parentIndicesLod01Addr: number,
+    parentIndicesLod0Addr: number,
+    stripsAddr: number,
+    textureAdGifsAddr: number,
+}
+export const SIZEOF_TFRAG_VU_HEADER = 0x28;
+export function readTfragVuHeader(view: DataViewExt) {
     /* 
-        packed struct TfragHeaderUnpack {
-            // 0x00
-            u16 positions_common_count;
-            // 0x02
-            u16 unknown_2;
-            // 0x04
-            u16 positions_lod_01_count;
-            // 0x06
-            u16 unknown_6;
-            // 0x08
-            u16 positions_lod_0_count;
-            // 0x0a
-            u16 unknown_a;
-            // 0x0c
-            u16 positions_common_addr;
-            // 0x0e
-            u16 vertex_info_common_addr;
-            // 0x10
-            u16 unknown_10;
-            // 0x12
-            u16 vertex_info_lod_01_addr; // Only the LOD 01 and LOD 0 entries have vertex_data_offsets[0] populated.
-            // 0x14
-            u16 unknown_14;
-            // 0x16
-            u16 vertex_info_lod_0_addr;
-            // 0x18
-            u16 unknown_18;
-            // 0x1a
-            u16 indices_addr;
-            // 0x1c
-            u16 parent_indices_lod_01_addr;
-            // 0x1e
-            u16 unk_indices_2_lod_01_addr;
-            // 0x20
-            u16 parent_indices_lod_0_addr;
-            // 0x22
-            u16 unk_indices_2_lod_0_addr;
-            // 0x24
-            u16 strips_addr;
-            // 0x26
-            u16 texture_ad_gifs_addr;
-        }
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/tfrag_low.h#L110
     */
 
     return {
@@ -1170,31 +935,25 @@ export function readTfragHeaderUnpack(view: DataViewExt) {
     }
 }
 
+export type TfragAdGifs = {
+    tex0: GifAd,
+    tex1: GifAd,
+    clamp: GifAd,
+    miptbp1: GifAd,
+    miptbp2: GifAd,
+};
 export const SIZEOF_TFRAG_AD_GIFS = 0x50;
-export type TfragAdGifs = ReturnType<typeof readTfragAdGifs>;
-export function readTfragAdGifs(view: DataViewExt) {
+export function readTfragAdGifs(view: DataViewExt): TfragAdGifs {
     /*
-        // this is the same as the TieAdGifs version, except the order of the fields is different
-        // size 0x50
-        packed_struct(TfragAdGifs,
-            // 0x00
-            GifAdData16 d1_tex0_1;
-            // 0x10
-            GifAdData16 d2_tex1_1;
-            // 0x20
-            GifAdData16 d3_clamp_1;
-            // 0x30
-            GifAdData16 d4_miptbp1_1;
-            // 0x40
-            GifAdData16 d5_miptbp2_1;
-        )
+    // this is the same as the TieAdGifs version, except the order of the fields is different
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/tfrag_low.h#L75
     */
     return {
-        tex0: readGifAdData16(view.subview(0x0)),
-        tex1: readGifAdData16(view.subview(0x10)),
-        clamp: readGifAdData16(view.subview(0x20)),
-        miptbp1: readGifAdData16(view.subview(0x30)),
-        miptbp2: readGifAdData16(view.subview(0x40)),
+        tex0: readGifAdData(view.subview(0x0)),
+        tex1: readGifAdData(view.subview(0x10)),
+        clamp: readGifAdData(view.subview(0x20)),
+        miptbp1: readGifAdData(view.subview(0x30)),
+        miptbp2: readGifAdData(view.subview(0x40)),
     }
 }
 
@@ -1202,16 +961,7 @@ export type TfragVertexInfo = ReturnType<typeof readTfragVertexInfo>;
 export const SIZEOF_TFRAG_VERTEX_INFO = 0x8;
 export function readTfragVertexInfo(view: DataViewExt) {
     /*
-        packed_struct(TfragVertexInfo,
-            // 0x00
-            s16 s;
-            // 0x02
-            s16 t;
-            // 0x04
-            s16 parent;
-            // 0x04
-            s16 vertex;
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/tfrag_low.h#L141
     */
 
     // divide negative texcoords by 2 for reasons that I cannot possibly imagine
@@ -1227,26 +977,28 @@ export function readTfragVertexInfo(view: DataViewExt) {
     };
 }
 
-export type TfragStrip = ReturnType<typeof readTfragStrip>;
+export type TfragStrip = {
+    vertexCount: number,
+    hasAdGifFlag: number,
+    endOfPacketFlag: number,
+    adGifOffset: number,
+};
 export const SIZEOF_TFRAG_STRIP = 0x4;
-export function readTfragStrip(view: DataViewExt) {
+export function readTfragStrip(view: DataViewExt): TfragStrip {
     /*
-        packed_struct(TfragStrip,
-            // 0x00
-            s8 vertex_count_and_flag;
-            // 0x01
-            s8 end_of_packet_flag;
-            // 0x02
-            s8 ad_gif_offset;
-            // 0x03
-            s8 pad;
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/tfrag_low.h#L149
+
+    struct TfragStrip {
+        uint8 vertexCount : 7;
+        uint8 flag : 1;
+        uint8 endFlag; // 0x80 = last strip of packet, 0xFF = end
+        int8 adGifOffset; // -1 means ignore, not sure why the game would set the flag and then ignore the adGif but it does
+    }
     */
     return {
         vertexCount: view.getInt8(0x0) & 0x7f,
-        flag: getBit(view.getInt8(0x0), 7),
-        vertexCountAndFlag: view.getInt8(0x0),
-        endOfPacketFlag: view.getInt8(0x1),
+        hasAdGifFlag: (view.getInt8(0x0) & 0x80) >> 7,
+        endOfPacketFlag: view.getUint8(0x1),
         adGifOffset: view.getInt8(0x2),
     }
 }
@@ -1254,42 +1006,7 @@ export function readTfragStrip(view: DataViewExt) {
 export const SIZEOF_SHRUB_CLASS_HEADER = 0x40;
 export function readShrubClassHeader(view: DataViewExt) {
     /*
-    packed_struct(ShrubClassHeader,
-        // 0x00
-        Vec4f bounding_sphere;
-        // 0x10
-        f32 mip_distance;
-        // 0x14
-        u16 mode_bits;
-        // 0x16
-        s16 instance_count;
-        // 0x18
-        s32 instances_pointer;
-        // 0x1c
-        s32 billboard_offset;
-        // 0x20
-        f32 scale;
-        // 0x24
-        s16 o_class;
-        // 0x26
-        s16 s_class;
-        // 0x28
-        s16 packet_count;
-        // 0x2a
-        s16 pad_2a;
-        // 0x2c
-        s32 normals_offset;
-        // 0x30
-        s32 pad_30;
-        // 0x34
-        s16 drawn_count;
-        // 0x36
-        s16 scis_count;
-        // 0x38
-        s16 billboard_count;
-        // 0x3a
-        s16 pad_3a[3];
-    )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/shrub.h#L55
     */
     return {
         boundingSphere: view.getFloat32_Xyzw(0x0),
@@ -1313,16 +1030,7 @@ export const SIZEOF_SHRUB_VERTEX_PART1 = 0x8;
 export type ShrubVertexPart1 = ReturnType<typeof readShrubVertexPart1>;
 export function readShrubVertexPart1(view: DataViewExt) {
     /*
-        packed_struct(ShrubVertexPart1,
-            // 0x00
-            s16 x;
-            // 0x02
-            s16 y;
-            // 0x04
-            s16 z;
-            // 0x06
-            s16 gs_packet_offset;
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/shrub.h#L75
     */
     return {
         x: view.getInt16(0x0),
@@ -1336,16 +1044,7 @@ export const SIZEOF_SHRUB_VERTEX_PART2 = 0x8;
 export type ShrubVertexPart2 = ReturnType<typeof readShrubVertexPart2>;
 export function readShrubVertexPart2(view: DataViewExt) {
     /*
-        packed_struct(ShrubVertexPart2,
-            // 0x00
-            s16 s;
-            // 0x02
-            s16 t;
-            // 0x04
-            s16 h;
-            // 0x06
-            s16 n_and_stop_cond; // If this is negative the strip ends.
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/shrub.h#L82
     */
     return {
         s: view.getInt16(0x0),
@@ -1355,18 +1054,15 @@ export function readShrubVertexPart2(view: DataViewExt) {
     };
 }
 
-export function readShrubPacketHeader(view: DataViewExt) {
+export type ShrubPacketHeader = {
+    textureCount: number,
+    gifTagCount: number,
+    vertexCount: number,
+    vertexOffset: number,
+};
+export function readShrubPacketHeader(view: DataViewExt): ShrubPacketHeader {
     /*
-        packed_struct(ShrubPacketHeader,
-            // 0x0
-            s32 texture_count;
-            // 0x4
-            s32 gif_tag_count;
-            // 0x8
-            s32 vertex_count;
-            // 0xc
-            s32 vertex_offset;
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/shrub.h#L89
     */
     return {
         textureCount: view.getInt32(0x0),
@@ -1378,12 +1074,7 @@ export function readShrubPacketHeader(view: DataViewExt) {
 
 export function readShrubVertexGifTag(view: DataViewExt) {
     /*
-        packed_struct(ShrubVertexGifTag,
-            // 0x0
-            GifTag12 tag;
-            // 0xc
-            s32 gs_packet_offset;
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/shrub.h#L96
     */
     return {
         tag: readShrubGifTag12(view.subview(0x0)),
@@ -1393,12 +1084,7 @@ export function readShrubVertexGifTag(view: DataViewExt) {
 
 export function readShrubGifTag12(view: DataViewExt) {
     /*
-        packed_struct(GifTag12,
-            // 0x0
-            u64 low;
-            // 0x8
-            u32 regs;
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/gif.h#L84
     */
     return {
         low: view.getUint32(0x0),
@@ -1407,29 +1093,24 @@ export function readShrubGifTag12(view: DataViewExt) {
     }
 }
 
-export type ShrubTexturePrimitive = ReturnType<typeof readShrubTexturePrimitive>;
+export type ShrubTexturePrimitive = {
+    tex1: GifAd,
+    gsPacketOffset: number,
+    clamp: GifAd,
+    miptbp1: GifAd,
+    tex0: GifAd,
+}
 export const SIZEOF_SHRUB_TEXTURE_PRIMITIVE = 0x40;
 export function readShrubTexturePrimitive(view: DataViewExt) {
     /*
-        packed_struct(ShrubTexturePrimitive,
-            // 0x00
-            GifAdData12 d1_tex1_1;
-            // 0x0c
-            s32 gs_packet_offset;
-            // 0x10
-            GifAdData16 d2_clamp_1;
-            // 0x20
-            GifAdData16 d3_miptbp1_1;
-            // 0x30
-            GifAdData16 d4_tex0_1;
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/shrub.h#L101
     */
     return {
-        tex1: readGifAdData12(view.subview(0x0)),
+        tex1: readGifAdData(view.subview(0x0)),
         gsPacketOffset: view.getInt32(0xc),
-        clamp: readGifAdData16(view.subview(0x10)),
-        miptbp1: readGifAdData16(view.subview(0x20)),
-        tex0: readGifAdData16(view.subview(0x30)),
+        clamp: readGifAdData(view.subview(0x10)),
+        miptbp1: readGifAdData(view.subview(0x20)),
+        tex0: readGifAdData(view.subview(0x30)),
     }
 }
 
@@ -1444,86 +1125,45 @@ export type ShrubVertex = {
     stop: number;
 }
 
-export enum ShrubPacketCommandTypes {
-    PRIMITIVE = 1,
-    SET_MATERIAL = 2,
-    VERTEX = 3,
+export type ShrubImaginaryGsCommand = ImaginaryGsCommand<{ type: GsPrimitiveType }, { adGif: ShrubTexturePrimitive }, ShrubVertex>;
+
+const shrubCommandSize = {
+    primativeReset: 1,
+    setMaterial: 5,
+    vertex: 3,
 }
 
-export type ShrubPacketCommand = {
-    type: typeof ShrubPacketCommandTypes.PRIMITIVE,
-    size: number,
-    value: {
-        type: GsPrimitiveType,
-    }
-} | {
-    type: typeof ShrubPacketCommandTypes.SET_MATERIAL,
-    size: number,
-    value: { adGif: ShrubTexturePrimitive },
-} | {
-    type: typeof ShrubPacketCommandTypes.VERTEX,
-    size: number,
-    value: ShrubVertex
-};
+export function readShrubPacket(view: DataViewExt): ShrubImaginaryGsCommand[] {
+    const vifCommands = readVifCommandList(view);
+    const nextUnpack = vifUnpacks(vifCommands);
 
-const ShrubCommandSize = {
-    [ShrubPacketCommandTypes.PRIMITIVE]: 1,
-    [ShrubPacketCommandTypes.SET_MATERIAL]: 5,
-    [ShrubPacketCommandTypes.VERTEX]: 3,
-}
+    // unpack 1
+    const unpack1 = nextUnpack();
+    const packetHeader = readShrubPacketHeader(unpack1);
+    const gifTags = unpack1.subdivide(0x10, packetHeader.gifTagCount, 0x10).map(readShrubVertexGifTag);
+    const adGifs = unpack1.subdivide(0x10 + packetHeader.gifTagCount * 0x10, packetHeader.textureCount, SIZEOF_SHRUB_TEXTURE_PRIMITIVE).map(readShrubTexturePrimitive);
 
-export function readShrubPacket(view: DataViewExt) {
-    const commands = readVifCommandList(view);
-    const unpackCommands = commands.filter(cmd => isUnpackCommand(cmd.cmd));
-    if (unpackCommands.length !== 3) {
-        throw new Error(`Expected 3 UNPACK commands in a shrub packet`);
-    }
+    // unpack 2 is position and write destination
+    // unpack 3 is texcoord, normal pointer, and flags
+    const part1 = nextUnpack().subdivide(0, 0xFFFF, SIZEOF_SHRUB_VERTEX_PART1).map(readShrubVertexPart1);
+    const part2 = nextUnpack().subdivide(0, 0xFFFF, SIZEOF_SHRUB_VERTEX_PART2).map(readShrubVertexPart2);
+    assert(part1.length === part2.length);
 
-    const unpack0 = readVifUnpackData(unpackCommands[0]);
-    const packetHeader = readShrubPacketHeader(unpack0);
-    const gifTags = unpack0.subdivide(0x10, packetHeader.gifTagCount, 0x10).map(readShrubVertexGifTag);
-    const adGifs = unpack0.subdivide(0x10 + packetHeader.gifTagCount * 0x10, packetHeader.textureCount, SIZEOF_SHRUB_TEXTURE_PRIMITIVE).map(readShrubTexturePrimitive);
-
-    const unpack1 = readVifUnpackData(unpackCommands[1]);
-    const part1 = unpack1.subdivide(0, 0xFFFF, SIZEOF_SHRUB_VERTEX_PART1).map(readShrubVertexPart1);
-
-    const unpack2 = readVifUnpackData(unpackCommands[2]);
-    const part2 = unpack2.subdivide(0, 0xFFFF, SIZEOF_SHRUB_VERTEX_PART2).map(readShrubVertexPart2);
-
-    let bufferEnd = 0;
-    const MAX_BUFFER_SIZE = 0x100;
-    const imaginaryGpuCommandBuffer: ShrubPacketCommand[] = new Array(256).fill(null);
-    function writeCommand(offset: number, type: typeof ShrubPacketCommandTypes.PRIMITIVE, value: { type: GsPrimitiveType }): void;
-    function writeCommand(offset: number, type: typeof ShrubPacketCommandTypes.SET_MATERIAL, value: { adGif: ShrubTexturePrimitive }): void;
-    function writeCommand(offset: number, type: typeof ShrubPacketCommandTypes.VERTEX, value: ShrubVertex): void;
-    function writeCommand(offset: number, type: ShrubPacketCommand["type"], value: any) {
-        if (offset >= MAX_BUFFER_SIZE) {
-            throw new Error(`Command buffer exceeds max size`);
-        }
-        if (type !== ShrubPacketCommandTypes.VERTEX && imaginaryGpuCommandBuffer[offset]) {
-            // vertex commands are allowed to be overwritten, other commands are not
-            throw new Error(`Expected commnad buffer slot 0x${offset.toString(16)} to be empty`);
-        }
-        const size = ShrubCommandSize[type];
-        imaginaryGpuCommandBuffer[offset] = { type, size, value };
-        bufferEnd = Math.max(bufferEnd, offset + size);
-    }
+    const imaginaryGsBuffer = new ImaginaryGsCommandBuffer<{ type: GsPrimitiveType }, { adGif: ShrubTexturePrimitive }, ShrubVertex>();
 
     for (const gifTag of gifTags) {
         const primRegister = getBits(gifTag.tag.high, 15, 25);
         const primativeType = getBits(primRegister, 0, 2);
-        if (primativeType !== GsPrimitiveType.TRIANGLE && primativeType !== GsPrimitiveType.TRIANGLE_STRIP) {
-            throw new Error(`Unsupported primitive type ${primativeType} in shrub packet`);
-        }
-        writeCommand(gifTag.gsPacketOffset, ShrubPacketCommandTypes.PRIMITIVE, { type: primativeType });
+        assert(primativeType === GsPrimitiveType.TRIANGLE || primativeType === GsPrimitiveType.TRIANGLE_STRIP);
+        imaginaryGsBuffer.writePrimativeReset(gifTag.gsPacketOffset, shrubCommandSize.primativeReset, { type: primativeType });
     }
 
     for (const adGif of adGifs) {
-        writeCommand(adGif.gsPacketOffset, ShrubPacketCommandTypes.SET_MATERIAL, { adGif });
+        imaginaryGsBuffer.writeSetMaterial(adGif.gsPacketOffset, shrubCommandSize.setMaterial, { adGif });
     }
 
     for (let i = 0; i < part1.length; i++) {
-        writeCommand(part1[i].gsPacketOffset, ShrubPacketCommandTypes.VERTEX, {
+        const vertex: ShrubVertex = {
             x: part1[i].x,
             y: part1[i].y,
             z: part1[i].z,
@@ -1532,44 +1172,20 @@ export function readShrubPacket(view: DataViewExt) {
             h: part2[i].h,
             n: part2[i].nAndStopCond & 0x7fff,
             stop: part2[i].nAndStopCond & 0x8000 ? 1 : 0,
-        });
+        };
+        imaginaryGsBuffer.writeVertex(part1[i].gsPacketOffset, shrubCommandSize.vertex, vertex, true);
     }
 
-    if (IS_DEVELOPMENT) {
-        // validate
-        let expectedEmptySlots = 0;
-        let expectPrimativeRestart = false;
-        imaginaryGpuCommandBuffer.length = bufferEnd;
-        for (let i = 0; i < imaginaryGpuCommandBuffer.length; i++) {
-            const command = imaginaryGpuCommandBuffer[i];
-            if (command) {
-                if (expectedEmptySlots !== 0) {
-                    throw new Error(`Didn't expect a write to GPU command buffer at offset 0x${i.toString(16)}`);
-                }
-                if (command.type === ShrubPacketCommandTypes.VERTEX && expectPrimativeRestart) {
-                    throw new Error(`Expected a primative restart command before first vertex`);
-                }
-                if (command.type === ShrubPacketCommandTypes.PRIMITIVE) {
-                    expectPrimativeRestart = false;
-                }
-                if (command.type === ShrubPacketCommandTypes.SET_MATERIAL) {
-                    expectPrimativeRestart = true;
-                }
-                expectedEmptySlots += command.size;
-            } else {
-                if (expectedEmptySlots === 0) {
-                    throw new Error(`Expected a write to GPU command buffer at offset 0x${i.toString(16)}`);
-                }
-            }
-            expectedEmptySlots--;
-        }
-    }
-
-    const filteredCommandBuffer = imaginaryGpuCommandBuffer.filter((c) => !!c);
-    return filteredCommandBuffer;
+    return imaginaryGsBuffer.finish();
 }
 
-export type ShrubClass = ReturnType<typeof readShrubClass>;
+export type ShrubClass = {
+    header: ReturnType<typeof readShrubClassHeader>,
+    body: {
+        packets: ShrubImaginaryGsCommand[][],
+        normals: { x: number, y: number, z: number }[],
+    },
+};
 export function readShrubClass(view: DataViewExt) {
     const header = readShrubClassHeader(view);
 
@@ -1586,8 +1202,12 @@ export function readShrubClass(view: DataViewExt) {
     }
 }
 
-export type Sky = ReturnType<typeof readSky>;
-export function readSky(skyView: DataViewExt) {
+export type Sky = {
+    header: SkyHeader,
+    textureEntries: SkyTextureEntry[],
+    shells: SkyShell[],
+}
+export function readSky(skyView: DataViewExt): Sky {
     const header = readSkyHeader(skyView);
     const textureEntries = skyView.subdivide(header.textureDefs, header.textureCount, SIZEOF_SKY_TEXTURE_ENTRY).map(readSkyTextureEntry);
     const shells = header.shells.slice(0, header.shellCount).map(offset => readSkyShell(skyView, skyView.subview(offset)));
@@ -1607,7 +1227,7 @@ export type SkyShell = {
         triangles: SkyFace[],
     }[],
 };
-export function readSkyShell(skyView: DataViewExt, skyShellView: DataViewExt) {
+export function readSkyShell(skyView: DataViewExt, skyShellView: DataViewExt): SkyShell {
     const shellHeader = readSkyShellHeader(skyShellView);
     const skyShells: SkyShell = {
         header: shellHeader,
@@ -1620,16 +1240,23 @@ export function readSkyShell(skyView: DataViewExt, skyShellView: DataViewExt) {
         const dataView = skyView.subview(clusterHeader.data);
         const vertexBuffer = dataView.subview(clusterHeader.vertexOffset);
         const vertices = vertexBuffer.subdivide(0, clusterHeader.vertexCount, SIZEOF_SKY_VERTEX).map(readSkyVertex);
-        const texcoordsOrRgbaBuffer = dataView.subview(clusterHeader.stOffset);
+        const texcoordsOrRgbaBuffer = dataView.subview(clusterHeader.texcoordsOrRgbasOffset);
         let texcoords: SkyTexcoord[] = [];
         let rgbas: SkyRgba[] = [];
         if (shellHeader.flags.textured) {
-            texcoords = texcoordsOrRgbaBuffer.subdivide(0, clusterHeader.stOffset, SIZEOF_SKY_TEXCOORD).map(readSkyTexcoord);
+            texcoords = texcoordsOrRgbaBuffer.subdivide(0, clusterHeader.texcoordsOrRgbasOffset, SIZEOF_SKY_TEXCOORD).map(readSkyTexcoord);
         } else {
-            rgbas = texcoordsOrRgbaBuffer.subdivide(0, clusterHeader.stOffset, 4).map(view => view.getUint8_Rgba(0));
+            rgbas = texcoordsOrRgbaBuffer.subdivide(0, clusterHeader.texcoordsOrRgbasOffset, 4).map(view => view.getUint8_Rgba(0));
         }
         const indicesBuffer = dataView.subview(clusterHeader.triOffset);
         const triangles = indicesBuffer.subdivide(0, clusterHeader.triCount, SIZEOF_SKY_FACE).map(readSkyFace);
+
+        for (const triangle of triangles) {
+            // make sure it's not mixing texcoords and rgbas
+            const expectedTexture = shellHeader.flags.textured ? triangle.texture : 0xFF;
+            assert(triangle.texture === expectedTexture);
+        }
+
         skyShells.clusters.push({
             vertices,
             texcoords,
@@ -1640,36 +1267,24 @@ export function readSkyShell(skyView: DataViewExt, skyShellView: DataViewExt) {
     return skyShells;
 }
 
+export type SkyHeader = {
+    skyColor: { r: number, g: number, b: number, a: number },
+    clearScreen: number,
+    shellCount: number,
+    spriteCount: number,
+    maximumSpriteCount: number,
+    textureCount: number,
+    fxCount: number,
+    textureDefs: number,
+    textureData: number,
+    fxList: number,
+    sprites: number,
+    shells: number[],
+};
 export const SIZEOF_SKY_HEADER = 0x40;
-export type SkyHeader = ReturnType<typeof readSkyHeader>;
-export function readSkyHeader(view: DataViewExt) {
+export function readSkyHeader(view: DataViewExt): SkyHeader {
     /*
-        packed_struct(SkyHeader,
-            // 0x00
-            SkyColour colour;
-            // 0x04
-            s16 clear_screen;
-            // 0x06
-            s16 shell_count;
-            // 0x08
-            s16 sprite_count;
-            // 0x0a
-            s16 maximum_sprite_count;
-            // 0x0c
-            s16 texture_count;
-            // 0x0e
-            s16 fx_count;
-            // 0x10
-            s32 texture_defs;
-            // 0x14
-            s32 texture_data;
-            // 0x18
-            s32 fx_list;
-            // 0x1c
-            s32 sprites;
-            // 0x20
-            s32 shells[8];
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/sky.h#L59
     */
     return {
         skyColor: view.getUint8_Rgba(0x0),
@@ -1687,20 +1302,16 @@ export function readSkyHeader(view: DataViewExt) {
     };
 }
 
+export type SkyTextureEntry = {
+    palette: number,
+    dataOffset: number,
+    width: number,
+    height: number,
+};
 export const SIZEOF_SKY_TEXTURE_ENTRY = 0x10;
-export type SkyTexture = ReturnType<typeof readSkyTextureEntry>;
-export function readSkyTextureEntry(view: DataViewExt) {
+export function readSkyTextureEntry(view: DataViewExt): SkyTextureEntry {
     /*
-        packed_struct(SkyTexture,
-            // 0x0
-            s32 palette_offset;
-            // 0x4
-            s32 texture_offset;
-            // 0x8
-            s32 width;
-            // 0xc
-            s32 height;
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/sky.h#L74
     */
     return {
         palette: view.getInt32(0x0),
@@ -1710,17 +1321,18 @@ export function readSkyTextureEntry(view: DataViewExt) {
     };
 }
 
+export type SkyShellHeader = {
+    clusterCount: number,
+    flags: {
+        textured: boolean,
+    },
+};
 export const SIZEOF_SKY_SHELL_HEADER = 0x8;
-export type SkyShellHeader = ReturnType<typeof readSkyShellHeader>;
-export function readSkyShellHeader(view: DataViewExt) {
+export function readSkyShellHeader(view: DataViewExt): SkyShellHeader {
     /*
-        packed_struct(SkyShellHeader,
-            // 0x0
-            s32 cluster_count;
-            // 0x4
-            s32 flags;
-            // maybe rotation data here? actual size of this is 0x10
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/sky.h#L87C15-L87C34
+
+    Different in rac3+
     */
 
     const flags = view.getInt32(0x4);
@@ -1730,33 +1342,23 @@ export function readSkyShellHeader(view: DataViewExt) {
         flags: {
             textured: flags & 0x1 ? false : true,
         },
-        unknown8: view.getUint32(0x8),
-        unknownc: view.getUint32(0xc),
     };
 }
 
+export type SkyClusterHeader = {
+    boundingSphere: { x: number, y: number, z: number, w: number },
+    data: number,
+    vertexCount: number,
+    triCount: number,
+    vertexOffset: number,
+    texcoordsOrRgbasOffset: number,
+    triOffset: number,
+    dataSize: number,
+}
 export const SIZEOF_SKY_CLUSTER_HEADER = 0x20;
-export type SkyClusterHeader = ReturnType<typeof readSkyClusterHeader>;
-export function readSkyClusterHeader(view: DataViewExt) {
+export function readSkyClusterHeader(view: DataViewExt): SkyClusterHeader {
     /*
-        packed_struct(SkyClusterHeader,
-            // 0x00
-            Vec4f bounding_sphere;
-            // 0x10
-            s32 data;
-            // 0x14
-            s16 vertex_count;
-            // 0x16
-            s16 tri_count;
-            // 0x18
-            s16 vertex_offset;
-            // 0x1a
-            s16 st_offset;
-            // 0x1c
-            s16 tri_offset;
-            // 0x1e
-            s16 data_size;
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/sky.h#L99
     */
     return {
         boundingSphere: view.getFloat32_Xyzw(0x00),
@@ -1764,26 +1366,22 @@ export function readSkyClusterHeader(view: DataViewExt) {
         vertexCount: view.getInt16(0x14),
         triCount: view.getInt16(0x16),
         vertexOffset: view.getInt16(0x18),
-        stOffset: view.getInt16(0x1a),
+        texcoordsOrRgbasOffset: view.getInt16(0x1a), // <- if flags.textured is true then this is texcoords, otherwise it's rgbas
         triOffset: view.getInt16(0x1c),
         dataSize: view.getInt16(0x1e),
     };
 }
 
+export type SkyVertex = {
+    x: number;
+    y: number;
+    z: number;
+    alpha: number;
+};
 export const SIZEOF_SKY_VERTEX = 0x8;
-export type SkyVertex = ReturnType<typeof readSkyVertex>;
-export function readSkyVertex(view: DataViewExt) {
+export function readSkyVertex(view: DataViewExt): SkyVertex {
     /*
-        packed_struct(SkyVertex,
-            // 0x0
-            s16 x;
-            // 0x2
-            s16 y;
-            // 0x4
-            s16 z;
-            // 0x6
-            s16 alpha;
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/sky.h#L110
     */
     return {
         x: view.getInt16(0x0),
@@ -1801,16 +1399,14 @@ export type SkyRgba = {
     a: number;
 }
 
+export type SkyTexcoord = {
+    s: number;
+    t: number;
+}
 export const SIZEOF_SKY_TEXCOORD = 0x4;
-export type SkyTexcoord = ReturnType<typeof readSkyTexcoord>;
-export function readSkyTexcoord(view: DataViewExt) {
+export function readSkyTexcoord(view: DataViewExt): SkyTexcoord {
     /*
-        packed_struct(SkyTexcoord,
-            // 0x0
-            s16 s;
-            // 0x2
-            s16 t;
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/sky.h#L117
     */
     return {
         s: view.getUint16(0x0),
@@ -1818,16 +1414,14 @@ export function readSkyTexcoord(view: DataViewExt) {
     };
 }
 
+export type SkyFace = {
+    indices: number[],
+    texture: number,
+}
 export const SIZEOF_SKY_FACE = 0x4;
-export type SkyFace = ReturnType<typeof readSkyFace>;
-export function readSkyFace(view: DataViewExt) {
+export function readSkyFace(view: DataViewExt): SkyFace {
     /*
-        packed_struct(SkyFace,
-            // 0x0
-            u8 indices[3];
-            // 0x3
-            u8 texture;
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/sky.h#L122
     */
     return {
         indices: view.getArrayOfNumbers(0x0, 3, Uint8Array),

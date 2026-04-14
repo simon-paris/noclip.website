@@ -220,13 +220,13 @@ type InstanceBlock<T> = {
 const SIZEOF_INSTANCE_BLOCK_HEADER = 0x10;
 export function readInstanceBlock<T>(view: DataViewExt, instanceSize: number, readerFn: (buf: DataViewExt) => T): InstanceBlock<T> {
     /*
-        struct InstanceBlockHeader<T> {
-            // 0x0
-            int32 count;
-            int32 pad[3];
-            // 0x10
-            T instances[count];
-        }
+    struct InstanceBlockHeader<T> {
+        // 0x0
+        int32 count;
+        int32 pad[3];
+        // 0x10
+        T instances[count];
+    }
     */
     const count = view.getInt32(0);
     const instances = view.subdivide(SIZEOF_INSTANCE_BLOCK_HEADER, count, instanceSize).map(view => readerFn(view));
@@ -334,7 +334,11 @@ export function readGrindPathBlock(view: DataViewExt) {
     return header.pointers.map(offset => readSpline(view.subview(header.dataOffset + offset)));
 }
 
-export function readSpline(view: DataViewExt) {
+export type Spline = {
+    count: number,
+    points: { x: number, y: number, z: number, w: number }[],
+}
+export function readSpline(view: DataViewExt): Spline {
     /*
     struct Spline {
         // 0x0

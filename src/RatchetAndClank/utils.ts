@@ -1,6 +1,8 @@
-import { mat4, ReadonlyMat4, vec3, vec4 } from "gl-matrix";
-import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice, GfxFormat, GfxTexture, makeTextureDescriptor2D } from "../gfx/platform/GfxPlatform";
+import { mat4, ReadonlyMat4, vec3 } from "gl-matrix";
+import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice } from "../gfx/platform/GfxPlatform";
 import { Color } from "../Color";
+import { assert, nArray } from "../util";
+import { IS_DEVELOPMENT } from "../BuildVersion";
 
 // rotate the whole world 90 degrees
 const _noclipSpaceFromRatchetSpace = mat4.create();
@@ -107,4 +109,85 @@ export function createMegaBuffer(device: GfxDevice, name: string, initialSizeInB
         }
     };
     return megaBuffer;
+}
+
+export enum ImaginaryGsCommandType {
+    PRIMITIVE_RESET = 1,
+    SET_MATERIAL = 2,
+    VERTEX = 3,
+}
+
+export type ImaginaryGsCommand<PrimativeType, MaterialType, VertexType> =
+    | {
+        type: ImaginaryGsCommandType.PRIMITIVE_RESET,
+        size: number,
+        value: PrimativeType,
+    }
+    | {
+        type: ImaginaryGsCommandType.SET_MATERIAL,
+        size: number,
+        value: MaterialType,
+    }
+    | {
+        type: ImaginaryGsCommandType.VERTEX,
+        size: number,
+        value: VertexType,
+    }
+
+export class ImaginaryGsCommandBuffer<PrimativeType, MaterialType, VertexType> {
+    public slots: (ImaginaryGsCommand<PrimativeType, MaterialType, VertexType> | null)[] = nArray(0x100, () => null);
+    maxSlotUsed = 0;
+
+    writePrimativeReset(address: number, size: number, primative: PrimativeType, allowOverwrite: boolean = false) {
+        this.write(address, size, { type: ImaginaryGsCommandType.PRIMITIVE_RESET, size, value: primative }, allowOverwrite);
+    }
+
+    writeSetMaterial(address: number, size: number, material: MaterialType, allowOverwrite: boolean = false) {
+        this.write(address, size, { type: ImaginaryGsCommandType.SET_MATERIAL, size, value: material }, allowOverwrite);
+    }
+
+    writeVertex(address: number, size: number, vertex: VertexType, allowOverwrite: boolean = false) {
+        this.write(address, size, { type: ImaginaryGsCommandType.VERTEX, size, value: vertex }, allowOverwrite);
+    }
+
+    private write(address: number, size: number, command: any, allowOverwrite: boolean): void {
+        assert(address >= 0 && address < 0x100);
+        if (!allowOverwrite) {
+            assert(this.slots[address] === null);
+        }
+        this.slots[address] = command;
+        this.maxSlotUsed = Math.max(this.maxSlotUsed, address);
+    }
+
+    finish() {
+        if (IS_DEVELOPMENT) {
+            // validation
+            let expectedEmptySlots = 0;
+            let expectPrimativeRestart = true;
+            for (let i = 0; i < this.maxSlotUsed; i++) {
+                const command = this.slots[i];
+                if (command) {
+                    if (expectedEmptySlots !== 0) {
+                        throw new Error(`Unexpected write to GS command buffer`);
+                    }
+                    if (command.type === ImaginaryGsCommandType.VERTEX && expectPrimativeRestart) {
+                        throw new Error(`Expected a primative restart command before first vertex`);
+                    }
+                    if (command.type === ImaginaryGsCommandType.PRIMITIVE_RESET) {
+                        expectPrimativeRestart = false;
+                    }
+                    if (command.type === ImaginaryGsCommandType.SET_MATERIAL) {
+                        expectPrimativeRestart = true;
+                    }
+                    expectedEmptySlots += command.size;
+                } else {
+                    if (expectedEmptySlots === 0) {
+                        throw new Error(`Expected a write to GS command buffer`);
+                    }
+                }
+                expectedEmptySlots--;
+            }
+        }
+        return this.slots.filter(cmd => cmd !== null);
+    }
 }
