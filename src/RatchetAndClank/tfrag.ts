@@ -3,6 +3,7 @@ import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
 import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice, GfxFormat, GfxInputLayout, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { DeviceProgram } from "../Program";
+import { assert } from "../util";
 import { RatchetShaderLib } from "./shader-lib";
 import { Tfrag, TfragAdGifs, TfragLight, TfragStrip, TfragVertexInfo } from "./structs-core";
 
@@ -14,7 +15,7 @@ export class TfragProgram extends DeviceProgram {
     public static a_ST = 4;
     public static a_DirLightIndices = 5;
 
-    public static elementsPerVertex = 17; // position(3) + normal(3) + rgba(4) + texture(1) + st(2) + debug(4) = 17
+    public static elementsPerVertex = 17; // position(3) + normal(3) + rgba(4) + texture(1) + st(2) + lights(4) = 17
 
     public static ub_SceneParams = 0;
     public static ub_TfragParams = 1;
@@ -131,11 +132,6 @@ export class TfragGeometry {
     }
 }
 
-type TfragIndexWithTexture = {
-    index: number,
-    textureLayer: number,
-};
-
 type TfragVertex = {
     x: number,
     y: number,
@@ -162,18 +158,13 @@ type TfragVertexWithTexture = TfragVertex & {
 export function assembleTfragGeometry(tfrag: Tfrag[]) {
     const assembledTfragsFragments = tfrag.map((t, i) => assembleTfragFragment(i, t));
 
-    const mergedVerts = mergeTfragVerts(assembledTfragsFragments);
-    const mergedIndicesWithTextures = [
-        mergeGroupsIntoIndexBuffer(assembledTfragsFragments.map(f => f.indices[0]), mergedVerts.tfragVertexBaseIndices),
-        mergeGroupsIntoIndexBuffer(assembledTfragsFragments.map(f => f.indices[1]), mergedVerts.tfragVertexBaseIndices),
-        mergeGroupsIntoIndexBuffer(assembledTfragsFragments.map(f => f.indices[2]), mergedVerts.tfragVertexBaseIndices),
-    ];
+    const mergedTfragLods = [
+        assembledTfragsFragments.map(f => f.lod0Verts).flat(1),
+        assembledTfragsFragments.map(f => f.lod1Verts).flat(1),
+        assembledTfragsFragments.map(f => f.lod2Verts).flat(1),
+    ]
 
-    const vertsWithTextures = mergedIndicesWithTextures.map((lod) => {
-        return removeIndicesAndAddTextures(mergedVerts.verts, lod);
-    });
-
-    const vertexArrayBuffers = vertsWithTextures.map((verts) => {
+    const vertexArrayBuffers = mergedTfragLods.map((verts) => {
         return {
             buffer: encodeVerts(verts),
             vertexCount: verts.length,
@@ -186,74 +177,42 @@ export function assembleTfragGeometry(tfrag: Tfrag[]) {
     };
 }
 
-function removeIndicesAndAddTextures(verts: TfragVertex[], indices: TfragIndexWithTexture[]) {
-    const newVerts: TfragVertexWithTexture[] = [];
-    for (let i = 0; i < indices.length; i++) {
-        const idxAndTexture = indices[i];
-        const vert = verts[idxAndTexture.index];
-        newVerts.push({
-            ...vert,
-            textureLayer: idxAndTexture.textureLayer,
-        });
-    }
-    return newVerts;
-}
-
-function mergeTfragVerts(tfrags: ReturnType<typeof assembleTfragFragment>[]) {
-    const combinedVertexArrayBuffer: TfragVertex[] = [];
-    const tfragVertexBaseIndices: number[] = [];
-
-    let vertexPtr = 0;
-    for (const tfrag of tfrags) {
-        combinedVertexArrayBuffer.push(...tfrag.verts);
-        tfragVertexBaseIndices.push(vertexPtr);
-        vertexPtr += tfrag.verts.length;
-    }
-
-    return {
-        verts: combinedVertexArrayBuffer,
-        tfragVertexBaseIndices,
-    };
-}
-
-function mergeGroupsIntoIndexBuffer(fragmentGroups: TfragTriangleGroup[][], tfragVertexBaseIndices: number[]): TfragIndexWithTexture[] {
-    const mergedIndices: TfragIndexWithTexture[] = [];
-
-    // add base index to each fragment
-    for (let tfragIndex = 0; tfragIndex < fragmentGroups.length; tfragIndex++) {
-        const fragment = fragmentGroups[tfragIndex];
-        for (const group of fragment) {
-            for (let i = 0; i < group.indices.length; i++) {
-                group.indices[i] += tfragVertexBaseIndices[tfragIndex];
-            }
-        }
-    }
-
-    // assemble into draw list
-    for (const group of fragmentGroups.flat(1)) {
-        for (let i = 0; i < group.indices.length; i++) {
-            mergedIndices.push({ index: group.indices[i], textureLayer: group.material });
-        }
-    }
-
-    return mergedIndices;
-}
-
+// build verts and indices for a single tfrag
 export function assembleTfragFragment(tfragId: number, tfrag: Tfrag) {
     const verts = concatAndRemoveDoubleIndirectionFromVertices(tfragId, tfrag);
 
-    const lod2Indices = stripsIntoTriangles(tfragId, tfrag.lod2Strips.data, tfrag.lod2Indices.data, tfrag.commonTextures.data);
-    const lod1Indices = stripsIntoTriangles(tfragId, tfrag.lod1Strips.data, tfrag.lod1Indices.data, tfrag.commonTextures.data);
-    const lod0Indices = stripsIntoTriangles(tfragId, tfrag.lod0Strips.data, tfrag.lod0Indices.data, tfrag.commonTextures.data);
+    const lod2Indices = stripsIntoTriangles(tfragId, tfrag.dataGroup1.lod2.strips, tfrag.dataGroup1.lod2.indices, tfrag.dataGroup2.textures);
+    const lod1Indices = stripsIntoTriangles(tfragId, tfrag.dataGroup3.lod1.strips, tfrag.dataGroup3.lod1.indices, tfrag.dataGroup2.textures);
+    const lod0Indices = stripsIntoTriangles(tfragId, tfrag.dataGroup5.lod0.strips, tfrag.dataGroup5.lod0.indices, tfrag.dataGroup2.textures);
+
+    const lod2Verts = trianglesIntoVerts(verts, lod2Indices);
+    const lod1Verts = trianglesIntoVerts(verts, lod1Indices);
+    const lod0Verts = trianglesIntoVerts(verts, lod0Indices);
 
     return {
-        verts: verts,
-        indices: [
-            lod0Indices,
-            lod1Indices,
-            lod2Indices,
-        ],
-    };
+        lod2Verts,
+        lod1Verts,
+        lod0Verts,
+    }
+}
+
+/**
+ * Remove indices and convert to vertex array.
+ * This is required because the texture index is attached to the strip, so the same vertex could be rendered with multiple textures.
+ */
+function trianglesIntoVerts(verts: TfragVertex[], triangleGroups: TfragTriangleGroup[]) {
+    const result: TfragVertexWithTexture[] = [];
+    for (let i = 0; i < triangleGroups.length; i++) {
+        const group = triangleGroups[i];
+        for (let j = 0; j < group.indices.length; j++) {
+            const vert = verts[group.indices[j]];
+            result.push({
+                ...vert,
+                textureLayer: group.material,
+            });
+        }
+    }
+    return result;
 }
 
 /**
@@ -268,40 +227,31 @@ export function assembleTfragFragment(tfragId: number, tfrag: Tfrag) {
  * 
  * Also, this function moves all the vertex positions to world space.
  */
-function concatAndRemoveDoubleIndirectionFromVertices(tfragId: number, tfrag: Tfrag) {
-    const basePosition = { x: tfrag.basePosition[0], y: tfrag.basePosition[1], z: tfrag.basePosition[2] };
+function concatAndRemoveDoubleIndirectionFromVertices(tfragId: number, tfrag: Tfrag): TfragVertex[] {
+    const basePosition = { x: tfrag.dataGroup2.basePosition[0], y: tfrag.dataGroup2.basePosition[1], z: tfrag.dataGroup2.basePosition[2] };
     const positionScale = 1 / 1024;
     const texcoordScale = 1 / 4096;
 
-    let tfragInfo: TfragVertexInfo[] = [];
-    for (const info of tfrag.commonVertexInfo.data ?? []) {
-        tfragInfo.push(info);
-    }
-    for (const info of tfrag.lod01VertexInfo?.data ?? []) {
-        tfragInfo.push(info);
-    }
-    for (const info of tfrag.lod0VertexInfo?.data ?? []) {
-        tfragInfo.push(info);
-    }
-    let tfragVerts: { x: number, y: number, z: number }[] = [];
-    for (const position of tfrag.commonPositions.data ?? []) {
-        tfragVerts.push(position);
-    }
-    for (const position of tfrag.lod01Positions?.data ?? []) {
-        tfragVerts.push(position);
-    }
-    for (const position of tfrag.lod0Positions?.data ?? []) {
-        tfragVerts.push(position);
-    }
+    const tfragInfo = new Array<TfragVertexInfo>().concat(
+        tfrag.dataGroup2.vertexInfoPart1,
+        tfrag.dataGroup4.vertexInfoPart2,
+        tfrag.dataGroup5.vertexInfoPart3,
+    );
+    const tfragVerts = new Array<{ x: number, y: number, z: number }>().concat(
+        tfrag.dataGroup2.vertexPositionsPart1,
+        tfrag.dataGroup4.vertexPositionsPart2,
+        tfrag.dataGroup5.vertexPositionsPart3,
+    );
 
-    return tfragInfo.map<TfragVertex>((info) => {
+    const result = new Array<TfragVertex>();
+    for (let i = 0; i < tfragInfo.length; i++) {
+        const info = tfragInfo[i];
         const idx = info.vertex / 2;
         const position = tfragVerts[idx];
         const rgba = tfrag.rgbas[idx];
         const light = tfrag.lights[idx];
         const normal = lightToNormal(light);
-        return {
-            tfragId,
+        result.push({
             x: positionScale * (basePosition.x + position.x),
             y: positionScale * (basePosition.y + position.y),
             z: positionScale * (basePosition.z + position.z),
@@ -318,8 +268,9 @@ function concatAndRemoveDoubleIndirectionFromVertices(tfragId: number, tfrag: Tf
             light1: light.directionalLights[1],
             light2: light.directionalLights[2],
             light3: light.directionalLights[3],
-        };
-    });
+        })
+    }
+    return result;
 }
 
 function lightToNormal(light: TfragLight) {
@@ -346,6 +297,7 @@ type TfragTriangleGroup = {
     indices: number[],
 }
 
+// decode the strips into triangle lists, grouped by material
 function stripsIntoTriangles(tfragId: number, strips: TfragStrip[], indices: Uint8Array, adGifs: TfragAdGifs[]): TfragTriangleGroup[] {
     const groups: TfragTriangleGroup[] = [];
 
@@ -361,14 +313,14 @@ function stripsIntoTriangles(tfragId: number, strips: TfragStrip[], indices: Uin
 
         switch (strip.endOfPacketFlag) {
             case 0: break; // normal strip
-            case -1: break outer; // end
-            case -128: break; // end of packet but not end of this tfrag
-            default: throw new Error(`Unknown strip flag ${strip.endOfPacketFlag}`);
+            case 0x80: break; // end of packet but not end of this tfrag
+            case 0xFF: break outer; // end
+            default: throw new Error(`Unknown strip flag`);
         }
 
         let newIndices: number[] = [];
-        let vertexCount = strip.vertexCountAndFlag;
-        if (vertexCount <= 0) {
+        let vertexCount = strip.vertexCount;
+        if (strip.hasAdGifFlag) {
             if (strip.adGifOffset === -1) {
                 // do nothing
             } else if (strip.adGifOffset >= 0) {
@@ -377,7 +329,6 @@ function stripsIntoTriangles(tfragId: number, strips: TfragStrip[], indices: Uin
             } else {
                 throw new Error(`invalid adGifOffset`);
             }
-            vertexCount += 128;
         }
         for (let i = 0; i < vertexCount - 2; i++) {
             newIndices.push(indices[vertexPtr + 0]);
@@ -395,6 +346,7 @@ function stripsIntoTriangles(tfragId: number, strips: TfragStrip[], indices: Uin
     return groups;
 }
 
+//
 function encodeVerts(verts: TfragVertexWithTexture[]) {
     const vertexArrayBuffer = new Float32Array(verts.length * TfragProgram.elementsPerVertex);
     let ptr = 0;
@@ -417,10 +369,6 @@ function encodeVerts(verts: TfragVertexWithTexture[]) {
         vertexArrayBuffer[ptr++] = vert.light2;
         vertexArrayBuffer[ptr++] = vert.light3;
     }
-
-    if (ptr !== vertexArrayBuffer.length) {
-        console.warn(`Vertex array buffer wrong length`);
-    }
-
+    assert(ptr === vertexArrayBuffer.length);
     return vertexArrayBuffer;
 }

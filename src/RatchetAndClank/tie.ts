@@ -5,7 +5,8 @@ import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { DeviceProgram } from "../Program";
 import { assert, nArray } from "../util";
 import { RatchetShaderLib } from "./shader-lib";
-import { TieClass, TiePacketCommand, TiePacketCommandTypes, TieVertex } from "./structs-core";
+import { TieClass, TieImaginaryGsCommand, TieVertex } from "./structs-core";
+import { ImaginaryGsCommandType } from "./utils";
 
 export class TieProgram extends DeviceProgram {
     public static a_Position = 0;
@@ -158,7 +159,7 @@ export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: 
     const texcoordScale = 1 / 4096;
     const normalScale = 1 / 0x7FFF;
 
-    const commandLists: TiePacketCommand[][] = [];
+    const commandLists: TieImaginaryGsCommand[][] = [];
     for (const packet of tie.packets[lod]) commandLists.push(packet.body.commandBuffer);
     const strips = commnadBufferToStrips(tieOClass, commandLists);
     strips.sort((a, b) => a.material - b.material);
@@ -168,31 +169,6 @@ export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: 
 
     const vertexArrayBuffer = new Float32Array(vertexBufferSize);
     let ptr = 0;
-
-    function fixTexcoords(verts: TieVertex[]) {
-        // if ajacent verts have very different texcoords, they're intended to overflow and wrap around
-        let min = 0, max = 0;
-        for (const vert of verts) {
-            if (vert.s < min) min = vert.s;
-            if (vert.s > max) max = vert.s;
-        }
-        if (max - min > 8 * 4096) {
-            for (const vert of verts) {
-                if (vert.s < 8 * 4096) vert.s += 16 * 4096;
-            }
-        }
-
-        min = 0, max = 0;
-        for (const vert of verts) {
-            if (vert.t < min) min = vert.t;
-            if (vert.t > max) max = vert.t;
-        }
-        if (max - min > 8 * 4096) {
-            for (const vert of verts) {
-                if (vert.t < 8 * 4096) vert.t += 16 * 4096;
-            }
-        }
-    }
 
     function pushTriangle(verts: { vertex: TieVertex, normalIndex: number }[], material: number) {
         fixTexcoords(verts.map(v => v.vertex));
@@ -205,7 +181,7 @@ export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: 
             vertexArrayBuffer[ptr++] = material;
             vertexArrayBuffer[ptr++] = texcoordScale * vert.s;
             vertexArrayBuffer[ptr++] = texcoordScale * vert.t;
-            if (vert.q !== 4096) throw new Error(`Unexpected non-1 q in vertex`);
+            assert(vert.q === 4096);
 
             vertexArrayBuffer[ptr++] = normalScale * normal.x;
             vertexArrayBuffer[ptr++] = normalScale * normal.y;
@@ -228,7 +204,32 @@ export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: 
     return { vertexArrayBuffer, vertexCount };
 }
 
-function commnadBufferToStrips(tieOClass: number, packets: TiePacketCommand[][]) {
+// if ajacent verts have very different texcoords, they're intended to overflow and wrap around
+function fixTexcoords(verts: TieVertex[]) {
+    let min = 0, max = 0;
+    for (const vert of verts) {
+        if (vert.s < min) min = vert.s;
+        if (vert.s > max) max = vert.s;
+    }
+    if (max - min > 8 * 4096) {
+        for (const vert of verts) {
+            if (vert.s < 8 * 4096) vert.s += 16 * 4096;
+        }
+    }
+
+    min = 0, max = 0;
+    for (const vert of verts) {
+        if (vert.t < min) min = vert.t;
+        if (vert.t > max) max = vert.t;
+    }
+    if (max - min > 8 * 4096) {
+        for (const vert of verts) {
+            if (vert.t < 8 * 4096) vert.t += 16 * 4096;
+        }
+    }
+}
+
+function commnadBufferToStrips(tieOClass: number, packets: TieImaginaryGsCommand[][]) {
     type TieStrip = { material: number, windingOrder: number, isFirstStripInPacket: number, verts: { vertex: TieVertex, normalIndex: number }[] };
 
     let strip: TieStrip | undefined;
@@ -241,7 +242,7 @@ function commnadBufferToStrips(tieOClass: number, packets: TiePacketCommand[][])
         for (let i = 0; i < packet.length; i++) {
             const command = packet[i];
             switch (command.type) {
-                case TiePacketCommandTypes.PRIMITIVE_RESET: {
+                case ImaginaryGsCommandType.PRIMITIVE_RESET: {
                     if (lastMaterial === null) {
                         throw new Error(`Unexpected primative reset before material`);
                     }
@@ -249,12 +250,12 @@ function commnadBufferToStrips(tieOClass: number, packets: TiePacketCommand[][])
                     strips.push(strip);
                     break;
                 }
-                case TiePacketCommandTypes.SET_MATERIAL: {
+                case ImaginaryGsCommandType.SET_MATERIAL: {
                     lastMaterial = command.value;
                     strip = undefined;
                     break;
                 }
-                case TiePacketCommandTypes.VERTEX: {
+                case ImaginaryGsCommandType.VERTEX: {
                     const vert = command.value;
                     if (!strip) {
                         throw new Error(`Unexpected vertex before primative reset`);

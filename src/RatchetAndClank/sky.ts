@@ -3,6 +3,7 @@ import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
 import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice, GfxFormat, GfxInputLayout, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { DeviceProgram } from "../Program";
+import { assert } from "../util";
 import { RatchetShaderLib } from "./shader-lib";
 import { SkyShell } from "./structs-core";
 
@@ -74,6 +75,8 @@ export class SkyGeometry {
     public vertexBuffer: GfxBuffer;
     public indexBuffer: GfxBuffer;
     public draws: { material: number, flags: { textured: boolean }, indexCount: number, startIndex: number }[] = [];
+    public hasTexture: boolean = false;
+
     public assembled: ReturnType<typeof assembleSkyShellGeometry>;
 
     public inputLayout: GfxInputLayout;
@@ -90,6 +93,7 @@ export class SkyGeometry {
         device.setResourceName(this.indexBuffer, `Sky (IB)`);
 
         this.draws = assembled.draws;
+        this.hasTexture = skyShell.header.flags.textured;
 
         this.inputLayout = cache.createInputLayout({
             vertexAttributeDescriptors: [
@@ -199,16 +203,15 @@ function assembleSkyShellGeometry(skyShell: SkyShell) {
     }
 
     const indexArrayBuffer = new Uint16Array(draws.length * 3);
-    let lastMaterial = 0;
     const draws2: { material: number, flags: { textured: boolean }, startIndex: number, indexCount: number }[] = [];
     for (let i = 0; i < draws.length; i++) {
-        if (draws[i].material !== 0xff) lastMaterial = draws[i].material;
         const draw = draws[i];
+        assert(draw.flags.textured === false || draw.material !== 0xFF);
         indexArrayBuffer[i * 3 + 0] = draw.indices[0];
         indexArrayBuffer[i * 3 + 1] = draw.indices[1];
         indexArrayBuffer[i * 3 + 2] = draw.indices[2];
         draws2.push({
-            material: lastMaterial,
+            material: draw.material,
             flags: draw.flags,
             startIndex: i * 3,
             indexCount: 3,

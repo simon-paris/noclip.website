@@ -6,7 +6,8 @@ import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { DeviceProgram } from "../Program";
 import { assert, nArray } from "../util";
 import { RatchetShaderLib } from "./shader-lib";
-import { ShrubClass, ShrubPacketCommand, ShrubPacketCommandTypes, ShrubVertex } from "./structs-core";
+import { ShrubClass, ShrubImaginaryGsCommand, ShrubVertex } from "./structs-core";
+import { ImaginaryGsCommandType } from "./utils";
 
 export class ShrubProgram extends DeviceProgram {
     public static a_Position = 0;
@@ -191,7 +192,7 @@ export function assembleShrubClassGeometry(shrub: ShrubClass) {
     return { vertexData: vertexArrayBuffer };
 }
 
-function commandBufferToTriangles(commandBuffer: ShrubPacketCommand[]) {
+function commandBufferToTriangles(commandBuffer: ShrubImaginaryGsCommand[]) {
     let currentPrimativeType: GsPrimitiveType | null = null;
     let currentMaterial: { texture: number, clamp: number } | null = null;
 
@@ -199,7 +200,7 @@ function commandBufferToTriangles(commandBuffer: ShrubPacketCommand[]) {
 
     for (const command of commandBuffer) {
         switch (command.type) {
-            case ShrubPacketCommandTypes.PRIMITIVE: {
+            case ImaginaryGsCommandType.PRIMITIVE_RESET: {
                 currentPrimativeType = command.value.type;
                 if (currentMaterial === null) {
                     throw new Error("Got a primitive reset command before we had a material set");
@@ -207,14 +208,14 @@ function commandBufferToTriangles(commandBuffer: ShrubPacketCommand[]) {
                 groups.push({ material: currentMaterial, strip: [], triangleList: [] });
                 break;
             }
-            case ShrubPacketCommandTypes.SET_MATERIAL: {
+            case ImaginaryGsCommandType.SET_MATERIAL: {
                 currentMaterial = {
                     texture: command.value.adGif.tex0.low,
                     clamp: command.value.adGif.clamp.low,
                 };
                 break;
             }
-            case ShrubPacketCommandTypes.VERTEX: {
+            case ImaginaryGsCommandType.VERTEX: {
                 if (currentPrimativeType === GsPrimitiveType.TRIANGLE_STRIP) {
                     groups[groups.length - 1].strip.push(command.value);
                 } else if (currentPrimativeType === GsPrimitiveType.TRIANGLE) {

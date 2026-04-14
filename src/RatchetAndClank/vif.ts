@@ -229,6 +229,50 @@ export function readVifStcyclData(vifCommand: VifCommand) {
     };
 }
 
-export function isUnpackCommand(cmd: number) {
+export function vifUnpacks(commands: VifCommand[]): (() => DataViewExt) & { nextVnvl: () => VifVnVl, nextAddr: () => number, hasNext: () => boolean } {
+    let i = 0;
+
+    function advanceToNext(failIfNotFound: boolean = true) {
+        for (; i < commands.length; i++) {
+            const cmd = commands[i];
+            if (isUnpackCommand(cmd.cmd)) {
+                return;
+            }
+        }
+        if (failIfNotFound) {
+            throw new Error(`No more UNPACK commands in list`);
+        }
+    }
+
+    const fn = function (): DataViewExt {
+        advanceToNext();
+        const cmd = commands[i];
+        i++; // advance past this command
+        return readVifUnpackData(cmd);
+    };
+
+    (fn as any).nextVnvl = function (): VifVnVl {
+        advanceToNext();
+        const cmd = commands[i];
+        // do not advance i here
+        return cmd.unpack!.vnvl;
+    };
+
+    (fn as any).nextAddr = function (): number {
+        advanceToNext();
+        const cmd = commands[i];
+        // do not advance i here
+        return cmd.unpack!.addr;
+    };
+
+    (fn as any).hasNext = function (): boolean {
+        advanceToNext(false);
+        return !!commands[i];
+    };
+
+    return fn as (() => DataViewExt) & { nextVnvl: () => VifVnVl, nextAddr: () => number, hasNext: () => boolean };
+}
+
+export function isUnpackCommand(cmd: number): boolean {
     return cmd >= 0x60 && cmd <= 0x7f;
 }

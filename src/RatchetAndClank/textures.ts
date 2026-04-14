@@ -1,14 +1,14 @@
 import { Color } from "../Color";
 import { DataViewExt } from "../DataViewExt";
 import { GfxDevice, GfxFormat, GfxTexture, GfxTextureDimension, GfxTextureUsage, makeTextureDescriptor2D } from "../gfx/platform/GfxPlatform";
-import { SkyHeader, SkyTexture, TextureEntry } from "./structs-core";
+import { SkyHeader, SkyTextureEntry, TextureEntry } from "./structs-core";
 
 export type PaletteTexture = {
     name: string,
     textureEntry: { width: number, height: number },
     pixels: Uint8Array,
     palette: Color[],
-}
+};
 
 export function readPalette8TextureWithPaletteInGsRam(textureEntry: TextureEntry, textureData: DataViewExt, gsRam: DataViewExt, ownerType: string, i: number): PaletteTexture {
     const pixels = textureData.subview(textureEntry.dataOffset, textureEntry.width * textureEntry.height).getTypedArrayView(Uint8Array);
@@ -23,7 +23,7 @@ export function readPalette8TextureWithPaletteInGsRam(textureEntry: TextureEntry
     };
 }
 
-export function readPalette8TextureSky(skyView: DataViewExt, skyHeader: SkyHeader, textureEntry: SkyTexture, i: number): PaletteTexture {
+export function readPalette8TextureSky(skyView: DataViewExt, skyHeader: SkyHeader, textureEntry: SkyTextureEntry, i: number): PaletteTexture {
     const pixels = skyView.subview(skyHeader.textureData + textureEntry.dataOffset, textureEntry.width * textureEntry.height).getTypedArrayView(Uint8Array);
     let rgbaPalette = skyView.subview(skyHeader.textureData + textureEntry.palette, 256 * 4).subdivide(0, 256, 4).map(view => view.getUint8_Rgba(0));
     rgbaPalette = fixPalette(rgbaPalette);
@@ -53,7 +53,7 @@ function fixPalette(palette: Color[]) {
 
 function mapPaletteIndices(index: number) {
     // swap the two middle bits for some reason
-    return (((index & 16) >> 1) != (index & 8)) ? (index ^ 0b00011000) : index;
+    return (((index & 0b00010000) >> 1) != (index & 0b00001000)) ? (index ^ 0b00011000) : index;
 }
 
 // convert palette texture to regular RGBA texture
