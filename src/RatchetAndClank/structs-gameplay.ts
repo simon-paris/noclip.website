@@ -3,66 +3,67 @@ import { DataViewExt } from "../DataViewExt";
 export type GameplayHeader = ReturnType<typeof readGameplayHeader>;
 export function readGameplayHeader(view: DataViewExt) {
     /*
-        struct GameplayHeader {
-            // 0x0 
-            i32 levelSettings;
-            // 0x4 - InstanceBlock<DirectionLightInstance>
-            i32 directionLightInstances;
-            // 0x8 - InstanceBlock<CameraInstance>
-            i32 cameraInstances;
-            // 0xc - InstanceBlock<SoundInstance>
-            i32 soundInstances;
-            // 0x10 - 0x2c
-            // help message fields
-            // 0x30
-            i32 tieClasses; // <- not sure what this is since I already have tie classes from the core file
-            // 0x34 - InstanceBlock<TieInstance>
-            i32 tieInstances;
-            // 0x38
-            i32 shrubClasses;
-            // 0x3c - InstanceBlock<ShrubInstance>
-            i32 shrubInstances;
-            // 0x40
-            i32 mobyClasses;
-            // 0x44 (not the same InstanceBlock structure as the other instance blocks)
-            i32 mobyInstances;
-            // 0x48
-            i32 mobyGroupInstances;
-            // 0x4c
-            i32 sharedData;
-            // 0x50
-            i32 pvarMobyLinks;
-            // 0x54
-            i32 pvarTable;
-            // 0x58
-            i32 pvarData;
-            // 0x5c
-            i32 pvarRelativePointers;
-            // 0x60
-            i32 shapesCuboids;
-            // 0x64
-            i32 shapesSpheres;
-            // 0x68
-            i32 shapesCylinders;
-            // 0x6c
-            i32 shapesPills;
-            // 0x70
-            i32 paths;
-            // 0x74
-            i32 grindPaths;
-            // 0x78
-            i32 pointLightGrid;
-            // 0x7c
-            i32 pointLightInstances;
-            // 0x80
-            i32 envTransitions;
-            // 0x84
-            i32 camColGrid;
-            // 0x88
-            i32 envSamplePoints;
-            // 0x8c
-            i32 occlusionMappings;
-        }
+    // https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/instancemgr/gameplay.cpp#L113
+    struct GameplayHeader {
+        // 0x0 
+        int32 levelSettings;
+        // 0x4 - InstanceBlock<DirectionLightInstance>
+        int32 directionLightInstances;
+        // 0x8 - InstanceBlock<CameraInstance>
+        int32 cameraInstances;
+        // 0xc - InstanceBlock<SoundInstance>
+        int32 soundInstances;
+        // 0x10 - 0x2c
+        // help message fields
+        // 0x30
+        int32 tieClasses; // just an array of o_class numbers, not class definitions
+        // 0x34 - InstanceBlock<TieInstance>
+        int32 tieInstances;
+        // 0x38
+        int32 shrubClasses;
+        // 0x3c - InstanceBlock<ShrubInstance>
+        int32 shrubInstances;
+        // 0x40
+        int32 mobyClasses;
+        // 0x44 (not the same InstanceBlock structure as the other instance blocks)
+        int32 mobyInstances;
+        // 0x48
+        int32 mobyGroupInstances;
+        // 0x4c
+        int32 sharedData;
+        // 0x50
+        int32 pvarMobyLinks;
+        // 0x54
+        int32 pvarTable;
+        // 0x58
+        int32 pvarData;
+        // 0x5c
+        int32 pvarRelativePointers;
+        // 0x60
+        int32 shapesCuboids;
+        // 0x64
+        int32 shapesSpheres;
+        // 0x68
+        int32 shapesCylinders;
+        // 0x6c
+        int32 shapesPills;
+        // 0x70
+        int32 paths;
+        // 0x74
+        int32 grindPaths;
+        // 0x78
+        int32 pointLightGrid;
+        // 0x7c
+        int32 pointLightInstances;
+        // 0x80
+        int32 envTransitions;
+        // 0x84
+        int32 camColGrid;
+        // 0x88
+        int32 envSamplePoints;
+        // 0x8c
+        int32 occlusionMappings;
+    }
     */
     return {
         levelSettings: view.getInt32(0x0),
@@ -80,45 +81,31 @@ export function readGameplayHeader(view: DataViewExt) {
     }
 }
 
+export type LevelSettings = {
+    backgroundColor: { r: number, g: number, b: number },
+    fogColor: { r: number, g: number, b: number },
+    fogNearDistance: number,
+    fogFarDistance: number,
+    fogNearIntensity: number,
+    fogFarIntensity: number,
+    deathHeight: number,
+    shipPosition: { x: number, y: number, z: number },
+    shipRotationZ: number,
+    shipPath: number,
+    shipCameraCuboidStart: number,
+    shipCameraCuboidEnd: number,
+}
 export const SIZEOF_LEVEL_SETTINGS_1 = 0x50;
-export type LevelSettings = ReturnType<typeof readLevelSettings>;
-export function readLevelSettings(view: DataViewExt) {
+export function readLevelSettings(view: DataViewExt): LevelSettings {
     /*
-        packed_struct(RacLevelSettingsFirstPart,
-            // 0x00
-            Rgb96 background_colour;
-            // 0x0c
-            Rgb96 fog_colour;
-            // 0x18
-            f32 fog_near_distance;
-            // 0x1c
-            f32 fog_far_distance;
-            // 0x20
-            f32 fog_near_intensity;
-            // 0x24
-            f32 fog_far_intensity;
-            // 0x28
-            f32 death_height;
-            // 0x2c
-            Vec3f ship_position;
-            // 0x38
-            f32 ship_rotation_z;
-            // 0x3c
-            s32 ship_path;
-            // 0x40
-            s32 ship_camera_cuboid_start;
-            // 0x44
-            s32 ship_camera_cuboid_end;
-            // 0x48
-            u32 pad[2];
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/instancemgr/gameplay_impl_misc.inl#L24
     */
     return {
         backgroundColor: view.getInt32_Rgb(0),
         fogColor: view.getInt32_Rgb(0xc),
-        fogNearDistance: view.getFloat32(0x18), // weird units - this is a float but it has to be divided by 1024 like it's a fixed point
+        fogNearDistance: view.getFloat32(0x18), // distance in world space multiplied by 1024
         fogFarDistance: view.getFloat32(0x1c),
-        fogNearIntensity: view.getFloat32(0x20), // also weird units - 255 means zero fog, 0 means full fog
+        fogNearIntensity: view.getFloat32(0x20), // 255 means zero fog, 0 means full fog
         fogFarIntensity: view.getFloat32(0x24),
         deathHeight: view.getFloat32(0x28),
         shipPosition: view.getFloat32_Xyz(0x2c),
@@ -129,31 +116,19 @@ export function readLevelSettings(view: DataViewExt) {
     }
 }
 
+export type TieInstance = {
+    oClass: number,
+    drawDistance: number,
+    occlusionIndex: number,
+    matrix: Float32Array,
+    ambientRgbas: number[],
+    directionalLights: number[],
+    uid: number,
+}
 export const SIZEOF_TIE_INSTANCE = 0xe0;
-export type TieInstance = ReturnType<typeof readTieInstance>;
-export function readTieInstance(view: DataViewExt) {
+export function readTieInstance(view: DataViewExt): TieInstance {
     /*
-        // size 0xe0
-        packed_struct(RacTieInstance,
-            // 0x00
-            i32 o_class;
-            // 0x04
-            i32 draw_distance;
-            // 0x08
-            i32 pad_8;
-            // 0x0c
-            i32 occlusion_index;
-            // 0x10
-            Mat4 matrix;
-            // 0x50
-            u8 ambient_rgbas[0x80];
-            // 0xd0
-            i32 directional_lights;
-            // 0xd4
-            i32 uid;
-            // 0xd8
-            i32 pad[2];
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/instancemgr/gameplay_impl_classes.inl#L611
     */
 
     const matrix = view.getMat4Slice(0x10).slice();
@@ -164,66 +139,33 @@ export function readTieInstance(view: DataViewExt) {
         drawDistance: view.getInt32(0x4),
         occlusionIndex: view.getInt32(0xc),
         matrix,
-        ambientRgbas: view.getArrayOfNumbers(0x50, 0x80 / 2, Uint16Array), // not sure how to read this... could be offsets
+        ambientRgbas: view.getArrayOfNumbers(0x50, 0x80 / 2, Uint16Array), // not sure how to read this... looks like byte offsets but not sure relative to what
         directionalLights: view.getNibbleArray(0xd0, 2),
         uid: view.getInt32(0xd4),
     }
 }
 
+export type MobyInstance = {
+    size: number,
+    oClass: number,
+    scale: number,
+    drawDistance: number,
+    updateDistance: number,
+    position: { x: number, y: number, z: number },
+    rotation: { x: number, y: number, z: number },
+    group: number,
+    isRooted: number,
+    rootedDistance: number,
+    pvarIndex: number,
+    occlusion: number,
+    modeBits: number,
+    color: { r: number, g: number, b: number },
+    light: number,
+}
 export const SIZEOF_MOBY_INSTANCE = 0x78;
-export type MobyInstance = ReturnType<typeof readMobyInstance>;
-export function readMobyInstance(view: DataViewExt) {
+export function readMobyInstance(view: DataViewExt): MobyInstance {
     /*
-        packed_struct(RacMobyInstance,
-            // 0x00
-            s32 size;
-            // 0x04
-            s32 unknown_4;
-            // 0x08
-            s32 unknown_8;
-            // 0x0c
-            s32 unknown_c;
-            // 0x10
-            s32 unknown_10;
-            // 0x14
-            s32 unknown_14;
-            // 0x18
-            s32 o_class;
-            // 0x1c
-            f32 scale;
-            // 0x20
-            f32 draw_distance;
-            // 0x24
-            s32 update_distance;
-            // 0x28
-            s32 unused_28;
-            // 0x2c
-            s32 unused_2c;
-            // 0x30
-            Vec3f position;
-            // 0x3c
-            Vec3f rotation;
-            // 0x48
-            s32 group;
-            // 0x4c
-            s32 is_rooted;
-            // 0x50
-            f32 rooted_distance;
-            // 0x54
-            s32 unknown_54;
-            // 0x58
-            s32 pvar_index;
-            // 0x5c
-            s32 occlusion;
-            // 0x60
-            s32 mode_bits;
-            // 0x64
-            Rgb96 colour;
-            // 0x70
-            s32 light;
-            // 0x74
-            s32 unknown_74;
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/instancemgr/gameplay_impl_classes.inl#L58
     */
 
     return {
@@ -245,34 +187,17 @@ export function readMobyInstance(view: DataViewExt) {
     }
 }
 
+export type ShrubInstance = {
+    oClass: number,
+    drawDistance: number,
+    matrix: Float32Array,
+    color: { r: number, g: number, b: number },
+    directionalLights: number[],
+}
 export const SIZEOF_SHRUB_INSTANCE = 0x70;
-export type ShrubInstance = ReturnType<typeof readShrubInstance>;
-export function readShrubInstance(view: DataViewExt) {
+export function readShrubInstance(view: DataViewExt): ShrubInstance {
     /*
-        packed_struct(ShrubInstancePacked,
-            // 0x00
-            s32 o_class;
-            // 0x04
-            f32 draw_distance;
-            // 0x08
-            s32 unused_8;
-            // 0x0c
-            s32 unused_c;
-            // 0x10
-            Mat4 matrix;
-            // 0x50
-            Rgb96 colour;
-            // 0x5c
-            s32 unused_5c;
-            // 0x60
-            s32 dir_lights;
-            // 0x64
-            s32 unused_64;
-            // 0x68
-            s32 unused_68;
-            // 0x6c
-            s32 unused_6c;
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/instancemgr/gameplay_impl_classes.inl#L673
     */
 
     const matrix = view.getMat4Slice(0x10).slice();
@@ -297,8 +222,8 @@ export function readInstanceBlock<T>(view: DataViewExt, instanceSize: number, re
     /*
         struct InstanceBlockHeader<T> {
             // 0x0
-            i32 count;
-            i32 pad[3];
+            int32 count;
+            int32 pad[3];
             // 0x10
             T instances[count];
         }
@@ -311,20 +236,16 @@ export function readInstanceBlock<T>(view: DataViewExt, instanceSize: number, re
     }
 }
 
+export type DirectionLightInstance = {
+    colorA: { r: number, g: number, b: number, a: number },
+    directionA: { x: number, y: number, z: number, w: number },
+    colorB: { r: number, g: number, b: number, a: number },
+    directionB: { x: number, y: number, z: number, w: number },
+};
 export const SIZEOF_DIRECTION_LIGHT_INSTANCE = 0x40;
-export type DirectionLightInstance = ReturnType<typeof readDirectionLightInstance>;
-export function readDirectionLightInstance(view: DataViewExt) {
+export function readDirectionLightInstance(view: DataViewExt): DirectionLightInstance {
     /*
-        packed_struct(DirectionalLightPacked,
-            // 0x00
-            Vec4f colour_a;
-            // 0x10
-            Vec4f direction_a;
-            // 0x20
-            Vec4f colour_b;
-            // 0x30
-            Vec4f direction_b;
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/instancemgr/gameplay_impl_env.inl#L628
     */
     return {
         colorA: view.getFloat32_Rgba(0x0),
@@ -334,20 +255,15 @@ export function readDirectionLightInstance(view: DataViewExt) {
     }
 }
 
+export type PointLightInstance = {
+    position: Float32Array,
+    radius: number,
+    color: { r: number, g: number, b: number },
+}
 export const SIZEOF_POINT_LIGHT_INSTANCE = 0x20;
-export type PointLightInstance = ReturnType<typeof readPointLightInstance>;
-export function readPointLightInstance(view: DataViewExt) {
+export function readPointLightInstance(view: DataViewExt): PointLightInstance {
     /*
-        packed_struct(PointLightPacked,
-            // 0x00
-            Vec3f position;
-            // 0x0c
-            f32 radius;
-            // 0x10
-            Rgb32 colour;
-            // 0x14
-            u32 pad[3];
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/instancemgr/gameplay_impl_env.inl#L628
     */
     return {
         position: view.getVec3Slice(0x0),
@@ -356,60 +272,78 @@ export function readPointLightInstance(view: DataViewExt) {
     }
 }
 
-export const SIZEOF_PATH_BLOCK_HEADER = 0x10;
-export type PathBlockHeader = ReturnType<typeof readPathBlockHeader>;
-export function readPathBlockHeader(view: DataViewExt) {
+export type PathBlockHeader = {
+    splineCount: number,
+    dataOffset: number,
+    dataSize: number,
+    pointers: number[],
+}
+export function readPathBlockHeader(view: DataViewExt): PathBlockHeader {
     /*
-        packed_struct(PathBlockHeader,
-            // 0x0
-            s32 spline_count;
-            // 0x4
-            s32 data_offset;
-            // 0x8
-            s32 data_size;
-            // 0xc
-            s32 pad;
-        )
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/instancemgr/gameplay_impl_misc.inl#L357
+    struct PathBlock {
+        int32 splineCount;
+        int32 dataOffset;
+        int32 dataSize;
+        int32 pad;
+        int32 pointers[header.splineCount]; // path data is relative to PathBlock, at dataOffset + pointers[i]
+    }
     */
+    const splineCount = view.getInt32(0x0);
     return {
-        splineCount: view.getInt32(0x0),
+        splineCount,
         dataOffset: view.getInt32(0x4),
         dataSize: view.getInt32(0x8),
+        pointers: view.getArrayOfNumbers(0x10, splineCount, Uint32Array),
+    };
+}
+export function readGrindPathBlockHeader(view: DataViewExt): PathBlockHeader {
+    /*
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/instancemgr/gameplay_impl_misc.inl#L402
+    struct GrindPathBlock {
+        int32 splineCount;
+        int32 dataOffset;
+        int32 dataSize;
+        int32 pad;
+        struct {
+            f32vec4 boundingSphere;
+            int32 unknown;
+            int32 wrap;
+            int32 inactive;
+            int32 pad;
+        } grindPathData[header.splineCount];
+        int32 pointers[header.splineCount];
+    }
+    */
+    const splineCount = view.getInt32(0x0);
+    return {
+        splineCount,
+        dataOffset: view.getInt32(0x4),
+        dataSize: view.getInt32(0x8),
+        pointers: view.getArrayOfNumbers(0x10 + splineCount * 0x20, splineCount, Uint32Array),
     };
 }
 
 export function readPathBlock(view: DataViewExt) {
     const header = readPathBlockHeader(view);
-    return readSplines(view.subview(SIZEOF_PATH_BLOCK_HEADER), header.splineCount, header.dataOffset - 0x10);
+    return header.pointers.map(offset => readSpline(view.subview(header.dataOffset + offset)));
 }
 
 export function readGrindPathBlock(view: DataViewExt) {
-    const header = readPathBlockHeader(view);
-
-    // skip grind path headers after the block header, header.splineCount*0x20 bytes
-    const SIZEOF_GRIND_PATH_HEADER = 0x20;
-
-    const totalHeaderSize = SIZEOF_PATH_BLOCK_HEADER + header.splineCount * SIZEOF_GRIND_PATH_HEADER;
-    return readSplines(view.subview(totalHeaderSize), header.splineCount, header.dataOffset - totalHeaderSize);
-}
-
-export function readSplines(view: DataViewExt, count: number, offset: number) {
-    // read an array of offsets at offset, then read splines at offsets[i]
-    // both offsets are relative to the start of block not to the end of the header
-    const offsets = view.getArrayOfNumbers(0, count, Int32Array);
-    return offsets.map(offset2 => readSpline(view.subview(offset + offset2)));
+    const header = readGrindPathBlockHeader(view);
+    return header.pointers.map(offset => readSpline(view.subview(header.dataOffset + offset)));
 }
 
 export function readSpline(view: DataViewExt) {
     /*
-        struct Spline {
-            // 0x0
-            i32 count;
-            // 0x4
-            i32 align[3];
-            // 0x10
-            vec4 points[count];
-        }
+    struct Spline {
+        // 0x0
+        int32 count;
+        // 0x4
+        int32 pad[3];
+        // 0x10
+        f32vec4 points[count];
+    }
     */
     const count = view.getInt32(0x0);
     const points = view.subdivide(0x10, count, 0x10).map(view => view.getFloat32_Xyzw(0));

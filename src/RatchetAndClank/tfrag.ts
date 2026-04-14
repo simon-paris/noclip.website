@@ -7,8 +7,6 @@ import { RatchetShaderLib } from "./shader-lib";
 import { Tfrag, TfragAdGifs, TfragLight, TfragStrip, TfragVertexInfo } from "./structs-core";
 
 export class TfragProgram extends DeviceProgram {
-    // position(3) + normal(3) + rgba(4) + texture(1) + st(2) + debug(4) = 17
-    public static elementsPerVertex = 17;
     public static a_Position = 0;
     public static a_Normal = 1;
     public static a_Rgba = 2;
@@ -16,13 +14,27 @@ export class TfragProgram extends DeviceProgram {
     public static a_ST = 4;
     public static a_DirLightIndices = 5;
 
-    // Define the slot index for our uniform parameters. noclip's framework just assigns sequential indices to
-    // uniform blocks seen in the shader, in-order, starting with 0.
+    public static elementsPerVertex = 17; // position(3) + normal(3) + rgba(4) + texture(1) + st(2) + debug(4) = 17
+
     public static ub_SceneParams = 0;
     public static ub_TfragParams = 1;
 
+    public override both = `
+precision highp float;
+precision highp sampler2DArray;
+
+${GfxShaderLibrary.MatrixLibrary}
+${RatchetShaderLib.SceneParams}
+
+layout(std140) uniform ub_TfragParams {
+    Mat4x4 u_WorldFromLocal;
+};
+
+layout(location = 0) uniform sampler2DArray u_Texture;
+
+`;
+
     public override vert = `
-${TfragProgram.Common}
 
 layout(location = ${TfragProgram.a_Position}) in vec3 a_Position;
 layout(location = ${TfragProgram.a_Normal}) in vec3 a_Normal;
@@ -55,7 +67,6 @@ void main() {
 `;
 
     public override frag = `
-${TfragProgram.Common}
 ${RatchetShaderLib.CommonFragmentShader}
 
 in vec3 v_Normal;
@@ -66,21 +77,6 @@ flat in float v_TextureLayer;
 void main() {
     gl_FragColor = commonFragmentShader(v_Rgba, texture(SAMPLER_2DArray(u_Texture), vec3(v_ST, v_TextureLayer)));
 }
-`;
-
-    public static Common = `
-precision highp float;
-precision highp sampler2DArray;
-
-${GfxShaderLibrary.MatrixLibrary}
-${RatchetShaderLib.SceneParams}
-
-layout(std140) uniform ub_TfragParams {
-    Mat4x4 u_WorldFromLocal;
-};
-
-layout(location = 0) uniform sampler2DArray u_Texture;
-
 `;
 
 }
@@ -114,51 +110,16 @@ export class TfragGeometry {
 
         this.inputLayout = cache.createInputLayout({
             vertexAttributeDescriptors: [
-                {
-                    location: TfragProgram.a_Position,
-                    format: GfxFormat.F32_RGB,
-                    bufferByteOffset: 0,
-                    bufferIndex: 0,
-                },
-                {
-                    location: TfragProgram.a_Normal,
-                    format: GfxFormat.F32_RGB,
-                    bufferByteOffset: 3 * 0x4,
-                    bufferIndex: 0,
-                },
-                {
-                    location: TfragProgram.a_Rgba,
-                    format: GfxFormat.F32_RGBA,
-                    bufferByteOffset: 6 * 0x4,
-                    bufferIndex: 0,
-                },
-                {
-                    location: TfragProgram.a_TextureLayer,
-                    format: GfxFormat.F32_R,
-                    bufferByteOffset: 10 * 0x4,
-                    bufferIndex: 0,
-                },
-                {
-                    location: TfragProgram.a_ST,
-                    format: GfxFormat.F32_RG,
-                    bufferByteOffset: 11 * 0x4,
-                    bufferIndex: 0,
-                },
-                {
-                    location: TfragProgram.a_DirLightIndices,
-                    format: GfxFormat.F32_RGBA,
-                    bufferByteOffset: 13 * 0x4,
-                    bufferIndex: 0,
-                },
+                { location: TfragProgram.a_Position, format: GfxFormat.F32_RGB, bufferByteOffset: 0, bufferIndex: 0, },
+                { location: TfragProgram.a_Normal, format: GfxFormat.F32_RGB, bufferByteOffset: 3 * 0x4, bufferIndex: 0, },
+                { location: TfragProgram.a_Rgba, format: GfxFormat.F32_RGBA, bufferByteOffset: 6 * 0x4, bufferIndex: 0, },
+                { location: TfragProgram.a_TextureLayer, format: GfxFormat.F32_R, bufferByteOffset: 10 * 0x4, bufferIndex: 0, },
+                { location: TfragProgram.a_ST, format: GfxFormat.F32_RG, bufferByteOffset: 11 * 0x4, bufferIndex: 0, },
+                { location: TfragProgram.a_DirLightIndices, format: GfxFormat.F32_RGBA, bufferByteOffset: 13 * 0x4, bufferIndex: 0, },
             ],
-
             vertexBufferDescriptors: [
-                {
-                    byteStride: TfragProgram.elementsPerVertex * 0x4,
-                    frequency: GfxVertexBufferFrequency.PerVertex,
-                },
+                { byteStride: TfragProgram.elementsPerVertex * 0x4, frequency: GfxVertexBufferFrequency.PerVertex, },
             ],
-
             indexBufferFormat: null,
         });
     }
@@ -301,8 +262,6 @@ export function assembleTfragFragment(tfragId: number, tfrag: Tfrag) {
  * 
  * The index buffer actually points into the VertexInfo array, and VertexInfo points into the vertex array, and each VertexInfo also
  * optionally points to a parent vertex from a lower lod.
- * 
- * If a vertex has a parent, it can be lerped between the vertex position and parent position to transition between LODs.
  * 
  * This function concatenates the 3 info/vertex arrays, and flattens the parent positions into the vertex array.
  * So after this, the index buffers point directly into the vertex array.

@@ -12,14 +12,24 @@ export class SkyProgram extends DeviceProgram {
     public static a_Rgba = 2;
     public static a_Alpha = 3;
 
-    public static elementsPerVertex = 10; // xyz, st, rgba, a
+    public static elementsPerVertex = 10; // position(3) + st(2) + rgba(4) + alpha(1) = 10
 
     public static ub_SceneParams = 0;
     public static ub_SkyParams = 1;
 
-    public override vert = `
-${SkyProgram.Common}
+    public override both = `
+${GfxShaderLibrary.MatrixLibrary}
+${RatchetShaderLib.SceneParams}
 
+layout(std140) uniform ub_SkyParams {
+    Mat4x4 u_SkyTransform;
+    vec4 u_ExtraData; // x = isTextured, yzw = padding
+};
+
+layout(location = 0) uniform sampler2D u_Texture;
+`;
+
+    public override vert = `
 layout(location = ${SkyProgram.a_Position}) in vec3 a_Position;
 layout(location = ${SkyProgram.a_ST}) in vec2 a_ST;
 layout(location = ${SkyProgram.a_Rgba}) in vec4 a_Rgba;
@@ -43,7 +53,6 @@ void main() {
 `;
 
     public override frag = `
-${SkyProgram.Common}
 ${RatchetShaderLib.CommonFragmentShader}
 in vec2 v_ST;
 in vec4 v_Rgba;
@@ -57,18 +66,6 @@ void main() {
     }
     gl_FragColor = vec4(adjustSaturation(gl_FragColor.xyz, SATURATION_ADJUST), gl_FragColor.a);
 }
-`;
-
-    public static Common = `
-${GfxShaderLibrary.MatrixLibrary}
-${RatchetShaderLib.SceneParams}
-
-layout(std140) uniform ub_SkyParams {
-    Mat4x4 u_SkyTransform;
-    vec4 u_ExtraData; // x = isTextured, yzw = padding
-};
-
-layout(location = 0) uniform sampler2D u_Texture;
 `;
 
 }
@@ -96,40 +93,15 @@ export class SkyGeometry {
 
         this.inputLayout = cache.createInputLayout({
             vertexAttributeDescriptors: [
-                {
-                    location: SkyProgram.a_Position,
-                    format: GfxFormat.F32_RGB,
-                    bufferByteOffset: 0,
-                    bufferIndex: 0,
-                },
-                {
-                    location: SkyProgram.a_ST,
-                    format: GfxFormat.F32_RG,
-                    bufferByteOffset: 3 * 4,
-                    bufferIndex: 0,
-                },
-                {
-                    location: SkyProgram.a_Rgba,
-                    format: GfxFormat.F32_RGBA,
-                    bufferByteOffset: 5 * 4,
-                    bufferIndex: 0,
-                },
-                {
-                    location: SkyProgram.a_Alpha,
-                    format: GfxFormat.F32_R,
-                    bufferByteOffset: 9 * 4,
-                    bufferIndex: 0,
-                },
+                { location: SkyProgram.a_Position, format: GfxFormat.F32_RGB, bufferByteOffset: 0, bufferIndex: 0, },
+                { location: SkyProgram.a_ST, format: GfxFormat.F32_RG, bufferByteOffset: 3 * 4, bufferIndex: 0, },
+                { location: SkyProgram.a_Rgba, format: GfxFormat.F32_RGBA, bufferByteOffset: 5 * 4, bufferIndex: 0, },
+                { location: SkyProgram.a_Alpha, format: GfxFormat.F32_R, bufferByteOffset: 9 * 4, bufferIndex: 0, },
             ],
-
             vertexBufferDescriptors: [
-                {
-                    byteStride: SkyProgram.elementsPerVertex * 0x4,
-                    frequency: GfxVertexBufferFrequency.PerVertex,
-                },
+                { byteStride: SkyProgram.elementsPerVertex * 0x4, frequency: GfxVertexBufferFrequency.PerVertex, },
             ],
-
-            indexBufferFormat: GfxFormat.U32_R,
+            indexBufferFormat: GfxFormat.U16_R,
         });
     }
 
@@ -226,7 +198,7 @@ function assembleSkyShellGeometry(skyShell: SkyShell) {
         vertexArrayBuffer[ptr++] = (vert.a2 / 0xFF);
     }
 
-    const indexArrayBuffer = new Uint32Array(draws.length * 3);
+    const indexArrayBuffer = new Uint16Array(draws.length * 3);
     let lastMaterial = 0;
     const draws2: { material: number, flags: { textured: boolean }, startIndex: number, indexCount: number }[] = [];
     for (let i = 0; i < draws.length; i++) {
