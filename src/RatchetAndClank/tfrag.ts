@@ -6,6 +6,7 @@ import { DeviceProgram } from "../Program";
 import { assert } from "../util";
 import { RatchetShaderLib } from "./shader-lib";
 import { Tfrag, TfragAdGifs, TfragLight, TfragStrip, TfragVertexInfo } from "./structs-core";
+import { PaletteTexture } from "./textures";
 
 export class TfragProgram extends DeviceProgram {
     public static a_Position = 0;
@@ -93,10 +94,10 @@ export class TfragGeometry {
 
     public inputLayout: GfxInputLayout;
 
-    constructor(cache: GfxRenderCache, private tfrag: Tfrag[]) {
+    constructor(cache: GfxRenderCache, private tfrags: Tfrag[], private tfragTextures: PaletteTexture[]) {
         const device = cache.device;
 
-        const assembled = assembleTfragGeometry(tfrag);
+        const assembled = assembleTfragGeometry(tfrags, tfragTextures);
         this.assembled = assembled;
 
         this.lods = assembled.vertexArrayBuffers.map((lod, i) => {
@@ -155,19 +156,25 @@ type TfragVertexWithTexture = TfragVertex & {
     textureLayer: number,
 }
 
-export function assembleTfragGeometry(tfrag: Tfrag[]) {
-    const assembledTfragsFragments = tfrag.map((t, i) => assembleTfragFragment(i, t));
+export function assembleTfragGeometry(tfrags: Tfrag[], tfragTextures: PaletteTexture[]) {
+    // `tfrags[tfragIdx][lodLevel][strip]`
+    const assembledTfragsFragments = tfrags.map((t, i) => assembleTfragFragment(i, t));
 
+    // merge all fragments into `everything[lodLevel][strip]`
     const mergedTfragLods = [
-        assembledTfragsFragments.map(f => f.lod0Verts).flat(1),
-        assembledTfragsFragments.map(f => f.lod1Verts).flat(1),
-        assembledTfragsFragments.map(f => f.lod2Verts).flat(1),
-    ]
+        assembledTfragsFragments.map(f => f[0]).flat(1),
+        assembledTfragsFragments.map(f => f[1]).flat(1),
+        assembledTfragsFragments.map(f => f[2]).flat(1),
+    ];
 
-    const vertexArrayBuffers = mergedTfragLods.map((verts) => {
+    // merge strips
+    const vertexArrayBuffers = mergedTfragLods.map((groups) => {
+        const sorted = sortTransparent(groups, tfragTextures);
+        const flat = flattenTfragVerts(sorted);
+        const buffer = encodeVerts(flat);
         return {
-            buffer: encodeVerts(verts),
-            vertexCount: verts.length,
+            buffer,
+            vertexCount: flat.length,
         };
     });
 
@@ -181,31 +188,23 @@ export function assembleTfragGeometry(tfrag: Tfrag[]) {
 export function assembleTfragFragment(tfragId: number, tfrag: Tfrag) {
     const verts = concatAndRemoveDoubleIndirectionFromVertices(tfragId, tfrag);
 
-    const lod2Indices = stripsIntoTriangles(tfragId, tfrag.dataGroup1.lod2.strips, tfrag.dataGroup1.lod2.indices, tfrag.dataGroup2.textures);
-    const lod1Indices = stripsIntoTriangles(tfragId, tfrag.dataGroup3.lod1.strips, tfrag.dataGroup3.lod1.indices, tfrag.dataGroup2.textures);
-    const lod0Indices = stripsIntoTriangles(tfragId, tfrag.dataGroup5.lod0.strips, tfrag.dataGroup5.lod0.indices, tfrag.dataGroup2.textures);
+    // [lod2, lod1, lod0]
+    const vertsByLod = [
+        stripsIntoTriangles(tfragId, tfrag.dataGroup5.lod0.strips, tfrag.dataGroup5.lod0.indices, tfrag.dataGroup2.textures, verts),
+        stripsIntoTriangles(tfragId, tfrag.dataGroup3.lod1.strips, tfrag.dataGroup3.lod1.indices, tfrag.dataGroup2.textures, verts),
+        stripsIntoTriangles(tfragId, tfrag.dataGroup1.lod2.strips, tfrag.dataGroup1.lod2.indices, tfrag.dataGroup2.textures, verts),
+    ];
 
-    const lod2Verts = trianglesIntoVerts(verts, lod2Indices);
-    const lod1Verts = trianglesIntoVerts(verts, lod1Indices);
-    const lod0Verts = trianglesIntoVerts(verts, lod0Indices);
-
-    return {
-        lod2Verts,
-        lod1Verts,
-        lod0Verts,
-    }
+    return vertsByLod;
 }
 
-/**
- * Remove indices and convert to vertex array.
- * This is required because the texture index is attached to the strip, so the same vertex could be rendered with multiple textures.
- */
-function trianglesIntoVerts(verts: TfragVertex[], triangleGroups: TfragTriangleGroup[]) {
+// takes triangle lists and flattens them into one
+function flattenTfragVerts(triangleGroups: TfragTriangleGroup[]) {
     const result: TfragVertexWithTexture[] = [];
     for (let i = 0; i < triangleGroups.length; i++) {
         const group = triangleGroups[i];
-        for (let j = 0; j < group.indices.length; j++) {
-            const vert = verts[group.indices[j]];
+        for (let j = 0; j < group.verts.length; j++) {
+            const vert = group.verts[j];
             result.push({
                 ...vert,
                 textureLayer: group.material,
@@ -213,6 +212,18 @@ function trianglesIntoVerts(verts: TfragVertex[], triangleGroups: TfragTriangleG
         }
     }
     return result;
+}
+
+// move transparent groups to the end
+export function sortTransparent(groups: TfragTriangleGroup[], tfragTextures: PaletteTexture[]) {
+    groups.sort((a, b) => {
+        const aTransparent = tfragTextures[a.material].hasAlpha;
+        const bTransparent = tfragTextures[b.material].hasAlpha;
+        if (aTransparent && !bTransparent) return 1;
+        if (!aTransparent && bTransparent) return -1;
+        return 0;
+    });
+    return groups;
 }
 
 /**
@@ -293,17 +304,18 @@ function lightToNormal(light: TfragLight) {
 
 type TfragTriangleGroup = {
     material: number,
-    baseIndex: number,
     indices: number[],
+    verts: TfragVertex[],
 }
 
 // decode the strips into triangle lists, grouped by material
-function stripsIntoTriangles(tfragId: number, strips: TfragStrip[], indices: Uint8Array, adGifs: TfragAdGifs[]): TfragTriangleGroup[] {
+function stripsIntoTriangles(tfragId: number, strips: TfragStrip[], indices: Uint8Array, adGifs: TfragAdGifs[], verts: TfragVertex[]): TfragTriangleGroup[] {
     const groups: TfragTriangleGroup[] = [];
 
     let stripPtr = 0;
     let vertexPtr = 0;
     let activeMaterial = -1;
+
 
     outer: while (true) {
         const strip = strips[stripPtr];
@@ -319,6 +331,8 @@ function stripsIntoTriangles(tfragId: number, strips: TfragStrip[], indices: Uin
         }
 
         let newIndices: number[] = [];
+        let newVerts: TfragVertex[] = [];
+
         let vertexCount = strip.vertexCount;
         if (strip.hasAdGifFlag) {
             if (strip.adGifOffset === -1) {
@@ -334,11 +348,14 @@ function stripsIntoTriangles(tfragId: number, strips: TfragStrip[], indices: Uin
             newIndices.push(indices[vertexPtr + 0]);
             newIndices.push(indices[vertexPtr + 1]);
             newIndices.push(indices[vertexPtr + 2]);
+            newVerts.push(verts[indices[vertexPtr + 0]]);
+            newVerts.push(verts[indices[vertexPtr + 1]]);
+            newVerts.push(verts[indices[vertexPtr + 2]]);
             vertexPtr++;
         }
         vertexPtr += 2;
 
-        groups.push({ indices: newIndices, baseIndex: 0, material: activeMaterial });
+        groups.push({ indices: newIndices, verts: newVerts, material: activeMaterial });
 
         stripPtr++;
     }
@@ -346,7 +363,6 @@ function stripsIntoTriangles(tfragId: number, strips: TfragStrip[], indices: Uin
     return groups;
 }
 
-//
 function encodeVerts(verts: TfragVertexWithTexture[]) {
     const vertexArrayBuffer = new Float32Array(verts.length * TfragProgram.elementsPerVertex);
     let ptr = 0;
