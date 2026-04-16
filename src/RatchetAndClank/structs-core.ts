@@ -223,7 +223,7 @@ const tieCommandSizes = {
     primativeReset: 1,
     setMaterial: 6,
     vertex: 3,
-}
+};
 
 export type TiePacketBody = ReturnType<typeof readTiePacketBody>;
 export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketHeader, oClass: number, lod: number, packetIndex: number) {
@@ -272,13 +272,13 @@ export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketH
     const tieStrips = view.subdivide(ptr, tieVuHeader.stripCount, SIZEOF_TIE_STRIP).map(readTieStrip);
     ptr += tieVuHeader.stripCount * SIZEOF_TIE_STRIP;
 
-    // dinky verts
+    // regular verts
     alignTo(0x10);
     const regularVertexCount = tieVuHeader.regularVertexCount;
     const regularVerts = view.subdivide(ptr, regularVertexCount, SIZEOF_TIE_REGULAR_VERTEX).map(readTieRegularVertex);
     ptr += regularVertexCount * SIZEOF_TIE_REGULAR_VERTEX;
 
-    // fat verts
+    // morphing verts
     const morphingVertexCount = tieVuHeader.morphingVertexCount;
     const morphingVerts = view.subdivide(ptr, morphingVertexCount, SIZEOF_TIE_MORPHING_VERTEX).map(readTieMorphingVertex);
     ptr += morphingVertexCount * SIZEOF_TIE_MORPHING_VERTEX;
@@ -358,8 +358,8 @@ export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketH
 
 export type TieVuHeader = {
     stripCount: number,
-    dinkyVerticesSizePlusFourOverTwo: number,
-    fatVerticesSizePlusFourOverTwo: number,
+    regularVerticesSizePlusFourOverTwo: number,
+    morphingVerticesSizePlusFourOverTwo: number,
     regularVertexCount: number,
     morphingVertexCount: number,
 }
@@ -375,8 +375,8 @@ export function readTieVuHeader(view: DataViewExt) {
         u8 unknown5;
         u8 unknown6;
         u8 unknown7;
-        u8 dinkyVerticesSizePlusFourOverTwo;
-        u8 fatVerticesSizePlusFourOverTwo;
+        u8 regularVerticesSizePlusFourOverTwo;
+        u8 morphingVerticesSizePlusFourOverTwo;
         u8 regularVertexCount;
         u8 morphingVertexCount;
     }
@@ -391,8 +391,8 @@ export function readTieVuHeader(view: DataViewExt) {
         unknown5: view.getUint8(0x5),
         unknown6: view.getUint8(0x6),
         unknown7: view.getUint8(0x7),
-        dinkyVerticesSizePlusFourOverTwo: view.getUint8(0x8),
-        fatVerticesSizePlusFourOverTwo: view.getUint8(0x9),
+        regularVerticesSizePlusFourOverTwo: view.getUint8(0x8),
+        morphingVerticesSizePlusFourOverTwo: view.getUint8(0x9),
         regularVertexCount: view.getUint8(0xa),
         morphingVertexCount: view.getUint8(0xb),
     };

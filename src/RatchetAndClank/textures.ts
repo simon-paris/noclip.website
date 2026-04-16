@@ -8,6 +8,7 @@ export type PaletteTexture = {
     textureEntry: { width: number, height: number },
     pixels: Uint8Array,
     palette: Color[],
+    hasAlpha: boolean,
 };
 
 export function readPalette8TextureWithPaletteInGsRam(textureEntry: TextureEntry, textureData: DataViewExt, gsRam: DataViewExt, ownerType: string, i: number): PaletteTexture {
@@ -20,6 +21,7 @@ export function readPalette8TextureWithPaletteInGsRam(textureEntry: TextureEntry
         textureEntry,
         pixels,
         palette: rgbaPalette,
+        hasAlpha: paletteHasAlpha(pixels, rgbaPalette),
     };
 }
 
@@ -33,7 +35,19 @@ export function readPalette8TextureSky(skyView: DataViewExt, skyHeader: SkyHeade
         textureEntry,
         pixels,
         palette: rgbaPalette,
+        hasAlpha: paletteHasAlpha(pixels, rgbaPalette),
     };
+}
+
+// return true if any pixel is transparent
+export function paletteHasAlpha(pixels: Uint8Array, palette: Color[]) {
+    // we can't just check the palette because the texture might not use all the palette colors
+    for (let i = 0; i < pixels.length; i++) {
+        if (palette[pixels[i]].a < 255) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // Shuffle some indices around then double all the alphas

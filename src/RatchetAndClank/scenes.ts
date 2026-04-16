@@ -51,7 +51,6 @@ class RatchetAndClank1Scene implements SceneGfx {
         enableFog: true,
         enableTextures: true,
         showPaths: false,
-        dirLightIndex: 0,
     };
 
     // raw data files
@@ -154,7 +153,11 @@ class RatchetAndClank1Scene implements SceneGfx {
 
         const { tfrags, tfragTextures } = this.level;
         this.textures.tfragTextures = createGfxTextureArrayForPaletteTextures(cache.device, "Tfrag texture", tfragTextures);
-        this.geometries.tfrag = new TfragGeometry(cache, tfrags);
+        for (let i = 0; i < tfragTextures.length; i++) {
+            const gfxTextures = createGfxTextureForPaletteTexture(cache.device, tfragTextures[i]);
+            this.textureHolder.viewerTextures.push({ gfxTexture: gfxTextures.pixelsTexture });
+        }
+        this.geometries.tfrag = new TfragGeometry(cache, tfrags, tfragTextures);
 
         const { ties, tieTextures } = this.level;
         for (let i = 0; i < tieTextures.length; i++) {
@@ -684,7 +687,7 @@ class RatchetAndClank1Scene implements SceneGfx {
         };
         renderSettingsPanel.contents.appendChild(lodSetting.elem);
 
-        const lodBias = new UI.Slider('LoD Bias', this.settings.lodBias, -100, 200);
+        const lodBias = new UI.Slider('LoD Bias', this.settings.lodBias, -20, 200);
         lodBias.onvalue = (n: number) => {
             this.settings.lodBias = n;
         };
