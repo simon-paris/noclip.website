@@ -1,5 +1,5 @@
 import { readDirectionLightInstance, readGameplayHeader, readGrindPathBlock, readInstanceBlock, readLevelSettings, readMobyInstance, readPathBlock, readPointLightInstance, readShrubInstance, readTieInstance, ShrubInstance, SIZEOF_DIRECTION_LIGHT_INSTANCE, SIZEOF_MOBY_INSTANCE, SIZEOF_POINT_LIGHT_INSTANCE, SIZEOF_SHRUB_INSTANCE, SIZEOF_TIE_INSTANCE, TieInstance } from "./structs-gameplay";
-import { DataViewExt } from "../DataViewExt";
+import { DataViewExt } from "./DataViewExt";
 import { assert } from "../util";
 import { readClassEntry, readLevelCoreHeader, readShrubClass, readSky, readTextureEntry, readTfrag, readTfragBlockHeader, readTfragHeader, readTieClass, ShrubClass, SIZEOF_SHRUB_CLASS_ENTRY, SIZEOF_TEXTURE_ENTRY, SIZEOF_TFRAG_HEADER, SIZEOF_TIE_CLASS_ENTRY, TieClass } from "./structs-core";
 import { makeInstanceOClassMap, truncateTrailing0xFF } from "./utils";
@@ -8,30 +8,33 @@ import { readPalette8TextureSky, readPalette8TextureWithPaletteInGsRam } from ".
 
 export type LevelFiles = {
     coreIndexBuffer: ArrayBufferSlice,
-    coreIndex: DataViewExt,
     coreDataBuffer: ArrayBufferSlice,
-    coreData: DataViewExt,
     gameplayBuffer: ArrayBufferSlice,
-    gameplay: DataViewExt,
     gsRamBuffer: ArrayBufferSlice,
-    gsRam: DataViewExt,
-}
+};
 
 export type TieInstanceBatch = {
     oClass: number,
     tieClass: TieClass,
     textureIndices: number[],
     instances: TieInstance[],
-}
+};
 
 export type ShrubInstanceBatch = {
     oClass: number,
     shrubClass: ShrubClass,
     textureIndices: number[],
     instances: ShrubInstance[],
-}
+};
 
-export function buildLevelFromFiles(files: LevelFiles) {
+export function buildLevelFromFiles(filesAsSlices: LevelFiles) {
+    const files = {
+        gameplay: new DataViewExt(filesAsSlices.gameplayBuffer.arrayBuffer, { littleEndian: true }, filesAsSlices.gameplayBuffer.byteOffset, filesAsSlices.gameplayBuffer.byteLength),
+        coreIndex: new DataViewExt(filesAsSlices.coreIndexBuffer.arrayBuffer, { littleEndian: true }, filesAsSlices.coreIndexBuffer.byteOffset, filesAsSlices.coreIndexBuffer.byteLength),
+        coreData: new DataViewExt(filesAsSlices.coreDataBuffer.arrayBuffer, { littleEndian: true }, filesAsSlices.coreDataBuffer.byteOffset, filesAsSlices.coreDataBuffer.byteLength),
+        gsRam: new DataViewExt(filesAsSlices.gsRamBuffer.arrayBuffer, { littleEndian: true }, filesAsSlices.gsRamBuffer.byteOffset, filesAsSlices.gsRamBuffer.byteLength),
+    };
+
     // read gameplay data
     const gameplayHeader = readGameplayHeader(files.gameplay);
     console.log(gameplayHeader);

@@ -1,4 +1,4 @@
-import { DataViewExt } from "./DataViewExt.ts";
+import { DataViewExt } from "../DataViewExt";
 
 /*
 https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/compression.cpp#L65
@@ -8,7 +8,7 @@ https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def6
 uint8 magic[3];
 uint32 compressedSize;
 uint8 pad[9];
-while( !FEof() ) {
+while( !eof ) {
 
     uint8 flag;
     

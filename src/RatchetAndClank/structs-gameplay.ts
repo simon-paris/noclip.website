@@ -1,4 +1,4 @@
-import { DataViewExt } from "../DataViewExt";
+import { DataViewExt } from "./DataViewExt";
 
 export type GameplayHeader = ReturnType<typeof readGameplayHeader>;
 export function readGameplayHeader(view: DataViewExt) {

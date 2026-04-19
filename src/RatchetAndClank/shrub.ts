@@ -56,9 +56,8 @@ layout(location = ${ShrubProgram.a_InstanceLodAlpha}) in float a_InstanceLodAlph
 
 flat out int v_TextureIndex;
 out vec2 v_ST;
-out vec3 v_Rgb;
+out vec4 v_Rgba;
 out vec3 v_Normal;
-out float v_LodAlpha;
 
 ${RatchetShaderLib.LightingFunctions}
 
@@ -69,14 +68,13 @@ void main() {
     gl_Position = UnpackMatrix(u_ClipFromWorld) * t_PositionWorld;
     vec3 normal = normalize(inverse(transpose(mat3(instanceTransform))) * a_Normal);
 
-    // not sure about dividing by 4
-    vec3 rgb = a_InstanceAmbientRgba.rgb / 4.0;
+    vec4 rgba = a_InstanceAmbientRgba.rgba;
     vec4 lights = a_InstanceDirectionLights;
 
     v_ST = a_ST.xy;
-    v_Rgb = commonVertexLighting(rgb, normal, lights, 1.0);
+    v_Rgba = commonVertexLighting(rgba, normal, lights);
+    v_Rgba.a *= a_InstanceLodAlpha;
     v_Normal = normal;
-    v_LodAlpha = a_InstanceLodAlpha;
     v_TextureIndex = int(a_TextureIndex);
 }
 `;
@@ -85,9 +83,8 @@ void main() {
 
 flat in int v_TextureIndex;
 in vec2 v_ST;
-in vec3 v_Rgb;
+in vec4 v_Rgba;
 in vec3 v_Normal;
-in float v_LodAlpha;
 
 ${RatchetShaderLib.CommonFragmentShader}
 
@@ -99,7 +96,7 @@ void main() {
         }
     ${nArray(16, i => `
             if (v_TextureIndex == ${i}) {
-                gl_FragColor = commonFragmentShader(vec4(v_Rgb, v_LodAlpha), textureSample${i});
+                gl_FragColor = commonFragmentShader(v_Rgba, textureSample${i});
                 return;
             }
     `).join('\n')

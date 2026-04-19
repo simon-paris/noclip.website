@@ -21,12 +21,10 @@ struct FogParams {
 struct DirectionLight {
     vec3 directionA;
     float pad1;
-    vec3 colorA;
-    float unknown1;
+    vec4 colorA;
     vec3 directionB;
     float pad2;
-    vec3 colorB;
-    float unknown2;
+    vec4 colorB;
 };
 
 layout(std140) uniform ub_SceneParams {
@@ -44,46 +42,44 @@ layout(std140) uniform ub_SceneParams {
     `,
     LightingFunctions: `
 
-float ENVIRONMENT_LIGHT = 1.8;
-float DIRECTIONAL_LIGHT = 1.4;
+bool isNullLight(int position, int dirLightIndex) {
+    if (dirLightIndex == 15) return true;
+    if (position > 0 && dirLightIndex == 0) return true;
+    return false;
+}
 
-vec3 applyDirectionalLight(vec3 normal, int dirLightIndex) {
+vec4 applyDirectionalLight(vec3 normal, int dirLightIndex) {
     DirectionLight dirlight = u_DirectionLights[dirLightIndex];
-    if (dirLightIndex == 15) return vec3(0.0);
 
-    vec3 light = vec3(0.0);
+    const vec4 NEGATIVE_ALPHA = vec4(1.0, 1.0, 1.0, -1.0);
+
+    vec4 light = vec4(0.0);
     float nDotL_A = dot(normal, dirlight.directionA);
-    if (nDotL_A > 0.0) light += DIRECTIONAL_LIGHT * nDotL_A * dirlight.colorA;
+    if (nDotL_A > 0.0) light += nDotL_A * dirlight.colorA * NEGATIVE_ALPHA;
     float nDotL_B = dot(normal, dirlight.directionB);
-    if (nDotL_B > 0.0) light += DIRECTIONAL_LIGHT * nDotL_B * dirlight.colorB;
+    if (nDotL_B > 0.0) light += nDotL_B * dirlight.colorB * NEGATIVE_ALPHA;
     return light;
 }
 
-vec3 commonVertexLighting(vec3 rgb, vec3 normal, vec4 dirLightIndices, float environmentalLightMultiplier) {
-    vec3 light = vec3(0.0);
+vec4 commonVertexLighting(vec4 rgba, vec3 normal, vec4 dirLightIndices) {
+    vec4 light = rgba;
 
     // directional
     int lightCount = 0;
     for(int i = 0; i < 4; i++) {
         int dirLightIndex = int(dirLightIndices[i]);
-        if (dirLightIndex == 15) break;
-        if (i > 0 && int(dirLightIndex) == 0) break;
-        lightCount++;
+        if (isNullLight(i, dirLightIndex)) lightCount++;
     }
     for(int i = 0; i < 4; i++) {
         int dirLightIndex = int(dirLightIndices[i]);
-        if (dirLightIndex == 15) break;
-        if (i > 0 && int(dirLightIndex) == 0) break;
+        if (isNullLight(i, dirLightIndex)) continue;
         light += applyDirectionalLight(normalize(normal), dirLightIndex);
     }
 
-    // make total directional light constant
-    light *= float(4 - lightCount) * (DIRECTIONAL_LIGHT / 4.0);
+    if (rgba.a >= 1.0 && light.a < 1.0) {
+        light.a = rgba.a;
+    }
     
-    // environmental
-    float environmentLightAmount = ENVIRONMENT_LIGHT * environmentalLightMultiplier;
-    light += environmentLightAmount * rgb;
-
     return light;
 }
 
@@ -112,25 +108,31 @@ vec3 adjustSaturation(vec3 color, float adjustment) {
 }
 
 vec4 commonFragmentShader(vec4 rgba, vec4 textureSample) {
-    if (u_EnableTextures == 0.0) {
-        textureSample = vec4(0.5, 0.5, 0.5, 1.0);
-    }
-    vec3 textureColor = vec3(textureSample.r, textureSample.g, textureSample.b);
-    if (textureSample.a < 0.01) { discard; }
+    // texture color is multiplied with vertex color immediately
+    if (u_EnableTextures == 1.0) { rgba *= textureSample; }
 
+    // fog step (ignores alpha)
+    vec3 rgb = rgba.rgb;
     float fogFactor = fogFactor();
     vec3 fogColor = u_FogParams.color.rgb;
+    rgb = mix(rgb, fogColor, fogFactor);
 
-    // initial color
-    vec3 color1 = textureColor * rgba.rgb;
+    // bring back alpha
+    rgba = vec4(rgb, rgba.a);
 
-    // with fog
-    vec3 color2 = mix(color1, fogColor, fogFactor);
+    // alpha test
+    if (rgba.a < 0.01) discard;
 
-    // with saturation filter (not authentic but looks more accurate, not sure why)
-    vec3 color3 = adjustSaturation(color2, SATURATION_ADJUST);
+    // blend over-alpha with color
+    if (rgba.a > 1.0) {
+        rgba.rgb *= 1.0 + (rgba.a - 1.0);
+        rgba.a = 1.0;
+    }
 
-    return vec4(color3, textureSample.a * rgba.a);
+    // with saturation filter (not authentic but looks washed out without it)
+    rgba.rgb = adjustSaturation(rgba.rgb, 1.15);
+
+    return rgba;
 }
 
     `,

@@ -61,11 +61,10 @@ in vec4 v_Rgba;
 void main() {
     float isTextured = u_ExtraData.x;
     if (isTextured == 1.0) {
-        gl_FragColor = v_Rgba * texture(SAMPLER_2D(u_Texture), v_ST);
+        gl_FragColor = commonFragmentShader(v_Rgba, texture(SAMPLER_2D(u_Texture), v_ST));
     } else {
-        gl_FragColor = v_Rgba;
+        gl_FragColor = commonFragmentShader(v_Rgba, vec4(1.0, 1.0, 1.0, 1.0));
     }
-    gl_FragColor = vec4(adjustSaturation(gl_FragColor.xyz, SATURATION_ADJUST), gl_FragColor.a);
 }
 `;
 
