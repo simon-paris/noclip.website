@@ -1,4 +1,4 @@
-import { DataViewExt } from "../DataViewExt";
+import { DataViewExt } from "./DataViewExt";
 import { getBits } from "./utils";
 
 export enum VifCmd {

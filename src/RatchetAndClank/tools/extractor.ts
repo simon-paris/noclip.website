@@ -1,23 +1,24 @@
 #!/usr/bin/env node
 
-import fs from "fs/promises";
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import fs from "node:fs/promises";
 import { decompressWad } from "./decompress.ts";
 import { readLevelDataHeader, readLevelDescriptor, readTableOfContents } from "./structs-toc-and-level-headers.ts";
 import { readFromDisk, readFromDiskWithSizeHeader, SECTOR_SIZE } from "./utils.ts";
-import path from "path";
-import { dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { DataViewExt, DataViewExtWithTracer } from "./DataViewExt.ts";
+import { DataViewExt, DataViewExtWithTracer } from "../DataViewExt.ts";
+import { readLevelCoreHeader } from "../structs-core.ts";
+import { assert } from '../../util.ts';
 
-const diskFile = process.argv[2];
-if (!diskFile) {
-    console.error(`Usage: node extract.ts myfile.iso`);
-    process.exit(1);
-}
+const gameNumber = 1;
+
+const baseDataDir = path.join(path.dirname(fileURLToPath(import.meta.url)), `../../../data`);
+
+const outputDir = path.join(baseDataDir, `RatchetAndClank${gameNumber}`);
+await fs.mkdir(outputDir, { recursive: true });
+
+const diskFile = path.join(baseDataDir, `RatchetAndClank${gameNumber}_raw/game.iso`);
 const disk = await fs.open(diskFile);
-
-const DATA_DIR = path.join(dirname(fileURLToPath(import.meta.url)), `../../../data/RatchetAndClank1`);
-await fs.mkdir(DATA_DIR, { recursive: true });
 
 /*
     - Table of contents
@@ -46,11 +47,14 @@ await fs.mkdir(DATA_DIR, { recursive: true });
             - Scenes (not used)
 */
 
+const ENTRY_POINTS = {
+    1: 1500,
+};
+
 // read table of contents
-const RAC1_TOC_SECTOR = 1500;
-const tableOfContentsBuffer = await readFromDiskWithSizeHeader(disk, RAC1_TOC_SECTOR, 0x4);
+const tableOfContentsBuffer = await readFromDiskWithSizeHeader(disk, ENTRY_POINTS[gameNumber], 0x4);
 const tableOfContents = await readTableOfContents(new DataViewExt(tableOfContentsBuffer, { littleEndian: true }));
-await fs.writeFile(path.join(DATA_DIR, `global.json`), JSON.stringify(tableOfContents, null, 2));
+await fs.writeFile(path.join(outputDir, `global.json`), JSON.stringify(tableOfContents, null, 2));
 
 for (const levelSectors of tableOfContents.levelSectors) {
     if (!levelSectors) continue;
@@ -62,45 +66,46 @@ for (const levelSectors of tableOfContents.levelSectors) {
     console.log(`Start level ${levelNum}`);
 
     const filesWritten: string[] = [];
-    async function extractLevelFile(name: string, buf: string | Uint8Array | DataView) {
+    async function extractLevelFile(name: string, buf: string | Uint8Array | DataViewExt) {
         const filename = name.replace(/\{\}/g, String(levelNum));
-        await fs.writeFile(path.join(DATA_DIR, filename), buf);
+        await fs.writeFile(path.join(outputDir, filename), buf);
+        if (buf instanceof DataViewExtWithTracer) {
+            const filename2 = name.replace(/\{\}/g, String(levelNum));
+            await fs.writeFile(path.join(outputDir, filename2 + ".tracer"), buf.tracer);
+        }
         console.log(`Writing file ${filename}`);
         filesWritten.push(filename);
     }
 
-    // read level data section
+    // level
     const levelDataSector = levelDescriptor.data;
     const levelDataBuffer = await readFromDisk(disk, levelDataSector.startSector, levelDataSector.sizeInSectors * SECTOR_SIZE);
     const levelData = new DataViewExt(levelDataBuffer, { littleEndian: true });
     const levelDataHeader = await readLevelDataHeader(levelData);
 
-    // read gameplay file
+    // level/gs_ram
+    const gsRam = levelData.subview(levelDataHeader.gsRam.offset, levelDataHeader.gsRam.size);
+
+    // level/gameplay
     const gameplaySector = levelDescriptor.gameplayNtsc;
     const gameplayFileCompressed = await readFromDiskWithSizeHeader(disk, gameplaySector.startSector, 0x3);
-    await extractLevelFile(`level_{}.gameplay.wad`, new DataView(gameplayFileCompressed));
     const gameplayFileBuffer = decompressWad(new DataViewExt(gameplayFileCompressed, { littleEndian: true }));
     const gameplayFile = new DataViewExtWithTracer(gameplayFileBuffer, { littleEndian: true });
-    await extractLevelFile(`level_{}.gameplay`, gameplayFile);
-    await extractLevelFile(`level_{}.gameplay.tracer`, gameplayFile.tracer);
 
-    // read core index
+    // level/core_index
     const levelCoreIndex = levelData.subview(levelDataHeader.coreIndex.offset, levelDataHeader.coreIndex.size);
-    await extractLevelFile(`level_{}.core_index`, levelCoreIndex);
-    // const levelCoreHeader = await readLevelCoreHeader(levelCoreIndex);
+    const levelCoreHeader = await readLevelCoreHeader(levelCoreIndex);
 
-    // read gs memory snapshot
-    const gsRam = levelData.subview(levelDataHeader.gsRam.offset, levelDataHeader.gsRam.size);
-    await extractLevelFile(`level_{}.gs_ram`, gsRam);
-
-    // read core data
+    // level/core_data
     const levelCoreDataWad = levelData.subview(levelDataHeader.coreData.offset, levelDataHeader.coreData.size);
-    await extractLevelFile(`level_{}.core_data.wad`, levelCoreDataWad);
-    // assert.equal(levelCoreDataWad.byteLength, levelCoreHeader.assetsCompressedSize);
+    assert(levelCoreDataWad.byteLength === levelCoreHeader.assetsCompressedSize);
     const levelCoreDataBuffer = decompressWad(levelCoreDataWad);
-    // assert.equal(levelCoreData.length, levelCoreHeader.assetsDecompressedSize);
+    assert(levelCoreDataBuffer.byteLength === levelCoreHeader.assetsDecompressedSize);
     const levelCoreData = new DataViewExtWithTracer(levelCoreDataBuffer, { littleEndian: true });
-    await extractLevelFile(`level_{}.core_data.tracer`, levelCoreData.tracer);
+
+    await extractLevelFile(`level_{}.gameplay`, gameplayFile);
+    await extractLevelFile(`level_{}.core_index`, levelCoreIndex);
+    await extractLevelFile(`level_{}.gs_ram`, gsRam);
     await extractLevelFile(`level_{}.core_data`, levelCoreData);
 
     // write metadata file

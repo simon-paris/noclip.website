@@ -43,7 +43,7 @@ layout(location = ${i}) uniform sampler2D u_Texture${i};
 
 layout(location = ${TieProgram.a_Position}) in vec3 a_Position;
 layout(location = ${TieProgram.a_TextureIndex}) in float a_TextureIndex;
-layout(location = ${TieProgram.a_ST}) in vec3 a_ST;
+layout(location = ${TieProgram.a_ST}) in vec2 a_ST;
 layout(location = ${TieProgram.a_Normal}) in vec3 a_Normal;
 layout(location = ${TieProgram.a_LodMorphOffset}) in vec3 a_LodMorphOffset;
 
@@ -70,13 +70,13 @@ void main() {
     vec4 t_PositionWorld = instanceTransform * vec4(morphedPosition, 1.0f);
 
     gl_Position = UnpackMatrix(u_ClipFromWorld) * t_PositionWorld;
-    v_ST = vec2(a_ST.x, a_ST.y);
-    
-    vec3 rgb = a_InstanceAmbientRgba.rgb / 4.0;
+    v_ST = a_ST;
+
+    vec4 rgba = a_InstanceAmbientRgba.rgba;
     vec4 lights = a_InstanceDirectionLights;
     
     v_Normal = normalize(inverse(transpose(mat3(instanceTransform))) * a_Normal);
-    v_Rgba = vec4(commonVertexLighting(rgb, v_Normal, lights, 1.0), 1.0);
+    v_Rgba = commonVertexLighting(rgba, v_Normal, lights);
     v_TextureIndex = int(a_TextureIndex);
 }
 

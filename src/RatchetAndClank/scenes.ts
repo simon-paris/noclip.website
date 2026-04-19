@@ -43,6 +43,7 @@ class RatchetAndClank1Scene implements SceneGfx {
     private settings = {
         lodSetting: -1, // -1 means dynamic
         lodBias: 40,
+        showCollision: false,
         enableTfrag: true,
         enableTies: true,
         enableMobys: false,
@@ -72,7 +73,7 @@ class RatchetAndClank1Scene implements SceneGfx {
         tieTextures: new Array<GfxTexture>(),
         shrubTextures: new Array<GfxTexture>(),
         skyTextures: new Array<GfxTexture>(),
-    }
+    };
 
     // meshes generated from level data
     private geometries = {
@@ -134,13 +135,9 @@ class RatchetAndClank1Scene implements SceneGfx {
         this.files = {
             ready: true,
             coreIndexBuffer,
-            coreIndex: coreIndexBuffer.createDataViewExt({ littleEndian: true }),
             coreDataBuffer,
-            coreData: coreDataBuffer.createDataViewExt({ littleEndian: true }),
             gameplayBuffer,
-            gameplay: gameplayBuffer.createDataViewExt({ littleEndian: true }),
             gsRamBuffer,
-            gsRam: gsRamBuffer.createDataViewExt({ littleEndian: true }),
         };
     }
 
@@ -153,10 +150,10 @@ class RatchetAndClank1Scene implements SceneGfx {
 
         const { tfrags, tfragTextures } = this.level;
         this.textures.tfragTextures = createGfxTextureArrayForPaletteTextures(cache.device, "Tfrag texture", tfragTextures);
-        for (let i = 0; i < tfragTextures.length; i++) {
-            const gfxTextures = createGfxTextureForPaletteTexture(cache.device, tfragTextures[i]);
-            this.textureHolder.viewerTextures.push({ gfxTexture: gfxTextures.pixelsTexture });
-        }
+        // for (let i = 0; i < tfragTextures.length; i++) {
+        //     const gfxTextures = createGfxTextureForPaletteTexture(cache.device, tfragTextures[i]);
+        //     this.textureHolder.viewerTextures.push({ gfxTexture: gfxTextures.pixelsTexture });
+        // }
         this.geometries.tfrag = new TfragGeometry(cache, tfrags, tfragTextures);
 
         const { ties, tieTextures } = this.level;
@@ -245,9 +242,9 @@ class RatchetAndClank1Scene implements SceneGfx {
             if (i < directionalLights.length) {
                 const light = directionalLights[i];
                 offs += fillVec4(data, offs, -light.directionA.x, -light.directionA.z, light.directionA.y, 0);
-                offs += fillVec4(data, offs, light.colorA.r, light.colorA.g, light.colorA.b, 1);
+                offs += fillVec4(data, offs, light.colorA.r, light.colorA.g, light.colorA.b, light.colorA.a);
                 offs += fillVec4(data, offs, -light.directionB.x, -light.directionB.z, light.directionB.y, 0);
-                offs += fillVec4(data, offs, light.colorB.r, light.colorB.g, light.colorB.b, 1);
+                offs += fillVec4(data, offs, light.colorB.r, light.colorB.g, light.colorB.b, light.colorB.a);
             } else {
                 offs += fillVec4(data, offs, 0, 0, 0, 0);
                 offs += fillVec4(data, offs, 0, 0, 0, 0);
@@ -267,6 +264,7 @@ class RatchetAndClank1Scene implements SceneGfx {
 
         const tfragGeometry = this.geometries.tfrag;
         if (!tfragGeometry) return;
+        if (tfragGeometry.lods[lodLevel].vertexCount === 0) return;
 
         const renderInst = this.renderHelper.renderInstManager.newRenderInst();
         renderInst.setBindingLayouts([
@@ -355,14 +353,8 @@ class RatchetAndClank1Scene implements SceneGfx {
             //     continue;
             // }
 
-            for (const dirLight of tieInstance.directionalLights) {
-                if (dirLight < 0 || (dirLight >= this.level.directionLights.length && dirLight !== 0xF)) {
-                    throw new Error(`Invalid directional light index ${dirLight}`);
-                }
-            }
-
             // can't find this data :(
-            const rgba = vec4.fromValues(1, 1, 1, 1);
+            const rgba = vec4.fromValues(0.5, 0.5, 0.5, 1);
 
             tieInstancesToDrawByLod[modelLodLevel].push({
                 objectMatrix,
@@ -455,6 +447,7 @@ class RatchetAndClank1Scene implements SceneGfx {
                 if (farDist > 0) {
                     const nearDist = farDist * 0.5;
                     lodAlpha = 1 - (dist - nearDist) / (farDist - nearDist);
+                    lodAlpha = Math.max(0, Math.min(1, lodAlpha));
                 }
             }
             if (lodAlpha <= 0) continue;
@@ -495,7 +488,7 @@ class RatchetAndClank1Scene implements SceneGfx {
             const inst = shrubInstancesToDraw[i];
             const color = inst.rgb;
             this.instanceDataBuffer.ptr += fillMatrix4x4(this.instanceDataBuffer.f32View, this.instanceDataBuffer.ptr, inst.objectMatrix);
-            this.instanceDataBuffer.ptr += fillVec4(this.instanceDataBuffer.f32View, this.instanceDataBuffer.ptr, color.r / 0x40, color.g / 0x40, color.b / 0x40, 1);
+            this.instanceDataBuffer.ptr += fillVec4(this.instanceDataBuffer.f32View, this.instanceDataBuffer.ptr, color.r / 0x80, color.g / 0x80, color.b / 0x80, 1);
             this.instanceDataBuffer.ptr += fillVec4(this.instanceDataBuffer.f32View, this.instanceDataBuffer.ptr, inst.directionalLights[0], inst.directionalLights[1], inst.directionalLights[2], inst.directionalLights[3]);
             this.instanceDataBuffer.f32View[this.instanceDataBuffer.ptr++] = inst.lodAlpha;
         }
@@ -519,10 +512,15 @@ class RatchetAndClank1Scene implements SceneGfx {
         this.renderInstList.submitRenderInst(renderInst);
     }
 
-    private renderSky(cameraPosition: vec3, skyShellIndex: number): void {
+    private renderSky(cameraPosition: vec3, time: number, skyShellIndex: number): void {
         const objectMatrix = mat4.create();
         mat4.translate(objectMatrix, objectMatrix, cameraPosition);
         mat4.multiply(objectMatrix, objectMatrix, noclipSpaceFromRatchetSpace);
+
+        // can't find data for sky shell rotation speed
+        // if (...) {
+        //     mat4.rotateZ(objectMatrix, objectMatrix, time / ...);
+        // }
 
         const skyShellGeometry = this.geometries.skyShells[skyShellIndex];
         if (!skyShellGeometry) return;
@@ -587,7 +585,7 @@ class RatchetAndClank1Scene implements SceneGfx {
 
         const template = this.renderHelper.pushTemplateRenderInst();
         template.setMegaStateFlags({
-            cullMode: GfxCullMode.None,
+            cullMode: GfxCullMode.None, // ps2 don't do backface culling
             attachmentsState: [{
                 channelWriteMask: GfxChannelWriteMask.AllChannels,
                 rgbBlendState: {
@@ -601,7 +599,7 @@ class RatchetAndClank1Scene implements SceneGfx {
                     blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
                 },
             }]
-        })
+        });
         template.setBindingLayouts([
             { numSamplers: 1, numUniformBuffers: 2 },
         ]);
@@ -609,7 +607,7 @@ class RatchetAndClank1Scene implements SceneGfx {
 
         if (this.settings.enableSky) {
             for (let i = 0; i < this.geometries.skyShells.length; i++) {
-                this.renderSky(cameraPosition, i);
+                this.renderSky(cameraPosition, viewerInput.time, i);
             }
         }
 

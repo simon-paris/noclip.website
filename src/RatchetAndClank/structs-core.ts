@@ -1,6 +1,6 @@
 import { IS_DEVELOPMENT } from "../BuildVersion";
 import { GsPrimitiveType } from "../Common/PS2/GS";
-import { DataViewExt } from "../DataViewExt";
+import { DataViewExt } from "./DataViewExt";
 import { assert } from "../util";
 import { getBits, ImaginaryGsCommand, ImaginaryGsCommandBuffer, truncateTrailing0xFF } from "./utils";
 import { readVifCommandList, readVifStrowData, vifUnpacks, VifVnVl } from "./vif";
@@ -234,7 +234,7 @@ export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketH
         // 0x10
         i32 adGifSrcOffsets[4];
         // 0x20
-        TieUnpackHeader tieVuHeader;
+        TieVuHeader tieVuHeader;
         // 0x2c
         TieStrip tieStrips[tieVuHeader.stripCount];
         // align 0x10
@@ -267,7 +267,7 @@ export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketH
     ptr += AD_GIFS * 0x4;
 
     const tieVuHeader = readTieVuHeader(view.subview(ptr));
-    ptr += SIZEOF_TIE_UNPACK_HEADER;
+    ptr += SIZEOF_TIE_VU_HEADER;
 
     const tieStrips = view.subdivide(ptr, tieVuHeader.stripCount, SIZEOF_TIE_STRIP).map(readTieStrip);
     ptr += tieVuHeader.stripCount * SIZEOF_TIE_STRIP;
@@ -363,7 +363,7 @@ export type TieVuHeader = {
     regularVertexCount: number,
     morphingVertexCount: number,
 }
-export const SIZEOF_TIE_UNPACK_HEADER = 0xc;
+export const SIZEOF_TIE_VU_HEADER = 0xc;
 export function readTieVuHeader(view: DataViewExt) {
     /*
     struct TieVuHeader {
@@ -1137,7 +1137,7 @@ export function readShrubPacket(view: DataViewExt): ShrubImaginaryGsCommand[] {
     const vifCommands = readVifCommandList(view);
     const nextUnpack = vifUnpacks(vifCommands);
 
-    // unpack 1
+    // unpack 1 is a header followed by primatives and adgifs
     const unpack1 = nextUnpack();
     const packetHeader = readShrubPacketHeader(unpack1);
     const gifTags = unpack1.subdivide(0x10, packetHeader.gifTagCount, 0x10).map(readShrubVertexGifTag);

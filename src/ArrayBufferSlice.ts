@@ -11,7 +11,6 @@
 
 import { assert } from "./util.js";
 import { getSystemEndianness, Endianness } from "./endian.js";
-import { DataViewExt, DataViewExtOptions } from "./DataViewExt.js";
 
 declare global {
     interface ArrayBuffer { [Symbol.species]?: "ArrayBuffer"; }
@@ -132,13 +131,6 @@ export default class ArrayBufferSlice {
         } else {
             return this.subarray(offs, length).createDataView();
         }
-    }
-
-    /**
-     * Creates a DataViewExt view of the same range of the same buffer.
-     */
-    public createDataViewExt(dataViewExtOptions: DataViewExtOptions): DataViewExt {
-        return new DataViewExt(this.arrayBuffer, dataViewExtOptions, this.byteOffset, this.byteLength);
     }
 
     private bswap16(): ArrayBufferSlice {

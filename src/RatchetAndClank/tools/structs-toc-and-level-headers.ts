@@ -1,4 +1,4 @@
-import { DataViewExt } from "./DataViewExt.ts";
+import { DataViewExt } from "../DataViewExt";
 
 export type TableOfContents = {
     version: number,
@@ -68,7 +68,7 @@ export async function readLevelDescriptor(view: DataViewExt) {
                 wads: view.getArrayOfNumbers(0x18, 68, Int32Array),
             };
         }),
-    }
+    };
 
     return tocItem;
 }

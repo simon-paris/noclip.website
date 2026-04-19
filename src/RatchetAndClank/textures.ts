@@ -1,5 +1,5 @@
 import { Color } from "../Color";
-import { DataViewExt } from "../DataViewExt";
+import { DataViewExt } from "./DataViewExt";
 import { GfxDevice, GfxFormat, GfxTexture, GfxTextureDimension, GfxTextureUsage, makeTextureDescriptor2D } from "../gfx/platform/GfxPlatform";
 import { SkyHeader, SkyTextureEntry, TextureEntry } from "./structs-core";
 

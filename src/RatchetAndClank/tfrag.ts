@@ -60,7 +60,7 @@ void main() {
     vec3 normal = normalize(inverse(transpose(mat3(worldTransform))) * normalize(a_Normal));
     vec4 lights = a_DirLightIndices;
 
-    v_Rgba = vec4(commonVertexLighting(a_Rgba.rgb, normal, lights, 1.0), a_Rgba.a);
+    v_Rgba = commonVertexLighting(a_Rgba, normal, lights);
 
     v_ST = a_ST.xy;
     v_Normal = normal;
@@ -242,6 +242,7 @@ function concatAndRemoveDoubleIndirectionFromVertices(tfragId: number, tfrag: Tf
     const basePosition = { x: tfrag.dataGroup2.basePosition[0], y: tfrag.dataGroup2.basePosition[1], z: tfrag.dataGroup2.basePosition[2] };
     const positionScale = 1 / 1024;
     const texcoordScale = 1 / 4096;
+    const colorScale = 1 / 0x80;
 
     const tfragInfo = new Array<TfragVertexInfo>().concat(
         tfrag.dataGroup2.vertexInfoPart1,
@@ -269,10 +270,10 @@ function concatAndRemoveDoubleIndirectionFromVertices(tfragId: number, tfrag: Tf
             nx: normal.x,
             ny: normal.y,
             nz: normal.z,
-            r: rgba.r / 255,
-            g: rgba.g / 255,
-            b: rgba.b / 255,
-            a: Math.max(1, (rgba.a * 2) / 255), // alpha values are 0x0 - 0x80
+            r: colorScale * rgba.r,
+            g: colorScale * rgba.g,
+            b: colorScale * rgba.b,
+            a: colorScale * rgba.a,
             s: texcoordScale * info.s,
             t: texcoordScale * info.t,
             light0: light.directionalLights[0],
