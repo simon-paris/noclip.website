@@ -1430,4 +1430,144 @@ export function readSkyFace(view: DataViewExt): SkyFace {
 }
 
 
+export function readCollision(view: DataViewExt) {
+    const header = readCollisionHeader(view);
+    const meshGrid = readCollisionMeshGrid(view.subview(header.mesh));
+    return {
+        header,
+        meshGrid,
+    };
+}
 
+export type CollisionHeader = {
+    mesh: number,
+    heroGroups: number,
+};
+export function readCollisionHeader(view: DataViewExt): CollisionHeader {
+    return {
+        mesh: view.getInt32(0x0),
+        heroGroups: view.getInt32(0x4),
+    }
+}
+
+export function readCollisionAxis_Z(view: DataViewExt) {
+    const count = view.getUint16(0x2);
+    const offsets: number[] = [];
+    for (let i = 0; i < count; i++) {
+        offsets.push(view.getUint16(0x4 + i * 0x2));
+    }
+    return {
+        coord: view.getInt16(0x0),
+        count,
+        offsets,
+    };
+}
+
+export function readCollisionAxis_YX(view: DataViewExt) {
+    const count = view.getUint16(0x2);
+    const offsets: number[] = [];
+    for (let i = 0; i < count; i++) {
+        offsets.push(view.getInt32(0x4 + i * 0x4));
+    }
+    return {
+        coord: view.getInt16(0x0),
+        count,
+        offsets,
+    };
+}
+
+export function readCollisionMeshGrid(view: DataViewExt) {
+    const octants: CollisionOctant[] = [];
+    const axisZ = readCollisionAxis_Z(view.subview(0x0));
+    const pos = { x: 0, y: 0, z: axisZ.coord * 4 + 2 };
+    for (let z = 0; z < axisZ.count; z++) {
+        const yOffset = axisZ.offsets[z] * 4;
+        if (yOffset !== 0) {
+            const axisY = readCollisionAxis_YX(view.subview(yOffset));
+            pos.y = axisY.coord * 4 + 2;
+            for (let y = 0; y < axisY.count; y++) {
+                const xOffset = axisY.offsets[y];
+                if (xOffset !== 0) {
+                    const axisX = readCollisionAxis_YX(view.subview(xOffset));
+                    pos.x = axisX.coord * 4 + 2;
+                    for (let x = 0; x < axisX.count; x++) {
+                        const octantOffset = axisX.offsets[x] >> 8;
+                        if (octantOffset !== 0) {
+                            octants.push(readCollisionOctant(view.subview(octantOffset), pos));
+                        }
+                        pos.x += 4;
+                    }
+                }
+                pos.y += 4;
+            }
+        }
+        pos.z += 4;
+    }
+
+    return octants;
+}
+
+export type CollisionOctant = {
+    pos: {
+        x: number,
+        y: number,
+        z: number,
+    },
+    verts: {
+        x: number,
+        y: number,
+        z: number,
+    }[],
+    faces: {
+        v0: number,
+        v1: number,
+        v2: number,
+        v3: number | null,
+        quad: boolean,
+        type: number,
+    }[],
+};
+export function readCollisionOctant(view: DataViewExt, pos: { x: number, y: number, z: number }): CollisionOctant {
+    const faceCount = view.getUint16(0x0);
+    const vertCount = view.getUint8(0x2);
+    const quadCount = view.getUint8(0x3);
+
+    let ptr = 4;
+
+    const verts = view.getArrayOfNumbers(ptr, vertCount, Uint32Array).map(value => {
+        return {
+            x: ((value << 22) >> 22) / 16,
+            y: ((value << 12) >> 22) / 16,
+            z: ((value << 0) >> 20) / 64,
+        };
+    });
+    ptr += vertCount * 0x4;
+
+    const faces = view.subdivide(ptr, faceCount, 0x4).map(view => ({
+        v0: view.getUint8(0x0),
+        v1: view.getUint8(0x1),
+        v2: view.getUint8(0x2),
+        v3: null as number | null,
+        quad: false,
+        type: view.getUint8(0x3),
+    }));
+    ptr += faceCount * 0x4;
+
+    const quads = view.getArrayOfNumbers(ptr, quadCount, Uint8Array);
+    for (let i = 0; i < quadCount; i++) {
+        const v3Idx = quads[i];
+        faces[i].v3 = v3Idx;
+        faces[i].quad = true;
+    }
+    ptr += quadCount * 0x1;
+
+    return {
+        pos: { ...pos },
+        verts,
+        faces,
+    };
+}
+
+export function readHeroCollisionGroup(view: DataViewExt) {
+
+}
