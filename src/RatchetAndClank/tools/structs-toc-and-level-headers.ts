@@ -1,10 +1,11 @@
+import { assert } from "../../util";
 import { DataViewExt } from "../DataViewExt";
 
 export type TableOfContents = {
     version: number,
     size: number,
     levelSectors: { startSector: number, sizeInSectors: number }[],
-}
+};
 export const SIZEOF_TABLE_OF_CONTENTS = 0x2960;
 export async function readTableOfContents(view: DataViewExt): Promise<TableOfContents> {
     /*
@@ -21,7 +22,7 @@ export async function readTableOfContents(view: DataViewExt): Promise<TableOfCon
         levelSectors: view.subdivide(0x28c8, 19, 0x8).map(view => {
             return view.getInt32PairAs(0, "startSector", "sizeInSectors");
         }),
-    }
+    };
 }
 
 export type LevelDescriptor = {
@@ -34,7 +35,7 @@ export type LevelDescriptor = {
     bindata: { startSector: number, sizeInBytes: number }[],
     music: number[],
     scenes: { sounds: number[], wads: number[] }[],
-}
+};
 export const SIZEOF_LEVEL_DESCRIPTOR_HEADER = 0x2434;
 export async function readLevelDescriptor(view: DataViewExt) {
     /*
@@ -45,13 +46,12 @@ export async function readLevelDescriptor(view: DataViewExt) {
       https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/iso/table_of_contents.h#L134
     */
 
-    if (view.getInt32(0x4) !== SIZEOF_LEVEL_DESCRIPTOR_HEADER) {
-        return null;
-    }
+    const headerSize = view.getInt32(0x4);
+    assert(headerSize === SIZEOF_LEVEL_DESCRIPTOR_HEADER);
 
     const tocItem = {
         id: view.getInt32(0),
-        headerSize: view.getInt32(0x4),
+        headerSize,
         data: view.getInt32PairAs(0x8, "startSector", "sizeInSectors"), // points to LevelDataHeader
         gameplayNtsc: view.getInt32PairAs(0x10, "startSector", "sizeInSectors"), // points to GameplayHeader
         gameplayPal: view.getInt32PairAs(0x18, "startSector", "sizeInSectors"),
@@ -81,7 +81,7 @@ export type LevelDataHeader = {
     hudHeader: { offset: number, size: number },
     hudBanks: { offset: number, size: number }[],
     coreData: { offset: number, size: number },
-}
+};
 export const SIZEOF_LEVEL_DATA_HEADER = 0x58;
 export async function readLevelDataHeader(view: DataViewExt) {
     /*
@@ -96,5 +96,5 @@ export async function readLevelDataHeader(view: DataViewExt) {
         hudHeader: view.getInt32PairAs(0x20, "offset", "size"),
         hudBanks: view.subdivide(0x28, 5, 0x8).map(view => view.getInt32PairAs(0, "offset", "size")),
         coreData: view.getInt32PairAs(0x50, "offset", "size")
-    }
+    };
 }

@@ -1,7 +1,7 @@
 import { readDirectionLightInstance, readGameplayHeader, readGrindPathBlock, readInstanceBlock, readLevelSettings, readMobyInstance, readPathBlock, readPointLightInstance, readShrubInstance, readTieInstance, ShrubInstance, SIZEOF_DIRECTION_LIGHT_INSTANCE, SIZEOF_MOBY_INSTANCE, SIZEOF_POINT_LIGHT_INSTANCE, SIZEOF_SHRUB_INSTANCE, SIZEOF_TIE_INSTANCE, TieInstance } from "./structs-gameplay";
 import { DataViewExt } from "./DataViewExt";
 import { assert } from "../util";
-import { readClassEntry, readLevelCoreHeader, readShrubClass, readSky, readTextureEntry, readTfrag, readTfragBlockHeader, readTfragHeader, readTieClass, ShrubClass, SIZEOF_SHRUB_CLASS_ENTRY, SIZEOF_TEXTURE_ENTRY, SIZEOF_TFRAG_HEADER, SIZEOF_TIE_CLASS_ENTRY, TieClass } from "./structs-core";
+import { readClassEntry, readCollision, readLevelCoreHeader, readShrubClass, readSky, readTextureEntry, readTfrag, readTfragBlockHeader, readTfragHeader, readTieClass, ShrubClass, SIZEOF_SHRUB_CLASS_ENTRY, SIZEOF_TEXTURE_ENTRY, SIZEOF_TFRAG_HEADER, SIZEOF_TIE_CLASS_ENTRY, TieClass } from "./structs-core";
 import { makeInstanceOClassMap, truncateTrailing0xFF } from "./utils";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { readPalette8TextureSky, readPalette8TextureWithPaletteInGsRam } from "./textures";
@@ -121,6 +121,9 @@ export function buildLevelFromFiles(filesAsSlices: LevelFiles) {
     const sky = readSky(files.coreData.subview(levelCoreHeader.sky));
     const skyTextures = sky.textureEntries.map((textureEntry, i) => readPalette8TextureSky(files.coreData.subview(levelCoreHeader.sky), sky.header, textureEntry, i));
 
+    // read collision
+    const collision = readCollision(files.coreData.subview(levelCoreHeader.collision));
+
     return {
         ready: true,
 
@@ -131,6 +134,7 @@ export function buildLevelFromFiles(filesAsSlices: LevelFiles) {
         grindPaths,
         directionLights: directionLights.instances,
         pointLights: pointLights.instances,
+        collision,
 
         tfrags,
         tfragTextures,

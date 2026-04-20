@@ -70,8 +70,7 @@ for (const levelSectors of tableOfContents.levelSectors) {
         const filename = name.replace(/\{\}/g, String(levelNum));
         await fs.writeFile(path.join(outputDir, filename), buf);
         if (buf instanceof DataViewExtWithTracer) {
-            const filename2 = name.replace(/\{\}/g, String(levelNum));
-            await fs.writeFile(path.join(outputDir, filename2 + ".tracer"), buf.tracer);
+            await fs.writeFile(path.join(outputDir, filename + ".tracer"), buf.tracer);
         }
         console.log(`Writing file ${filename}`);
         filesWritten.push(filename);

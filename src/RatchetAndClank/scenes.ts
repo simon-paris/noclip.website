@@ -22,6 +22,7 @@ import { Frustum } from "../Geometry";
 import { MobyInstance } from "./structs-gameplay";
 import { nArray } from "../util";
 import { createGfxTextureArrayForPaletteTextures, createGfxTextureForPaletteTexture } from "./textures";
+import { CollisionGeometry, CollisionProgram } from "./collision";
 
 const pathBase = `RatchetAndClank1`;
 
@@ -34,6 +35,7 @@ class RatchetAndClank1Scene implements SceneGfx {
     private tieProgram: GfxProgram;
     private shrubProgram: GfxProgram;
     private skyProgram: GfxProgram;
+    private collisionProgram: GfxProgram;
 
     private samplerWrap: GfxSampler;
     private samplerClamp: GfxSampler;
@@ -81,6 +83,7 @@ class RatchetAndClank1Scene implements SceneGfx {
         ties: new Map<number, (TieGeometry | null)[]>(), // map of oClass to array of LOD geometries
         shrubs: new Map<number, ShrubGeometry>(),
         skyShells: new Array<SkyGeometry>(),
+        collision: null as null | CollisionGeometry,
     };
 
     private instanceDataBuffer: MegaBuffer;
@@ -93,6 +96,7 @@ class RatchetAndClank1Scene implements SceneGfx {
         this.tieProgram = cache.createProgram(new TieProgram());
         this.shrubProgram = cache.createProgram(new ShrubProgram());
         this.skyProgram = cache.createProgram(new SkyProgram());
+        this.collisionProgram = cache.createProgram(new CollisionProgram());
 
         this.samplerWrap = cache.createSampler({
             minFilter: GfxTexFilterMode.Bilinear,
@@ -191,6 +195,9 @@ class RatchetAndClank1Scene implements SceneGfx {
             this.textures.skyTextures.push(gfxTextures.pixelsTexture);
             this.textureHolder.viewerTextures.push({ gfxTexture: gfxTextures.pixelsTexture });
         }
+
+        const { collision } = this.level;
+        this.geometries.collision = new CollisionGeometry(cache, collision.meshGrid);
 
         console.log(this.geometries);
 
@@ -512,6 +519,32 @@ class RatchetAndClank1Scene implements SceneGfx {
         this.renderInstList.submitRenderInst(renderInst);
     }
 
+    private renderCollision(cameraPosition: vec3): void {
+        const objectMatrix = mat4.create();
+        mat4.multiply(objectMatrix, objectMatrix, noclipSpaceFromRatchetSpace);
+
+        const collisionGeometry = this.geometries.collision;
+        if (!collisionGeometry) return;
+
+        const renderInst = this.renderHelper.renderInstManager.newRenderInst();
+        renderInst.setGfxProgram(this.collisionProgram);
+        renderInst.setBindingLayouts([
+            { numSamplers: 0, numUniformBuffers: 2 },
+        ]);
+
+        const collisionParams = renderInst.allocateUniformBufferF32(CollisionProgram.ub_CollisionParams, 16);
+        let offs = 0;
+        offs += fillMatrix4x4(collisionParams, offs, objectMatrix);
+
+        renderInst.setVertexInput(
+            collisionGeometry.inputLayout,
+            [{ buffer: collisionGeometry.vertexBuffer, byteOffset: 0 }],
+            null,
+        );
+        renderInst.setDrawCount(collisionGeometry.vertexCount, 0);
+        this.renderInstList.submitRenderInst(renderInst);
+    }
+
     private renderSky(cameraPosition: vec3, time: number, skyShellIndex: number): void {
         const objectMatrix = mat4.create();
         mat4.translate(objectMatrix, objectMatrix, cameraPosition);
@@ -611,6 +644,10 @@ class RatchetAndClank1Scene implements SceneGfx {
             }
         }
 
+        if (this.settings.showCollision) {
+            this.renderCollision(cameraPosition);
+        }
+
         if (this.settings.enableTfrag) {
             this.renderTfrag(cameraPosition);
         }
@@ -691,6 +728,15 @@ class RatchetAndClank1Scene implements SceneGfx {
         };
         renderSettingsPanel.contents.appendChild(lodBias.elem);
 
+        const showCollision = new UI.Checkbox('Show Collision', this.settings.showCollision);
+        showCollision.onchanged = () => {
+            this.settings.showCollision = showCollision.checked;
+            enableTfrag.setChecked(this.settings.enableTfrag = !showCollision.checked);
+            enableTies.setChecked(this.settings.enableTies = !showCollision.checked);
+            enableShrubs.setChecked(this.settings.enableShrubs = !showCollision.checked);
+        };
+        renderSettingsPanel.contents.appendChild(showCollision.elem);
+
         const enableTfrag = new UI.Checkbox('Enable Tfrag', this.settings.enableTfrag);
         enableTfrag.onchanged = () => {
             this.settings.enableTfrag = enableTfrag.checked;
@@ -750,6 +796,7 @@ class RatchetAndClank1Scene implements SceneGfx {
             ...(Array.from(this.geometries.ties.values()).flat(1)),
             ...this.geometries.shrubs.values(),
             ...this.geometries.skyShells,
+            this.geometries.collision,
         ];
         for (const geometry of allGeometries) {
             geometry?.destroy(device);
