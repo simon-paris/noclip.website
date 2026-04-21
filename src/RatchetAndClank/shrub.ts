@@ -190,7 +190,7 @@ export function assembleShrubClassGeometry(shrub: ShrubClass) {
 }
 
 function commandBufferToTriangles(commandBuffer: ShrubImaginaryGsCommand[]) {
-    let currentPrimativeType: GsPrimitiveType | null = null;
+    let currentPrimitiveType: GsPrimitiveType | null = null;
     let currentMaterial: { texture: number, clamp: number } | null = null;
 
     const groups: { material: { texture: number, clamp: number }, strip: ShrubVertex[], triangleList: ShrubVertex[] }[] = [];
@@ -198,7 +198,7 @@ function commandBufferToTriangles(commandBuffer: ShrubImaginaryGsCommand[]) {
     for (const command of commandBuffer) {
         switch (command.type) {
             case ImaginaryGsCommandType.PRIMITIVE_RESET: {
-                currentPrimativeType = command.value.type;
+                currentPrimitiveType = command.value.type;
                 if (currentMaterial === null) {
                     throw new Error("Got a primitive reset command before we had a material set");
                 }
@@ -213,9 +213,9 @@ function commandBufferToTriangles(commandBuffer: ShrubImaginaryGsCommand[]) {
                 break;
             }
             case ImaginaryGsCommandType.VERTEX: {
-                if (currentPrimativeType === GsPrimitiveType.TRIANGLE_STRIP) {
+                if (currentPrimitiveType === GsPrimitiveType.TRIANGLE_STRIP) {
                     groups[groups.length - 1].strip.push(command.value);
-                } else if (currentPrimativeType === GsPrimitiveType.TRIANGLE) {
+                } else if (currentPrimitiveType === GsPrimitiveType.TRIANGLE) {
                     groups[groups.length - 1].triangleList.push(command.value);
                 } else {
                     throw new Error("Unsupported primitive type");
@@ -227,7 +227,7 @@ function commandBufferToTriangles(commandBuffer: ShrubImaginaryGsCommand[]) {
 
     return groups.map(group => {
         if (group.strip.length && group.triangleList.length) {
-            throw new Error("Can't have both strip and triangle list data in the same primative");
+            throw new Error("Can't have both strip and triangle list data in the same primitive");
         }
         if (group.strip.length) {
             group.triangleList = stripToTris(group.strip);

@@ -61,6 +61,7 @@ in vec4 v_Rgba;
 void main() {
     float isTextured = u_ExtraData.x;
     if (isTextured == 1.0) {
+        if (u_EnableTextures == 0.0) discard;
         gl_FragColor = commonFragmentShader(v_Rgba, texture(SAMPLER_2D(u_Texture), v_ST));
     } else {
         gl_FragColor = commonFragmentShader(v_Rgba, vec4(1.0, 1.0, 1.0, 1.0));
@@ -170,17 +171,15 @@ function assembleSkyShellGeometry(skyShell: SkyShell) {
         }
         for (let j = 0; j < cluster.triangles.length; j++) {
             const triangle = cluster.triangles[j];
-            for (let k = 0; k < 3; k++) {
-                draws.push({
-                    material: triangle.texture,
-                    flags: skyShell.header.flags,
-                    indices: [
-                        triangle.indices[0] + baseVertex,
-                        triangle.indices[1] + baseVertex,
-                        triangle.indices[2] + baseVertex,
-                    ],
-                });
-            }
+            draws.push({
+                material: triangle.texture,
+                flags: skyShell.header.flags,
+                indices: [
+                    triangle.indices[0] + baseVertex,
+                    triangle.indices[1] + baseVertex,
+                    triangle.indices[2] + baseVertex,
+                ],
+            });
         }
         baseVertex += cluster.vertices.length;
     }
@@ -198,7 +197,7 @@ function assembleSkyShellGeometry(skyShell: SkyShell) {
         vertexArrayBuffer[ptr++] = (vert.g / 0xFF);
         vertexArrayBuffer[ptr++] = (vert.b / 0xFF);
         vertexArrayBuffer[ptr++] = (vert.a1 / 0xFF * 2);
-        vertexArrayBuffer[ptr++] = (vert.a2 / 0xFF);
+        vertexArrayBuffer[ptr++] = (vert.a2 / 0xFF * 2);
     }
 
     const indexArrayBuffer = new Uint16Array(draws.length * 3);

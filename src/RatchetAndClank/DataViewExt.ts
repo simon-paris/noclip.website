@@ -128,7 +128,7 @@ export class DataViewExt<T extends ArrayBufferLike = ArrayBufferLike> extends Da
         const chunks = [];
         for (let i = 0; i < maxSubviews; i++) {
             const offset = startOffset + (i * stride);
-            const size = constrainSize ? stride : undefined;
+            const size = constrainSize ? stride : 0;
             if ((offset + stride) > this.byteLength) {
                 break;
             }

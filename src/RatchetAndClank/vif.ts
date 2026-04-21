@@ -1,3 +1,4 @@
+import { hexzero } from "../util";
 import { DataViewExt } from "./DataViewExt";
 import { getBits } from "./utils";
 
@@ -95,7 +96,7 @@ function readVifCommand(view: DataViewExt, wl: number, cl: number) {
     const isUnpack = isUnpackCommand(cmd);
     const cmdString = VifCmd[cmd] ?? (isUnpack ? "UNPACK" : null);
     if (!cmdString) {
-        throw new Error(`Unknown VIF command: 0b${cmd.toString(16).padStart(2, "0")}`);
+        throw new Error(`Unknown VIF command: ${hexzero(cmd, 2)}`);
     }
 
     const size = vifCommandSizeInBytes(cmd, num, immediate, wl, cl);
