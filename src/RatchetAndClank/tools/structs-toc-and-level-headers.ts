@@ -13,8 +13,11 @@ export async function readTableOfContents(view: DataViewExt): Promise<TableOfCon
     https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/iso/table_of_contents.h#L64
     */
 
-    const version = view.getInt32(0x4);
+    const version = view.getInt32(0x0);
     const size = view.getInt32(0x4);
+
+    assert(version === 1);
+    assert(size === SIZEOF_TABLE_OF_CONTENTS);
 
     return {
         version,

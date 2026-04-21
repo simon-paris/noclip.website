@@ -220,7 +220,7 @@ export function readTiePacketHeader(view: DataViewExt): TiePacketHeader {
 export type TieImaginaryGsCommand = ImaginaryGsCommand<TieStrip, number, { vertex: TieVertex, normalIndex: number }>
 
 const tieCommandSizes = {
-    primativeReset: 1,
+    primitiveReset: 1,
     setMaterial: 6,
     vertex: 3,
 };
@@ -228,11 +228,11 @@ const tieCommandSizes = {
 export type TiePacketBody = ReturnType<typeof readTiePacketBody>;
 export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketHeader, oClass: number, lod: number, packetIndex: number) {
     /*
-    packed struct TiePacketBody {
+    struct TiePacketBody {
         // 0x0
-        i32 adGifDestOffsets[4];
+        int32 adGifDestOffsets[4];
         // 0x10
-        i32 adGifSrcOffsets[4];
+        int32 adGifSrcOffsets[4];
         // 0x20
         TieVuHeader tieVuHeader;
         // 0x2c
@@ -241,15 +241,15 @@ export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketH
         TieRegularVertex regularVerts[tieVuHeader.regularVertexCount];
         TieMorphingVertex morphingVerts[tieVuHeader.morphingVertexCount];
         // align 0x10
-        u8 regularNormalIndices[tieVuHeader.regularVertexCount];
+        uint8 regularNormalIndices[tieVuHeader.regularVertexCount];
         // align 0x4
         uint8vec4 morphingNormalIndices[tieVuHeader.morphingVertexCount];
         // align 0x10
-        u8 regularUnknown[tieVuHeader.regularVertexCount];
+        uint8 regularUnknown[tieVuHeader.regularVertexCount];
         // align 0x4
         uint8vec4 morphingUnknown[tieVuHeader.morphingVertexCount];
         // align 0x10
-        u8 unknown[?];
+        uint8 unknown[?];
     }
     */
 
@@ -326,9 +326,9 @@ export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketH
         }
     }
 
-    // Write primative reset commands
+    // Write primitive reset commands
     for (const strip of tieStrips) {
-        imaginaryGsBuffer.writePrimativeReset(strip.gifTagOffset, tieCommandSizes.primativeReset, strip);
+        imaginaryGsBuffer.writePrimitiveReset(strip.gifTagOffset, tieCommandSizes.primitiveReset, strip);
     }
 
     // Write material change commands
@@ -367,18 +367,18 @@ export const SIZEOF_TIE_VU_HEADER = 0xc;
 export function readTieVuHeader(view: DataViewExt) {
     /*
     struct TieVuHeader {
-        u8 unknown0;
-        u8 unknown1;
-        u8 unknown2;
-        u8 stripCount;
-        u8 unknown4;
-        u8 unknown5;
-        u8 unknown6;
-        u8 unknown7;
-        u8 regularVerticesSizePlusFourOverTwo;
-        u8 morphingVerticesSizePlusFourOverTwo;
-        u8 regularVertexCount;
-        u8 morphingVertexCount;
+        uint8 unknown0;
+        uint8 unknown1;
+        uint8 unknown2;
+        uint8 stripCount;
+        uint8 unknown4;
+        uint8 unknown5;
+        uint8 unknown6;
+        uint8 unknown7;
+        uint8 regularVerticesSizePlusFourOverTwo;
+        uint8 morphingVerticesSizePlusFourOverTwo;
+        uint8 regularVertexCount;
+        uint8 morphingVertexCount;
     }
     */
 
@@ -1128,7 +1128,7 @@ export type ShrubVertex = {
 export type ShrubImaginaryGsCommand = ImaginaryGsCommand<{ type: GsPrimitiveType }, { adGif: ShrubTexturePrimitive }, ShrubVertex>;
 
 const shrubCommandSize = {
-    primativeReset: 1,
+    primitiveReset: 1,
     setMaterial: 5,
     vertex: 3,
 }
@@ -1137,7 +1137,7 @@ export function readShrubPacket(view: DataViewExt): ShrubImaginaryGsCommand[] {
     const vifCommands = readVifCommandList(view);
     const nextUnpack = vifUnpacks(vifCommands);
 
-    // unpack 1 is a header followed by primatives and adgifs
+    // unpack 1 is a header followed by primitives and adgifs
     const unpack1 = nextUnpack();
     const packetHeader = readShrubPacketHeader(unpack1);
     const gifTags = unpack1.subdivide(0x10, packetHeader.gifTagCount, 0x10).map(readShrubVertexGifTag);
@@ -1153,9 +1153,9 @@ export function readShrubPacket(view: DataViewExt): ShrubImaginaryGsCommand[] {
 
     for (const gifTag of gifTags) {
         const primRegister = getBits(gifTag.tag.high, 15, 25);
-        const primativeType = getBits(primRegister, 0, 2);
-        assert(primativeType === GsPrimitiveType.TRIANGLE || primativeType === GsPrimitiveType.TRIANGLE_STRIP);
-        imaginaryGsBuffer.writePrimativeReset(gifTag.gsPacketOffset, shrubCommandSize.primativeReset, { type: primativeType });
+        const primitiveType = getBits(primRegister, 0, 2);
+        assert(primitiveType === GsPrimitiveType.TRIANGLE || primitiveType === GsPrimitiveType.TRIANGLE_STRIP);
+        imaginaryGsBuffer.writePrimitiveReset(gifTag.gsPacketOffset, shrubCommandSize.primitiveReset, { type: primitiveType });
     }
 
     for (const adGif of adGifs) {
@@ -1244,9 +1244,9 @@ export function readSkyShell(skyView: DataViewExt, skyShellView: DataViewExt): S
         let texcoords: SkyTexcoord[] = [];
         let rgbas: SkyRgba[] = [];
         if (shellHeader.flags.textured) {
-            texcoords = texcoordsOrRgbaBuffer.subdivide(0, clusterHeader.texcoordsOrRgbasOffset, SIZEOF_SKY_TEXCOORD).map(readSkyTexcoord);
+            texcoords = texcoordsOrRgbaBuffer.subdivide(0, clusterHeader.vertexCount, SIZEOF_SKY_TEXCOORD).map(readSkyTexcoord);
         } else {
-            rgbas = texcoordsOrRgbaBuffer.subdivide(0, clusterHeader.texcoordsOrRgbasOffset, 4).map(view => view.getUint8_Rgba(0));
+            rgbas = texcoordsOrRgbaBuffer.subdivide(0, clusterHeader.vertexCount, 4).map(view => view.getUint8_Rgba(0));
         }
         const indicesBuffer = dataView.subview(clusterHeader.triOffset);
         const triangles = indicesBuffer.subdivide(0, clusterHeader.triCount, SIZEOF_SKY_FACE).map(readSkyFace);
@@ -1479,29 +1479,29 @@ export function readCollisionAxis_YX(view: DataViewExt) {
 export function readCollisionMeshGrid(view: DataViewExt) {
     const octants: CollisionOctant[] = [];
     const axisZ = readCollisionAxis_Z(view.subview(0x0));
-    const pos = { x: 0, y: 0, z: axisZ.coord * 4 + 2 };
+    let worldZ = axisZ.coord * 4 + 2;
     for (let z = 0; z < axisZ.count; z++) {
         const yOffset = axisZ.offsets[z] * 4;
         if (yOffset !== 0) {
             const axisY = readCollisionAxis_YX(view.subview(yOffset));
-            pos.y = axisY.coord * 4 + 2;
+            let worldY = axisY.coord * 4 + 2;
             for (let y = 0; y < axisY.count; y++) {
                 const xOffset = axisY.offsets[y];
                 if (xOffset !== 0) {
                     const axisX = readCollisionAxis_YX(view.subview(xOffset));
-                    pos.x = axisX.coord * 4 + 2;
+                    let worldX = axisX.coord * 4 + 2;
                     for (let x = 0; x < axisX.count; x++) {
                         const octantOffset = axisX.offsets[x] >> 8;
                         if (octantOffset !== 0) {
-                            octants.push(readCollisionOctant(view.subview(octantOffset), pos));
+                            octants.push(readCollisionOctant(view.subview(octantOffset), worldX, worldY, worldZ));
                         }
-                        pos.x += 4;
+                        worldX += 4;
                     }
                 }
-                pos.y += 4;
+                worldY += 4;
             }
         }
-        pos.z += 4;
+        worldZ += 4;
     }
 
     return octants;
@@ -1527,7 +1527,7 @@ export type CollisionOctant = {
         type: number,
     }[],
 };
-export function readCollisionOctant(view: DataViewExt, pos: { x: number, y: number, z: number }): CollisionOctant {
+export function readCollisionOctant(view: DataViewExt, worldX: number, worldY: number, worldZ: number): CollisionOctant {
     const faceCount = view.getUint16(0x0);
     const vertCount = view.getUint8(0x2);
     const quadCount = view.getUint8(0x3);
@@ -1562,7 +1562,11 @@ export function readCollisionOctant(view: DataViewExt, pos: { x: number, y: numb
     ptr += quadCount * 0x1;
 
     return {
-        pos: { ...pos },
+        pos: {
+            x: worldX,
+            y: worldY,
+            z: worldZ,
+        },
         verts,
         faces,
     };

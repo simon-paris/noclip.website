@@ -110,6 +110,7 @@ vec3 adjustSaturation(vec3 color, float adjustment) {
 vec4 commonFragmentShader(vec4 rgba, vec4 textureSample) {
     // texture color is multiplied with vertex color immediately
     if (u_EnableTextures == 1.0) { rgba *= textureSample; }
+    else { rgba.rgb *= 0.5; }
 
     // fog step (ignores alpha)
     vec3 rgb = rgba.rgb;
@@ -124,10 +125,10 @@ vec4 commonFragmentShader(vec4 rgba, vec4 textureSample) {
     if (rgba.a < 0.01) discard;
 
     // blend over-alpha with color
-    if (rgba.a > 1.0) {
-        rgba.rgb *= 1.0 + (rgba.a - 1.0);
-        rgba.a = 1.0;
-    }
+    // if (rgba.a > 1.0) {
+    //     rgba.rgb *= 1.0 + (rgba.a - 1.0);
+    //     rgba.a = 1.0;
+    // }
 
     // with saturation filter (not authentic but looks washed out without it)
     rgba.rgb = adjustSaturation(rgba.rgb, 1.15);

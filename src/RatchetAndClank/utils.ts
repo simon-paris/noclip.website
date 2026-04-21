@@ -21,22 +21,12 @@ export function makeInstanceOClassMap<T extends { oClass: number }>(instances: T
     return map;
 }
 
-export function getBit(value: number, bit: number) {
-    return (value >> bit) & 1;
-}
-
 // get bits from startBit to endBit (inclusive)
 export function getBits(value: number, startBit: number, endBit: number) {
     return (value >> startBit) & ((1 << (endBit - startBit + 1)) - 1);
 }
 
-export function distanceToCamera(position: vec3, cameraPosition: vec3) {
-    const toCamera = vec3.create();
-    vec3.sub(toCamera, position, cameraPosition);
-    return vec3.len(toCamera);
-}
-
-export function pathToDebugLines(points: { x: number, y: number, z: number }[], color: Color): { from: vec3, to: vec3, color: Color }[] {
+export function lineChainToLineSegments(points: { x: number, y: number, z: number }[], color: Color): { from: vec3, to: vec3, color: Color }[] {
     const lines: { from: vec3, to: vec3, color: Color }[] = [];
     for (let i = 0; i < points.length - 1; i++) {
         const p0 = points[i]!;
@@ -117,11 +107,11 @@ export enum ImaginaryGsCommandType {
     VERTEX = 3,
 }
 
-export type ImaginaryGsCommand<PrimativeType, MaterialType, VertexType> =
+export type ImaginaryGsCommand<PrimitiveType, MaterialType, VertexType> =
     | {
         type: ImaginaryGsCommandType.PRIMITIVE_RESET,
         size: number,
-        value: PrimativeType,
+        value: PrimitiveType,
     }
     | {
         type: ImaginaryGsCommandType.SET_MATERIAL,
@@ -134,12 +124,12 @@ export type ImaginaryGsCommand<PrimativeType, MaterialType, VertexType> =
         value: VertexType,
     }
 
-export class ImaginaryGsCommandBuffer<PrimativeType, MaterialType, VertexType> {
-    public slots: (ImaginaryGsCommand<PrimativeType, MaterialType, VertexType> | null)[] = nArray(0x100, () => null);
+export class ImaginaryGsCommandBuffer<PrimitiveType, MaterialType, VertexType> {
+    public slots: (ImaginaryGsCommand<PrimitiveType, MaterialType, VertexType> | null)[] = nArray(0x100, () => null);
     maxSlotUsed = 0;
 
-    writePrimativeReset(address: number, size: number, primative: PrimativeType, allowOverwrite: boolean = false) {
-        this.write(address, size, { type: ImaginaryGsCommandType.PRIMITIVE_RESET, size, value: primative }, allowOverwrite);
+    writePrimitiveReset(address: number, size: number, primitive: PrimitiveType, allowOverwrite: boolean = false) {
+        this.write(address, size, { type: ImaginaryGsCommandType.PRIMITIVE_RESET, size, value: primitive }, allowOverwrite);
     }
 
     writeSetMaterial(address: number, size: number, material: MaterialType, allowOverwrite: boolean = false) {
@@ -163,21 +153,21 @@ export class ImaginaryGsCommandBuffer<PrimativeType, MaterialType, VertexType> {
         if (IS_DEVELOPMENT) {
             // validation
             let expectedEmptySlots = 0;
-            let expectPrimativeRestart = true;
+            let expectPrimitiveRestart = true;
             for (let i = 0; i < this.maxSlotUsed; i++) {
                 const command = this.slots[i];
                 if (command) {
                     if (expectedEmptySlots !== 0) {
                         throw new Error(`Unexpected write to GS command buffer`);
                     }
-                    if (command.type === ImaginaryGsCommandType.VERTEX && expectPrimativeRestart) {
-                        throw new Error(`Expected a primative restart command before first vertex`);
+                    if (command.type === ImaginaryGsCommandType.VERTEX && expectPrimitiveRestart) {
+                        throw new Error(`Expected a primitive restart command before first vertex`);
                     }
                     if (command.type === ImaginaryGsCommandType.PRIMITIVE_RESET) {
-                        expectPrimativeRestart = false;
+                        expectPrimitiveRestart = false;
                     }
                     if (command.type === ImaginaryGsCommandType.SET_MATERIAL) {
-                        expectPrimativeRestart = true;
+                        expectPrimitiveRestart = true;
                     }
                     expectedEmptySlots += command.size;
                 } else {

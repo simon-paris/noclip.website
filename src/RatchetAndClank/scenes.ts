@@ -12,7 +12,7 @@ import { FakeTextureHolder } from "../TextureHolder";
 import { TieGeometry, TieProgram } from "./tie";
 import { CameraController } from "../Camera";
 import { buildLevelFromFiles, LevelFiles, ShrubInstanceBatch, TieInstanceBatch } from "./level-builder";
-import { createMegaBuffer, distanceToCamera, MegaBuffer, noclipSpaceFromRatchetSpace, pathToDebugLines } from "./utils";
+import { createMegaBuffer, MegaBuffer, noclipSpaceFromRatchetSpace, lineChainToLineSegments } from "./utils";
 import { TfragGeometry, TfragProgram } from "./tfrag";
 import { ShrubGeometry, ShrubProgram } from "./shrub";
 import { colorNewFromRGBA, White } from "../Color";
@@ -131,10 +131,14 @@ class RatchetAndClank1Scene implements SceneGfx {
     }
 
     private async fetchLevelFiles() {
-        const coreIndexBuffer = await this.sceneContext.dataFetcher.fetchData(`${pathBase}/level_${this.levelNumber}.core_index`);
-        const coreDataBuffer = await this.sceneContext.dataFetcher.fetchData(`${pathBase}/level_${this.levelNumber}.core_data`);
-        const gameplayBuffer = await this.sceneContext.dataFetcher.fetchData(`${pathBase}/level_${this.levelNumber}.gameplay`);
-        const gsRamBuffer = await this.sceneContext.dataFetcher.fetchData(`${pathBase}/level_${this.levelNumber}.gs_ram`);
+        const promises = [
+            this.sceneContext.dataFetcher.fetchData(`${pathBase}/level_${this.levelNumber}.core_index`),
+            this.sceneContext.dataFetcher.fetchData(`${pathBase}/level_${this.levelNumber}.core_data`),
+            this.sceneContext.dataFetcher.fetchData(`${pathBase}/level_${this.levelNumber}.gameplay`),
+            this.sceneContext.dataFetcher.fetchData(`${pathBase}/level_${this.levelNumber}.gs_ram`),
+        ];
+
+        const [coreIndexBuffer, coreDataBuffer, gameplayBuffer, gsRamBuffer] = await Promise.all(promises);
 
         this.files = {
             ready: true,
@@ -324,9 +328,7 @@ class RatchetAndClank1Scene implements SceneGfx {
             mat4.getTranslation(position, objectMatrix);
 
             // camera position
-            const toCamera = scratchVec3_2;
-            vec3.sub(toCamera, position, cameraPosition);
-            const distanceToCamera = vec3.len(toCamera);
+            const distanceToCamera = vec3.distance(position, cameraPosition);
 
             // determine LOD level
             const hasLod2 = tieClass.packets[2].length > 0;
@@ -415,7 +417,7 @@ class RatchetAndClank1Scene implements SceneGfx {
         }
     }
 
-    private renderMoby(mobyInstance: MobyInstance, cameraWorldMatrix: mat4): void {
+    private renderMoby(mobyInstance: MobyInstance, cameraWorldMatrix: mat4, cameraPos: vec3): void {
         const pos = vec3.fromValues(mobyInstance.position.x, mobyInstance.position.y, mobyInstance.position.z);
         vec3.transformMat4(pos, pos, noclipSpaceFromRatchetSpace);
         this.renderHelper.debugDraw.drawLocator(pos, 0.3, White);
@@ -423,7 +425,9 @@ class RatchetAndClank1Scene implements SceneGfx {
         const rotation = quat.create();
         mat4.getRotation(rotation, cameraWorldMatrix);
         mat4.fromRotationTranslationScale(mat, rotation, pos, vec3.fromValues(0.01, 0.01, 0.01));
-        this.renderHelper.debugDraw.drawWorldTextMtx(String(mobyInstance.oClass), mat, White);
+        if (vec3.distance(pos, cameraPos) < 40) {
+            this.renderHelper.debugDraw.drawWorldTextMtx(String(mobyInstance.oClass), mat, White);
+        }
     }
 
     private renderShrubs(shrubInstanceBatch: ShrubInstanceBatch, cameraPosition: vec3, cameraFrustum: Frustum): void {
@@ -445,7 +449,7 @@ class RatchetAndClank1Scene implements SceneGfx {
             mat4.multiply(objectMatrix, noclipSpaceFromRatchetSpace, shrubInstance.matrix);
             const position = vec3.create();
             mat4.getTranslation(position, objectMatrix);
-            const dist = distanceToCamera(position, cameraPosition);
+            const distanceToCamera = vec3.distance(position, cameraPosition);
 
             // lod
             let lodAlpha = this.settings.lodSetting === 0 ? 1 : 0;
@@ -453,7 +457,7 @@ class RatchetAndClank1Scene implements SceneGfx {
                 const farDist = shrubInstance.drawDistance + this.settings.lodBias * 1.5;
                 if (farDist > 0) {
                     const nearDist = farDist * 0.5;
-                    lodAlpha = 1 - (dist - nearDist) / (farDist - nearDist);
+                    lodAlpha = 1 - (distanceToCamera - nearDist) / (farDist - nearDist);
                     lodAlpha = Math.max(0, Math.min(1, lodAlpha));
                 }
             }
@@ -614,8 +618,6 @@ class RatchetAndClank1Scene implements SceneGfx {
         mat4.getTranslation(cameraPosition, viewerInput.camera.worldMatrix);
         const cameraFrustum = viewerInput.camera.frustum;
 
-        this.renderHelper.debugDraw.beginFrame(viewerInput.camera.projectionMatrix, viewerInput.camera.viewMatrix, viewerInput.backbufferWidth, viewerInput.backbufferHeight);
-
         const template = this.renderHelper.pushTemplateRenderInst();
         template.setMegaStateFlags({
             cullMode: GfxCullMode.None, // ps2 don't do backface culling
@@ -637,6 +639,8 @@ class RatchetAndClank1Scene implements SceneGfx {
             { numSamplers: 1, numUniformBuffers: 2 },
         ]);
         this.fillSceneParams(template, viewerInput, cameraPosition);
+
+        this.renderHelper.debugDraw.beginFrame(viewerInput.camera.projectionMatrix, viewerInput.camera.viewMatrix, viewerInput.backbufferWidth, viewerInput.backbufferHeight);
 
         if (this.settings.enableSky) {
             for (let i = 0; i < this.geometries.skyShells.length; i++) {
@@ -660,7 +664,7 @@ class RatchetAndClank1Scene implements SceneGfx {
 
         if (this.settings.enableMobys) {
             for (let i = 0; i < this.level.mobyInstances.instances.length; i++) {
-                this.renderMoby(this.level.mobyInstances.instances[i], viewerInput.camera.worldMatrix);
+                this.renderMoby(this.level.mobyInstances.instances[i], viewerInput.camera.worldMatrix, cameraPosition);
             }
         }
 
@@ -672,11 +676,11 @@ class RatchetAndClank1Scene implements SceneGfx {
 
         if (this.settings.showPaths) {
             for (const path of this.level.paths) {
-                const lines = pathToDebugLines(path.points, colorNewFromRGBA(0.1, 0.3, 0.8, 1));
+                const lines = lineChainToLineSegments(path.points, colorNewFromRGBA(0.1, 0.3, 0.8, 1));
                 for (const line of lines) this.renderHelper.debugDraw.drawLine(line.from, line.to, line.color);
             }
             for (const path of this.level.grindPaths) {
-                const lines = pathToDebugLines(path.points, colorNewFromRGBA(0.7, 0.4, 0.1, 1));
+                const lines = lineChainToLineSegments(path.points, colorNewFromRGBA(0.7, 0.4, 0.1, 1));
                 for (const line of lines) this.renderHelper.debugDraw.drawLine(line.from, line.to, line.color);
             }
         }

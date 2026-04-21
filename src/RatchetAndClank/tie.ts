@@ -161,7 +161,7 @@ export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: 
 
     const commandLists: TieImaginaryGsCommand[][] = [];
     for (const packet of tie.packets[lod]) commandLists.push(packet.body.commandBuffer);
-    const strips = commnadBufferToStrips(tieOClass, commandLists);
+    const strips = commandBufferToStrips(tieOClass, commandLists);
     strips.sort((a, b) => a.material - b.material);
 
     const vertexCount = strips.reduce((a, b) => a + (b.verts.length - 2), 0) * 3;
@@ -171,16 +171,20 @@ export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: 
     let ptr = 0;
 
     function pushTriangle(verts: { vertex: TieVertex, normalIndex: number }[], material: number) {
-        fixTexcoords(verts.map(v => v.vertex));
-        for (const vertAndNormalIndex of verts) {
+        assert(verts.length === 3);
+        const fixedTexcoords = fixTexcoords(verts[0].vertex, verts[1].vertex, verts[2].vertex);
+        for (let i = 0; i < 3; i++) {
+            const vertAndNormalIndex = verts[i];
             const vert = vertAndNormalIndex.vertex;
+            const fixedTexcoord = fixedTexcoords[i];
             const normal = tie.normalsData[vertAndNormalIndex.normalIndex];
+
             vertexArrayBuffer[ptr++] = positionScale * vert.x;
             vertexArrayBuffer[ptr++] = positionScale * vert.y;
             vertexArrayBuffer[ptr++] = positionScale * vert.z;
             vertexArrayBuffer[ptr++] = material;
-            vertexArrayBuffer[ptr++] = texcoordScale * vert.s;
-            vertexArrayBuffer[ptr++] = texcoordScale * vert.t;
+            vertexArrayBuffer[ptr++] = texcoordScale * fixedTexcoord.s;
+            vertexArrayBuffer[ptr++] = texcoordScale * fixedTexcoord.t;
             assert(vert.q === 4096);
 
             vertexArrayBuffer[ptr++] = normalScale * normal.x;
@@ -204,8 +208,13 @@ export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: 
     return { vertexArrayBuffer, vertexCount };
 }
 
-// if ajacent verts have very different texcoords, they're intended to overflow and wrap around
-function fixTexcoords(verts: TieVertex[]) {
+// if adjacent verts have very different texcoords, they're intended to overflow and wrap around
+// this returns a copy because the vert may be used in multiple triangles
+function fixTexcoords(...verts: { s: number, t: number }[]) {
+    assert(verts.length === 3);
+
+    verts = verts.map(v => ({ s: v.s, t: v.t }));
+
     let min = 0, max = 0;
     for (const vert of verts) {
         if (vert.s < min) min = vert.s;
@@ -227,9 +236,11 @@ function fixTexcoords(verts: TieVertex[]) {
             if (vert.t < 8 * 4096) vert.t += 16 * 4096;
         }
     }
+
+    return verts;
 }
 
-function commnadBufferToStrips(tieOClass: number, packets: TieImaginaryGsCommand[][]) {
+function commandBufferToStrips(tieOClass: number, packets: TieImaginaryGsCommand[][]) {
     type TieStrip = { material: number, windingOrder: number, isFirstStripInPacket: number, verts: { vertex: TieVertex, normalIndex: number }[] };
 
     let strip: TieStrip | undefined;
@@ -244,7 +255,7 @@ function commnadBufferToStrips(tieOClass: number, packets: TieImaginaryGsCommand
             switch (command.type) {
                 case ImaginaryGsCommandType.PRIMITIVE_RESET: {
                     if (lastMaterial === null) {
-                        throw new Error(`Unexpected primative reset before material`);
+                        throw new Error(`Unexpected primitive reset before material`);
                     }
                     strip = { material: lastMaterial, windingOrder: command.value.windingOrder, isFirstStripInPacket: i, verts: [] }
                     strips.push(strip);
@@ -258,7 +269,7 @@ function commnadBufferToStrips(tieOClass: number, packets: TieImaginaryGsCommand
                 case ImaginaryGsCommandType.VERTEX: {
                     const vert = command.value;
                     if (!strip) {
-                        throw new Error(`Unexpected vertex before primative reset`);
+                        throw new Error(`Unexpected vertex before primitive reset`);
                     }
                     strip.verts.push(vert);
                 }

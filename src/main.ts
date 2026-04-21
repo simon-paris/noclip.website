@@ -140,7 +140,6 @@ import { GfxPlatform } from './gfx/platform/GfxPlatform.js';
 const sceneGroups: (string | SceneGroup)[] = [
     "Development",
     Scenes_Example.sceneGroup,
-    Scenes_RatchetAndClank1.sceneGroup,
 
     "Wii",
     Scenes_MarioKartWii.sceneGroup,
@@ -220,6 +219,7 @@ const sceneGroups: (string | SceneGroup)[] = [
     Scenes_Spyro.sceneGroup,
     Scenes_Spyro.sceneGroup2,
     Scenes_Spyro.sceneGroup3,
+    Scenes_RatchetAndClank1.sceneGroup,
     Scenes_PlusForXP.sceneGroup,
     Scenes_DonkeyKong64.sceneGroup,
     Scenes_DonkeyKongCountryReturns.sceneGroup,

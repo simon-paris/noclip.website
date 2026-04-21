@@ -736,8 +736,8 @@ class GfxRenderPassP_WebGPU implements GfxRenderPass {
         this._debugGroupStatisticsTriangles(indexCount / 3);
     }
 
-    public drawInstanced(vertexCount: number, firstIndex: number, instanceCount: number): void {
-        this.gpuRenderPassEncoder!.draw(vertexCount, instanceCount, firstIndex, 0);
+    public drawInstanced(vertexCount: number, firstVertex: number, instanceCount: number): void {
+        this.gpuRenderPassEncoder!.draw(vertexCount, instanceCount, firstVertex, 0);
         this._debugGroupStatisticsDrawCall();
         this._debugGroupStatisticsTriangles((vertexCount / 3) * instanceCount);
     }
@@ -1861,9 +1861,9 @@ class GfxImplP_WebGPU implements GfxSwapChain, GfxDevice {
         }
 
         switch (format) {
-            case GfxFormat.U16_RGB_565: return false;
-            case GfxFormat.U16_RGBA_NORM: return this._featureTextureFormatsTier1;
-            case GfxFormat.F32_RGBA: return this._featureFloat32Filterable;
+        case GfxFormat.U16_RGB_565: return false;
+        case GfxFormat.U16_RGBA_NORM: return this._featureTextureFormatsTier1;
+        case GfxFormat.F32_RGBA: return this._featureFloat32Filterable;
         }
 
         return true;

@@ -91,6 +91,9 @@ export function decompressWad(srcView: DataViewExt) {
             if (srcPtr + offset >= srcView.byteLength) {
                 throw new Error("Out of bounds read in decompression")
             }
+            if (srcPtr + offset < 0) {
+                throw new Error("Out of bounds read in decompression")
+            }
             return srcView.getUint8(srcPtr + offset);
         },
         eof() {
@@ -105,6 +108,9 @@ export function decompressWad(srcView: DataViewExt) {
             }
         },
         writeLit(bytes: number) {
+            if (srcPtr + bytes > srcView.byteLength) {
+                throw new Error("Out of bounds read in decompression")
+            }
             for (let i = 0; i < bytes; i++) {
                 this.resize();
                 destBuf[destPtr] = srcView.getUint8(srcPtr);

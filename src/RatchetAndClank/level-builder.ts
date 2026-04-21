@@ -76,7 +76,7 @@ export function buildLevelFromFiles(filesAsSlices: LevelFiles) {
     const ties = tieClassesAndTextures.map<TieInstanceBatch>(classAndTexture => {
         const { tieEntry, tieClass, textureIndices } = classAndTexture;
         const oClass = tieEntry.oClass;
-        const instances = tiesInstancesGroupedByClass.get(oClass)!;
+        const instances = tiesInstancesGroupedByClass.get(oClass) ?? [];
         return {
             oClass,
             tieClass,
@@ -108,7 +108,7 @@ export function buildLevelFromFiles(filesAsSlices: LevelFiles) {
     const shrubs = shrubClassesAndTextures.map<ShrubInstanceBatch>((classAndTexture) => {
         const { shrubClass, textureIndices } = classAndTexture;
         const oClass = classAndTexture.shrubClass.header.oClass;
-        const instances = shrubInstancesGroupedByClass.get(oClass)!;
+        const instances = shrubInstancesGroupedByClass.get(oClass) ?? [];
         return {
             oClass,
             shrubClass,

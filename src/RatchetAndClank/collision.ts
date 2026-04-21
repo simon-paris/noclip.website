@@ -24,7 +24,7 @@ const collisionTypeMap = Object.fromEntries([
     [0b1100, vec3.fromValues(0.2, 0.2, 0.2)], // 12 out of bounds, cannot wall-jump
     [0b1101, vec3.fromValues(0.3, 0.9, 0.6)], // 13 drown (ocean)
     [0b1110, vec3.fromValues(0.3, 0.3, 0.9)], // 14 unswimmable shallow water
-    [0b1111, vec3.fromValues(0.8, 0.8, 0.8)], // 15 normal terrain
+    [0b1111, vec3.fromValues(1.0, 1.0, 1.0)], // 15 normal terrain
 ]);
 
 const collisionColorLutCode = `
@@ -56,7 +56,7 @@ layout(std140) uniform ub_CollisionParams {
 
     public override vert = `
 layout(location = ${CollisionProgram.a_Position}) in vec3 a_Position;
-layout(location = ${CollisionProgram.a_CollisionType}) in vec3 a_CollisionType;
+layout(location = ${CollisionProgram.a_CollisionType}) in float a_CollisionType;
 
 out vec3 v_Rgb;
 out vec3 v_PositionWorld;
@@ -67,7 +67,7 @@ void main() {
     vec4 t_PositionWorld = UnpackMatrix(u_CollisionTransform) * vec4(a_Position, 1.0f);
     gl_Position = (UnpackMatrix(u_ClipFromWorld) * t_PositionWorld);
 
-    v_Rgb = colors[int(a_CollisionType.r)];
+    v_Rgb = colors[int(a_CollisionType)];
     v_PositionWorld = t_PositionWorld.xyz;
 }
 `;
@@ -81,7 +81,9 @@ void main() {
     vec3 tangentX = dFdx(v_PositionWorld);
     vec3 tangentY = dFdy(v_PositionWorld);
     vec3 faceNormal = normalize(cross(tangentX, tangentY));
-    float light = 0.5 + 0.5 * dot(faceNormal, u_DirectionLights[0].directionA);
+    float light = 0.3
+        + 0.4 * max(dot(faceNormal, u_DirectionLights[0].directionA), 0.0)
+        + 0.4 * max(dot(faceNormal, u_DirectionLights[0].directionB), 0.0);
 
     gl_FragColor = vec4(v_Rgb * light, 1.0);
 }
