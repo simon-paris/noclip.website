@@ -37,7 +37,6 @@ export function buildLevelFromFiles(filesAsSlices: LevelFiles) {
 
     // read gameplay data
     const gameplayHeader = readGameplayHeader(files.gameplay);
-    console.log(gameplayHeader);
     const levelSettings = readLevelSettings(files.gameplay.subview(gameplayHeader.levelSettings));
     const grindPaths = readGrindPathBlock(files.gameplay.subview(gameplayHeader.grindPaths));
     const paths = readPathBlock(files.gameplay.subview(gameplayHeader.paths));
@@ -128,6 +127,7 @@ export function buildLevelFromFiles(filesAsSlices: LevelFiles) {
         ready: true,
 
         levelCoreHeader,
+        gameplayHeader,
 
         levelSettings,
         paths,
