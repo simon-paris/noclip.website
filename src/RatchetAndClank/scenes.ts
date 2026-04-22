@@ -23,8 +23,9 @@ import { MobyInstance } from "./structs-gameplay";
 import { nArray } from "../util";
 import { createGfxTextureArrayForPaletteTextures, createGfxTextureForPaletteTexture } from "./textures";
 import { CollisionGeometry, CollisionProgram } from "./collision";
+import { IS_DEVELOPMENT } from "../BuildVersion";
 
-const pathBase = `RatchetAndClank1`;
+const pathBase = (gameNumber: number) => `RatchetAndClank${gameNumber}`;
 
 class RatchetAndClank1Scene implements SceneGfx {
     private renderHelper: GfxRenderHelper;
@@ -88,7 +89,7 @@ class RatchetAndClank1Scene implements SceneGfx {
 
     private instanceDataBuffer: MegaBuffer;
 
-    constructor(private sceneContext: SceneContext, public levelNumber: number) {
+    constructor(private sceneContext: SceneContext, public gameNumber: number, public levelNumber: number) {
         this.renderHelper = new GfxRenderHelper(sceneContext.device, sceneContext);
         const cache = this.renderHelper.renderCache;
 
@@ -120,7 +121,10 @@ class RatchetAndClank1Scene implements SceneGfx {
                 throw new Error("Level files not ready");
             }
             this.level = buildLevelFromFiles(this.files);
-            console.log(this.level);
+
+            if (IS_DEVELOPMENT) {
+                console.log(this.level);
+            }
 
             this.buildAssetGeometry();
         });
@@ -132,10 +136,10 @@ class RatchetAndClank1Scene implements SceneGfx {
 
     private async fetchLevelFiles() {
         const promises = [
-            this.sceneContext.dataFetcher.fetchData(`${pathBase}/level_${this.levelNumber}.core_index`),
-            this.sceneContext.dataFetcher.fetchData(`${pathBase}/level_${this.levelNumber}.core_data`),
-            this.sceneContext.dataFetcher.fetchData(`${pathBase}/level_${this.levelNumber}.gameplay`),
-            this.sceneContext.dataFetcher.fetchData(`${pathBase}/level_${this.levelNumber}.gs_ram`),
+            this.sceneContext.dataFetcher.fetchData(`${pathBase(this.gameNumber)}/level_${this.levelNumber}.core_index`),
+            this.sceneContext.dataFetcher.fetchData(`${pathBase(this.gameNumber)}/level_${this.levelNumber}.core_data`),
+            this.sceneContext.dataFetcher.fetchData(`${pathBase(this.gameNumber)}/level_${this.levelNumber}.gameplay`),
+            this.sceneContext.dataFetcher.fetchData(`${pathBase(this.gameNumber)}/level_${this.levelNumber}.gs_ram`),
         ];
 
         const [coreIndexBuffer, coreDataBuffer, gameplayBuffer, gsRamBuffer] = await Promise.all(promises);
@@ -203,7 +207,9 @@ class RatchetAndClank1Scene implements SceneGfx {
         const { collision } = this.level;
         this.geometries.collision = new CollisionGeometry(cache, collision.meshGrid);
 
-        console.log(this.geometries);
+        if (IS_DEVELOPMENT) {
+            console.log(this.geometries);
+        }
 
         this.textureHolder.onnewtextures();
     }
@@ -834,7 +840,7 @@ class RatchetAndClank1SceneDesc implements SceneDesc {
     }
 
     public async createScene(device: GfxDevice, sceneContext: SceneContext): Promise<SceneGfx> {
-        return new RatchetAndClank1Scene(sceneContext, this.levelNumber);
+        return new RatchetAndClank1Scene(sceneContext, 1, this.levelNumber);
     }
 }
 

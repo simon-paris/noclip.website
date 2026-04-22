@@ -3,7 +3,7 @@ import { GsPrimitiveType } from "../Common/PS2/GS";
 import { DataViewExt } from "./DataViewExt";
 import { assert } from "../util";
 import { getBits, ImaginaryGsCommand, ImaginaryGsCommandBuffer, truncateTrailing0xFF } from "./utils";
-import { readVifCommandList, readVifStrowData, vifUnpacks, VifVnVl } from "./vif";
+import { readVifCommandList, readVifStrowData, VifUnpackFormat, vifUnpacks } from "./vif";
 
 export type LevelCoreHeader = ReturnType<typeof readLevelCoreHeader>;
 export const SIZEOF_LEVEL_CORE_HEADER = 0xbc;
@@ -689,9 +689,9 @@ export function readTfrag(view: DataViewExt, header: TfragHeader) {
     let dataGroup1: Tfrag["dataGroup1"];
     {
         const vifCommands = readVifCommandList(vifBuffer1);
-        const nextUnpack = vifUnpacks(vifCommands);
-        const lod2Indices = nextUnpack().getTypedArrayView(Uint8Array);
-        const lod2Strips = nextUnpack().subdivide(0, 0xFFFF, SIZEOF_TFRAG_STRIP).map(readTfragStrip);
+        const unpackReader = vifUnpacks(vifCommands);
+        const lod2Indices = unpackReader.next().getTypedArrayView(Uint8Array);
+        const lod2Strips = unpackReader.next().subdivide(0, 0xFFFF, SIZEOF_TFRAG_STRIP).map(readTfragStrip);
         dataGroup1 = {
             lod2: {
                 indices: lod2Indices,
@@ -708,15 +708,15 @@ export function readTfrag(view: DataViewExt, header: TfragHeader) {
     let vuHeader: TfragVuHeader;
     {
         const vifCommands = readVifCommandList(vifBuffer2);
-        const nextUnpack = vifUnpacks(vifCommands);
+        const unpackReader = vifUnpacks(vifCommands);
 
         assert(vifCommands.length >= 6);
         const basePosition = readVifStrowData(vifCommands[5]);
 
-        vuHeader = readTfragVuHeader(nextUnpack());
-        const textures = nextUnpack().subdivide(0, 0xFFFF, SIZEOF_TFRAG_AD_GIFS).map(readTfragAdGifs);
-        const vertexInfoPart1 = nextUnpack().subdivide(0, 0xFFFF, SIZEOF_TFRAG_VERTEX_INFO).map(readTfragVertexInfo);
-        const vertexPositionsPart1 = nextUnpack().subdivide(0, 0xFFFF, 0x6).map(view => view.getInt16_Xyz(0));
+        vuHeader = readTfragVuHeader(unpackReader.next());
+        const textures = unpackReader.next().subdivide(0, 0xFFFF, SIZEOF_TFRAG_AD_GIFS).map(readTfragAdGifs);
+        const vertexInfoPart1 = unpackReader.next().subdivide(0, 0xFFFF, SIZEOF_TFRAG_VERTEX_INFO).map(readTfragVertexInfo);
+        const vertexPositionsPart1 = unpackReader.next().subdivide(0, 0xFFFF, 0x6).map(view => view.getInt16_Xyz(0));
         assert(vertexPositionsPart1.length === vuHeader.positionsCommonCount);
 
         dataGroup2 = {
@@ -743,9 +743,9 @@ export function readTfrag(view: DataViewExt, header: TfragHeader) {
     let dataGroup3: Tfrag["dataGroup3"];
     {
         const vifCommands = readVifCommandList(vifBuffer3);
-        const nextUnpack = vifUnpacks(vifCommands);
-        const lod1Strips = nextUnpack().subdivide(0, 0xFFFF, SIZEOF_TFRAG_STRIP).map(readTfragStrip)
-        const lod1Indices = nextUnpack().getTypedArrayView(Uint8Array);
+        const unpackReader = vifUnpacks(vifCommands);
+        const lod1Strips = unpackReader.next().subdivide(0, 0xFFFF, SIZEOF_TFRAG_STRIP).map(readTfragStrip)
+        const lod1Indices = unpackReader.next().getTypedArrayView(Uint8Array);
         dataGroup3 = {
             lod1: {
                 strips: lod1Strips,
@@ -760,25 +760,25 @@ export function readTfrag(view: DataViewExt, header: TfragHeader) {
     let dataGroup4: Tfrag["dataGroup4"];
     {
         const vifCommands = readVifCommandList(vifBuffer4);
-        const nextUnpack = vifUnpacks(vifCommands);
+        const unpackReader = vifUnpacks(vifCommands);
 
         if (vuHeader.positionsLod01Count > 0) {
-            assert(nextUnpack.nextVnvl() === VifVnVl.V4_8);
-            nextUnpack(); // ignore it
+            assert(unpackReader.peekNextVnvl() === VifUnpackFormat.V4_8);
+            unpackReader.next(); // ignore it
         }
 
-        if (nextUnpack.hasNext() && nextUnpack.nextVnvl() === VifVnVl.V4_8 && nextUnpack.nextAddr() !== 0) {
-            nextUnpack(); // ignore it
+        if (unpackReader.hasNext() && unpackReader.peekNextVnvl() === VifUnpackFormat.V4_8 && unpackReader.peekNextAddr() !== 0) {
+            unpackReader.next(); // ignore it
         }
 
         let vertexInfoPart2: TfragVertexInfo[] | null = null;
-        if (nextUnpack.hasNext() && nextUnpack.nextVnvl() === VifVnVl.V4_16) {
-            vertexInfoPart2 = nextUnpack().subdivide(0, 0xFFFF, SIZEOF_TFRAG_VERTEX_INFO).map(readTfragVertexInfo);
+        if (unpackReader.hasNext() && unpackReader.peekNextVnvl() === VifUnpackFormat.V4_16) {
+            vertexInfoPart2 = unpackReader.next().subdivide(0, 0xFFFF, SIZEOF_TFRAG_VERTEX_INFO).map(readTfragVertexInfo);
         }
 
         let vertexPositionsPart2: { x: number, y: number, z: number }[] | null = null;
-        if (nextUnpack.hasNext() && nextUnpack.nextVnvl() === VifVnVl.V3_16) {
-            vertexPositionsPart2 = nextUnpack().subdivide(0, 0xFFFF, 0x6).map(view => view.getInt16_Xyz(0));
+        if (unpackReader.hasNext() && unpackReader.peekNextVnvl() === VifUnpackFormat.V3_16) {
+            vertexPositionsPart2 = unpackReader.next().subdivide(0, 0xFFFF, 0x6).map(view => view.getInt16_Xyz(0));
             assert(vertexPositionsPart2.length === vuHeader.positionsLod01Count);
         }
 
@@ -803,32 +803,32 @@ export function readTfrag(view: DataViewExt, header: TfragHeader) {
     let dataGroup5: Tfrag["dataGroup5"];
     {
         const vifCommands = readVifCommandList(vifBuffer5);
-        const nextUnpack = vifUnpacks(vifCommands);
+        const unpackReader = vifUnpacks(vifCommands);
 
         let vertexPositionsPart3: { x: number, y: number, z: number }[] | null = null;
         if (vuHeader.positionsLod0Count > 0) {
-            assert(nextUnpack.nextVnvl() === VifVnVl.V3_16);
-            const unpack = nextUnpack();
+            assert(unpackReader.peekNextVnvl() === VifUnpackFormat.V3_16);
+            const unpack = unpackReader.next();
             vertexPositionsPart3 = unpack.subdivide(0, 0xFFFF, 0x6).map(view => view.getInt16_Xyz(0));
             assert(vertexPositionsPart3.length === vuHeader.positionsLod0Count);
         }
 
-        const strips = nextUnpack().subdivide(0, 0xFFFF, SIZEOF_TFRAG_STRIP).map(readTfragStrip)
-        const indices = nextUnpack().getTypedArrayView(Uint8Array);
+        const strips = unpackReader.next().subdivide(0, 0xFFFF, SIZEOF_TFRAG_STRIP).map(readTfragStrip)
+        const indices = unpackReader.next().getTypedArrayView(Uint8Array);
 
         if (vuHeader.positionsLod0Count > 0) {
-            assert(nextUnpack.nextVnvl() === VifVnVl.V4_8);
-            nextUnpack(); // ignore it
+            assert(unpackReader.peekNextVnvl() === VifUnpackFormat.V4_8);
+            unpackReader.next(); // ignore it
         }
 
-        if (nextUnpack.hasNext() && nextUnpack.nextVnvl() === VifVnVl.V4_8) {
-            nextUnpack(); // ignore it
+        if (unpackReader.hasNext() && unpackReader.peekNextVnvl() === VifUnpackFormat.V4_8) {
+            unpackReader.next(); // ignore it
         }
 
         let vertexInfoPart3: TfragVertexInfo[] | null = null;
         if (vuHeader.positionsLod0Count > 0) {
-            assert(nextUnpack.nextVnvl() === VifVnVl.V4_16);
-            vertexInfoPart3 = nextUnpack().subdivide(0, 0xFFFF, SIZEOF_TFRAG_VERTEX_INFO).map(readTfragVertexInfo);
+            assert(unpackReader.peekNextVnvl() === VifUnpackFormat.V4_16);
+            vertexInfoPart3 = unpackReader.next().subdivide(0, 0xFFFF, SIZEOF_TFRAG_VERTEX_INFO).map(readTfragVertexInfo);
         }
 
         dataGroup5 = {
@@ -1135,18 +1135,18 @@ const shrubCommandSize = {
 
 export function readShrubPacket(view: DataViewExt): ShrubImaginaryGsCommand[] {
     const vifCommands = readVifCommandList(view);
-    const nextUnpack = vifUnpacks(vifCommands);
+    const unpackReader = vifUnpacks(vifCommands);
 
     // unpack 1 is a header followed by primitives and adgifs
-    const unpack1 = nextUnpack();
+    const unpack1 = unpackReader.next();
     const packetHeader = readShrubPacketHeader(unpack1);
     const gifTags = unpack1.subdivide(0x10, packetHeader.gifTagCount, 0x10).map(readShrubVertexGifTag);
     const adGifs = unpack1.subdivide(0x10 + packetHeader.gifTagCount * 0x10, packetHeader.textureCount, SIZEOF_SHRUB_TEXTURE_PRIMITIVE).map(readShrubTexturePrimitive);
 
     // unpack 2 is position and write destination
     // unpack 3 is texcoord, normal pointer, and flags
-    const part1 = nextUnpack().subdivide(0, 0xFFFF, SIZEOF_SHRUB_VERTEX_PART1).map(readShrubVertexPart1);
-    const part2 = nextUnpack().subdivide(0, 0xFFFF, SIZEOF_SHRUB_VERTEX_PART2).map(readShrubVertexPart2);
+    const part1 = unpackReader.next().subdivide(0, 0xFFFF, SIZEOF_SHRUB_VERTEX_PART1).map(readShrubVertexPart1);
+    const part2 = unpackReader.next().subdivide(0, 0xFFFF, SIZEOF_SHRUB_VERTEX_PART2).map(readShrubVertexPart2);
     assert(part1.length === part2.length);
 
     const imaginaryGsBuffer = new ImaginaryGsCommandBuffer<{ type: GsPrimitiveType }, { adGif: ShrubTexturePrimitive }, ShrubVertex>();
