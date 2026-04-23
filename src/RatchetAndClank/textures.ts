@@ -2,6 +2,7 @@ import { Color } from "../Color";
 import { DataViewExt } from "./DataViewExt";
 import { GfxDevice, GfxFormat, GfxTexture, GfxTextureDimension, GfxTextureUsage, makeTextureDescriptor2D } from "../gfx/platform/GfxPlatform";
 import { SkyHeader, SkyTextureEntry, TextureEntry } from "./structs-core";
+import { TieInstance } from "./structs-gameplay";
 
 export type PaletteTexture = {
     name: string,
@@ -156,6 +157,36 @@ export function createGfxTextureArrayForPaletteTextures(device: GfxDevice, name:
         ptr += nextTextureData.byteLength;
     }
     device.uploadTextureData(gfxTexture, 0, [textureData]);
+    return gfxTexture;
+}
+
+export function createTieRgbaTexture(device: GfxDevice, tieInstances: TieInstance[]): GfxTexture {
+    const gfxTexture = device.createTexture({
+        dimension: GfxTextureDimension.n2D,
+        pixelFormat: GfxFormat.U8_RGBA_NORM,
+        width: 64,
+        height: tieInstances.length,
+        depthOrArrayLayers: 1,
+        numLevels: 1,
+        usage: GfxTextureUsage.Sampled,
+    });
+    device.setResourceName(gfxTexture, `Tie Ambient RGBAs`);
+
+    const data = new Uint8Array(64 * tieInstances.length * 4);
+    let ptr = 0;
+    for (let i = 0; i < tieInstances.length; i++) {
+        const instance = tieInstances[i];
+        for (let j = 0; j < 64; j++) {
+            const a1bgr5 = instance.ambientRgbas[j];
+            data[ptr++] = ((a1bgr5 >> 0) & 0x1F) << 3;
+            data[ptr++] = ((a1bgr5 >> 5) & 0x1F) << 3;
+            data[ptr++] = ((a1bgr5 >> 10) & 0x1F) << 3;
+            data[ptr++] = 255;
+        }
+    }
+
+    device.uploadTextureData(gfxTexture, 0, [data]);
+
     return gfxTexture;
 }
 

@@ -217,7 +217,7 @@ export function readTiePacketHeader(view: DataViewExt): TiePacketHeader {
     };
 }
 
-export type TieImaginaryGsCommand = ImaginaryGsCommand<TieStrip, number, { vertex: TieVertex, normalIndex: number }>
+export type TieImaginaryGsCommand = ImaginaryGsCommand<TieStrip, number, { vertex: TieVertex, normalIndex: number, rgbaIndex: number }>;
 
 const tieCommandSizes = {
     primitiveReset: 1,
@@ -291,18 +291,18 @@ export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketH
     const morphingNormalIndices = view.subdivide(ptr, tieVuHeader.morphingVertexCount, 0x4).map(view => view.getUint8_Xyz(0));
     ptr += tieVuHeader.morphingVertexCount * 0x4;
 
-    // no idea what these are
+    // indices into the instance's rgba array
     alignTo(0x10);
-    const regularUnknown = view.subdivide(ptr, tieVuHeader.regularVertexCount, 0x1).map(view => view.getUint8(0));
+    const regularRgbaIndices = view.subdivide(ptr, tieVuHeader.regularVertexCount, 0x1).map(view => view.getUint8(0));
     ptr += tieVuHeader.regularVertexCount * 0x1;
     alignTo(0x4);
-    const morphingUnknown = view.subdivide(ptr, tieVuHeader.morphingVertexCount, 0x4).map(view => view.getUint8_Xyzw(0));
+    const morphingRgbaIndices = view.subdivide(ptr, tieVuHeader.morphingVertexCount, 0x4).map(view => view.getUint8_Xyzw(0));
     ptr += tieVuHeader.morphingVertexCount * 0x4;
 
     // there's one more array of bytes after this but not sure what it is or what its length is (usually 50-60 bytes)
     alignTo(0x10);
 
-    const imaginaryGsBuffer = new ImaginaryGsCommandBuffer<TieStrip, number, { vertex: TieVertex, normalIndex: number }>();
+    const imaginaryGsBuffer = new ImaginaryGsCommandBuffer<TieStrip, number, { vertex: TieVertex, normalIndex: number, rgbaIndex: number }>();
 
     // first command always sets the material to the first material
     imaginaryGsBuffer.writeSetMaterial(0, tieCommandSizes.setMaterial, adGifSrcOffsets[0] / SIZEOF_TIE_AD_GIFS);
@@ -312,17 +312,19 @@ export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketH
     for (let i = 0; i < regularVerts.length; i++) {
         const vertex = regularVerts[i];
         const normalIndex = regularNormalIndices[i];
-        imaginaryGsBuffer.writeVertex(vertex.gsPacketWriteOffset, tieCommandSizes.vertex, { vertex, normalIndex }, true);
+        const rgbaIndex = regularRgbaIndices[i] - 64;
+        imaginaryGsBuffer.writeVertex(vertex.gsPacketWriteOffset, tieCommandSizes.vertex, { vertex, normalIndex, rgbaIndex }, true);
         if (vertex.gsPacketWriteOffset2 !== 0 && vertex.gsPacketWriteOffset !== vertex.gsPacketWriteOffset2) {
-            imaginaryGsBuffer.writeVertex(vertex.gsPacketWriteOffset2, tieCommandSizes.vertex, { vertex, normalIndex }, true);
+            imaginaryGsBuffer.writeVertex(vertex.gsPacketWriteOffset2, tieCommandSizes.vertex, { vertex, normalIndex, rgbaIndex }, true);
         }
     }
     for (let i = 0; i < morphingVerts.length; i++) {
         const vertex = morphingVerts[i];
         const normalIndex = morphingNormalIndices[i].x; // all 3 components are normal indices, not sure why there are 3, maybe to do with lod morphing
-        imaginaryGsBuffer.writeVertex(vertex.gsPacketWriteOffset, tieCommandSizes.vertex, { vertex, normalIndex }, true);
+        const rgbaIndex = morphingRgbaIndices[i].x - 64;
+        imaginaryGsBuffer.writeVertex(vertex.gsPacketWriteOffset, tieCommandSizes.vertex, { vertex, normalIndex, rgbaIndex }, true);
         if (vertex.gsPacketWriteOffset2 !== 0 && vertex.gsPacketWriteOffset !== vertex.gsPacketWriteOffset2) {
-            imaginaryGsBuffer.writeVertex(vertex.gsPacketWriteOffset2, tieCommandSizes.vertex, { vertex, normalIndex }, true);
+            imaginaryGsBuffer.writeVertex(vertex.gsPacketWriteOffset2, tieCommandSizes.vertex, { vertex, normalIndex, rgbaIndex }, true);
         }
     }
 
@@ -350,8 +352,8 @@ export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketH
         morphingVerts,
         regularNormalIndices,
         morphingNormalIndices,
-        regularUnknown,
-        morphingUnknown,
+        regularRgbaIndices,
+        morphingRgbaIndices,
         commandBuffer: imaginaryGsBuffer.finish(),
     }
 }

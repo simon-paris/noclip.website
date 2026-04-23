@@ -48,6 +48,14 @@ export function truncateTrailing0xFF(arr: number[]): number[] {
     return copy;
 }
 
+export function readRGB5A1(rgba: number): Color {
+    const r = (rgba & 0x1F) << 3;
+    const g = ((rgba >> 5) & 0x1F) << 3;
+    const b = ((rgba >> 10) & 0x1F) << 3;
+    const a = (rgba >> 15) === 1 ? 0xFF : 0x00;
+    return { r, g, b, a };
+}
+
 export type MegaBuffer = {
     /**
      * Pointer in floats.
@@ -129,18 +137,18 @@ export class ImaginaryGsCommandBuffer<PrimitiveType, MaterialType, VertexType> {
     maxSlotUsed = 0;
 
     writePrimitiveReset(address: number, size: number, primitive: PrimitiveType, allowOverwrite: boolean = false) {
-        this.write(address, size, { type: ImaginaryGsCommandType.PRIMITIVE_RESET, size, value: primitive }, allowOverwrite);
+        this.write(address, { type: ImaginaryGsCommandType.PRIMITIVE_RESET, size, value: primitive }, allowOverwrite);
     }
 
     writeSetMaterial(address: number, size: number, material: MaterialType, allowOverwrite: boolean = false) {
-        this.write(address, size, { type: ImaginaryGsCommandType.SET_MATERIAL, size, value: material }, allowOverwrite);
+        this.write(address, { type: ImaginaryGsCommandType.SET_MATERIAL, size, value: material }, allowOverwrite);
     }
 
     writeVertex(address: number, size: number, vertex: VertexType, allowOverwrite: boolean = false) {
-        this.write(address, size, { type: ImaginaryGsCommandType.VERTEX, size, value: vertex }, allowOverwrite);
+        this.write(address, { type: ImaginaryGsCommandType.VERTEX, size, value: vertex }, allowOverwrite);
     }
 
-    private write(address: number, size: number, command: any, allowOverwrite: boolean): void {
+    private write(address: number, command: any, allowOverwrite: boolean): void {
         assert(address >= 0 && address < 0x100);
         if (!allowOverwrite) {
             assert(this.slots[address] === null);

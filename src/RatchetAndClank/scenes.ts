@@ -21,7 +21,7 @@ import { RatchetShaderLib } from "./shader-lib";
 import { Frustum } from "../Geometry";
 import { MobyInstance } from "./structs-gameplay";
 import { nArray } from "../util";
-import { createGfxTextureArrayForPaletteTextures, createGfxTextureForPaletteTexture } from "./textures";
+import { createGfxTextureArrayForPaletteTextures, createGfxTextureForPaletteTexture, createTieRgbaTexture } from "./textures";
 import { CollisionGeometry, CollisionProgram } from "./collision";
 import { IS_DEVELOPMENT } from "../BuildVersion";
 
@@ -74,6 +74,7 @@ class RatchetAndClank1Scene implements SceneGfx {
     private textures = {
         tfragTextures: null as null | GfxTexture, // one array texture
         tieTextures: new Array<GfxTexture>(),
+        tieRgbaTexture: null as null | GfxTexture,
         shrubTextures: new Array<GfxTexture>(),
         skyTextures: new Array<GfxTexture>(),
     };
@@ -168,7 +169,7 @@ class RatchetAndClank1Scene implements SceneGfx {
         // }
         this.geometries.tfrag = new TfragGeometry(cache, tfrags, tfragTextures);
 
-        const { ties, tieTextures } = this.level;
+        const { ties, tieInstances, tieTextures } = this.level;
         for (let i = 0; i < tieTextures.length; i++) {
             const gfxTextures = createGfxTextureForPaletteTexture(cache.device, tieTextures[i]);
             this.textures.tieTextures.push(gfxTextures.pixelsTexture);
@@ -181,6 +182,8 @@ class RatchetAndClank1Scene implements SceneGfx {
                 this.geometries.ties.get(oClass)![i] = new TieGeometry(cache, oClass, tieClass, i);
             }
         }
+        this.textures.tieRgbaTexture = createTieRgbaTexture(cache.device, tieInstances);
+        this.textureHolder.viewerTextures.push({ gfxTexture: this.textures.tieRgbaTexture });
 
         const { shrubs, shrubTextures } = this.level;
         for (const { oClass, shrubClass } of shrubs) {
@@ -319,10 +322,9 @@ class RatchetAndClank1Scene implements SceneGfx {
 
         const { tieClass, textureIndices, oClass } = tieInstanceBatch;
 
-        const scratchVec3_1 = vec3.create();
-        const scratchVec3_2 = vec3.create();
+        const scratchVec3 = vec3.create();
 
-        type TieDrawInstance = { objectMatrix: mat4, directionLights: number[], rgba: vec4, lodMorphFactor: number, i: number };
+        type TieDrawInstance = { objectMatrix: mat4, directionLights: number[], rgbasRow: number, lodMorphFactor: number, i: number };
         const tieInstancesToDrawByLod: TieDrawInstance[][] = [[], [], []];
         for (let i = 0; i < tieInstanceBatch.instances.length; i++) {
             const tieInstance = tieInstanceBatch.instances[i];
@@ -330,7 +332,7 @@ class RatchetAndClank1Scene implements SceneGfx {
             // tie instance transform
             const objectMatrix = mat4.create();
             mat4.multiply(objectMatrix, noclipSpaceFromRatchetSpace, tieInstance.matrix);
-            let position = scratchVec3_1;
+            let position = scratchVec3;
             mat4.getTranslation(position, objectMatrix);
 
             // camera position
@@ -368,14 +370,11 @@ class RatchetAndClank1Scene implements SceneGfx {
             //     continue;
             // }
 
-            // can't find this data :(
-            const rgba = vec4.fromValues(0.5, 0.5, 0.5, 1);
-
             tieInstancesToDrawByLod[modelLodLevel].push({
                 objectMatrix,
                 directionLights: tieInstance.directionalLights,
-                rgba,
                 lodMorphFactor,
+                rgbasRow: tieInstance.instanceIndex,
                 i,
             });
         }
@@ -398,9 +397,8 @@ class RatchetAndClank1Scene implements SceneGfx {
             for (let i = 0; i < tieInstancesToDraw.length; i++) {
                 const inst = tieInstancesToDraw[i];
                 this.instanceDataBuffer.ptr += fillMatrix4x4(this.instanceDataBuffer.f32View, this.instanceDataBuffer.ptr, inst.objectMatrix);
-                this.instanceDataBuffer.ptr += fillVec4v(this.instanceDataBuffer.f32View, this.instanceDataBuffer.ptr, inst.rgba);
                 this.instanceDataBuffer.ptr += fillVec4(this.instanceDataBuffer.f32View, this.instanceDataBuffer.ptr, inst.directionLights[0], inst.directionLights[1], inst.directionLights[2], inst.directionLights[3]);
-                this.instanceDataBuffer.f32View[this.instanceDataBuffer.ptr++] = inst.lodMorphFactor;
+                this.instanceDataBuffer.ptr += fillVec4(this.instanceDataBuffer.f32View, this.instanceDataBuffer.ptr, inst.rgbasRow, inst.lodMorphFactor, 0, 0);
             }
 
             renderInst.setVertexInput(
@@ -412,10 +410,18 @@ class RatchetAndClank1Scene implements SceneGfx {
                 null,
             );
 
-            renderInst.setSamplerBindings(0, nArray(tieInstanceBatch.textureIndices.length, j => ({
-                gfxTexture: this.textures.tieTextures[textureIndices[j]],
-                gfxSampler: this.samplerWrap
-            })));
+            renderInst.setSamplerBindings(0, [
+                {
+                    gfxTexture: this.textures.tieRgbaTexture!,
+                    gfxSampler: this.samplerClamp,
+                },
+                ...nArray(
+                    tieInstanceBatch.textureIndices.length, j => ({
+                        gfxTexture: this.textures.tieTextures[textureIndices[j]],
+                        gfxSampler: this.samplerWrap
+                    })
+                ),
+            ]);
 
             renderInst.setInstanceCount(tieInstancesToDraw.length);
             renderInst.setDrawCount(tieGeometry.vertexCount, 0);
@@ -669,8 +675,8 @@ class RatchetAndClank1Scene implements SceneGfx {
         }
 
         if (this.settings.enableMobys) {
-            for (let i = 0; i < this.level.mobyInstances.instances.length; i++) {
-                this.renderMoby(this.level.mobyInstances.instances[i], viewerInput.camera.worldMatrix, cameraPosition);
+            for (let i = 0; i < this.level.mobyInstances.length; i++) {
+                this.renderMoby(this.level.mobyInstances[i], viewerInput.camera.worldMatrix, cameraPosition);
             }
         }
 
@@ -815,6 +821,7 @@ class RatchetAndClank1Scene implements SceneGfx {
         const allTextures = [
             this.textures.tfragTextures,
             ...this.textures.tieTextures,
+            this.textures.tieRgbaTexture,
             ...this.textures.shrubTextures,
             ...this.textures.skyTextures,
         ]
