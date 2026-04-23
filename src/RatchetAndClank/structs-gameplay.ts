@@ -1,4 +1,6 @@
+import { Color } from "../Color";
 import { DataViewExt } from "./DataViewExt";
+import { readRGB5A1 } from "./utils";
 
 export type GameplayHeader = ReturnType<typeof readGameplayHeader>;
 export function readGameplayHeader(view: DataViewExt) {
@@ -117,16 +119,17 @@ export function readLevelSettings(view: DataViewExt): LevelSettings {
 }
 
 export type TieInstance = {
+    instanceIndex: number,
     oClass: number,
     drawDistance: number,
     occlusionIndex: number,
     matrix: Float32Array,
-    ambientRgbas: number[],
+    ambientRgbas: Uint16Array,
     directionalLights: number[],
     uid: number,
 }
 export const SIZEOF_TIE_INSTANCE = 0xe0;
-export function readTieInstance(view: DataViewExt): TieInstance {
+export function readTieInstance(view: DataViewExt, instanceIndex: number): TieInstance {
     /*
     https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/instancemgr/gameplay_impl_classes.inl#L611
     */
@@ -135,11 +138,12 @@ export function readTieInstance(view: DataViewExt): TieInstance {
     matrix[15] = 1;
 
     return {
+        instanceIndex,
         oClass: view.getInt32(0x0),
         drawDistance: view.getInt32(0x4),
         occlusionIndex: view.getInt32(0xc),
         matrix,
-        ambientRgbas: view.getArrayOfNumbers(0x50, 0x80 / 2, Uint16Array), // not sure how to read this... looks like byte offsets but not sure relative to what
+        ambientRgbas: view.subview(0x50, 0x80).getTypedArrayView(Uint16Array), // array of 64 A1BGR5 colors
         directionalLights: view.getNibbleArray(0xd0, 2),
         uid: view.getInt32(0xd4),
     }
@@ -218,7 +222,7 @@ type InstanceBlock<T> = {
     instances: T[]
 }
 const SIZEOF_INSTANCE_BLOCK_HEADER = 0x10;
-export function readInstanceBlock<T>(view: DataViewExt, instanceSize: number, readerFn: (buf: DataViewExt) => T): InstanceBlock<T> {
+export function readInstanceBlock<T>(view: DataViewExt, instanceSize: number, readerFn: (buf: DataViewExt, i: number) => T): InstanceBlock<T> {
     /*
     struct InstanceBlockHeader<T> {
         // 0x0
@@ -229,7 +233,7 @@ export function readInstanceBlock<T>(view: DataViewExt, instanceSize: number, re
     }
     */
     const count = view.getInt32(0);
-    const instances = view.subdivide(SIZEOF_INSTANCE_BLOCK_HEADER, count, instanceSize).map(view => readerFn(view));
+    const instances = view.subdivide(SIZEOF_INSTANCE_BLOCK_HEADER, count, instanceSize).map((view, i) => readerFn(view, i));
     return {
         count,
         instances,

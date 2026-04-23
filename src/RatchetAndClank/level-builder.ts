@@ -139,12 +139,14 @@ export function buildLevelFromFiles(filesAsSlices: LevelFiles) {
         tfrags,
         tfragTextures,
         ties,
+        tieInstances: tieInstances.instances,
         tieTextures,
         shrubs,
+        shrubInstances: shrubInstances.instances,
         shrubTextures,
         sky,
         skyTextures,
 
-        mobyInstances,
+        mobyInstances: mobyInstances.instances,
     };
 }
