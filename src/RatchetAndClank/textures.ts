@@ -3,6 +3,7 @@ import { DataViewExt } from "./DataViewExt";
 import { GfxDevice, GfxFormat, GfxTexture, GfxTextureDimension, GfxTextureUsage, makeTextureDescriptor2D } from "../gfx/platform/GfxPlatform";
 import { SkyHeader, SkyTextureEntry, TextureEntry } from "./structs-core";
 import { TieInstance } from "./structs-gameplay";
+import { assert } from "../util";
 
 export type PaletteTexture = {
     name: string,
@@ -121,11 +122,31 @@ export function createGfxTextureForPaletteTexture(device: GfxDevice, texture: Pa
     };
 }
 
+export function create1x1x1ErrorArrayTexture(device: GfxDevice): GfxTexture {
+    const gfxTexture = device.createTexture({
+        dimension: GfxTextureDimension.n2DArray,
+        pixelFormat: GfxFormat.U8_RGBA_NORM,
+        width: 1,
+        height: 1,
+        depthOrArrayLayers: 1,
+        numLevels: 1,
+        usage: GfxTextureUsage.Sampled,
+    });
+    device.setResourceName(gfxTexture, 'Error Texture Array');
+    const errorPixel = new Uint8Array([255, 0, 255, 255]);
+    device.uploadTextureData(gfxTexture, 0, [errorPixel]);
+    return gfxTexture;
+}
+
 /**
  * Pack many palette textures into a big texture array.
  * Scales up textures to match the largest in the list.
  */
 export function createGfxTextureArrayForPaletteTextures(device: GfxDevice, name: string, textures: PaletteTexture[]) {
+    if (textures.length === 0) {
+        return create1x1x1ErrorArrayTexture(device);
+    }
+
     const dim = Math.max(...textures.map(t => t.textureEntry.width));
     const gfxTexture = device.createTexture({
         dimension: GfxTextureDimension.n2DArray,
@@ -160,6 +181,7 @@ export function createGfxTextureArrayForPaletteTextures(device: GfxDevice, name:
     return gfxTexture;
 }
 
+// create a 64xN texture, where each row contains the 64-wide vertex color lookup table for one tie instance
 export function createTieRgbaTexture(device: GfxDevice, tieInstances: TieInstance[]): GfxTexture {
     const gfxTexture = device.createTexture({
         dimension: GfxTextureDimension.n2D,
@@ -190,3 +212,66 @@ export function createTieRgbaTexture(device: GfxDevice, tieInstances: TieInstanc
     return gfxTexture;
 }
 
+type TexturesBySize = {
+    16: PaletteTexture[],
+    32: PaletteTexture[],
+    64: PaletteTexture[],
+    128: PaletteTexture[],
+    256: PaletteTexture[],
+};
+
+function validateSize(size: number): size is 16 | 32 | 64 | 128 | 256 {
+    const validSizes = [16, 32, 64, 128, 256];
+    return validSizes.includes(size);
+}
+
+function assignTexturesToSizeBucket(buckets: TexturesBySize, textures: PaletteTexture[]) {
+    const remap = textures.map((texture, i) => {
+        const width = texture.textureEntry.width;
+        assert(width === texture.textureEntry.height);
+        assert(validateSize(width));
+        buckets[width].push(texture);
+        return {
+            sizeBucket: width,
+            index: buckets[width].length - 1,
+        };
+    });
+
+    return remap;
+}
+
+export type TextureAtlases = {
+    gfxTextures: { [size in 16 | 32 | 64 | 128 | 256]: GfxTexture },
+    tfragTextureRemap: { sizeBucket: number, index: number }[],
+    tieTextureRemap: { sizeBucket: number, index: number }[],
+    shrubTextureRemap: { sizeBucket: number, index: number }[],
+};
+
+export function createTextureAtlases(device: GfxDevice, tfragTextures: PaletteTexture[], tieTextures: PaletteTexture[], shrubTextures: PaletteTexture[]): TextureAtlases {
+    const texturesBySize: TexturesBySize = {
+        16: [],
+        32: [],
+        64: [],
+        128: [],
+        256: [],
+    };
+
+    const tfragTextureRemap = assignTexturesToSizeBucket(texturesBySize, tfragTextures);
+    const tieTextureRemap = assignTexturesToSizeBucket(texturesBySize, tieTextures);
+    const shrubTextureRemap = assignTexturesToSizeBucket(texturesBySize, shrubTextures);
+
+    const gfxTextures = {
+        16: createGfxTextureArrayForPaletteTextures(device, '16x16 Texture Array', texturesBySize[16]),
+        32: createGfxTextureArrayForPaletteTextures(device, '32x32 Texture Array', texturesBySize[32]),
+        64: createGfxTextureArrayForPaletteTextures(device, '64x64 Texture Array', texturesBySize[64]),
+        128: createGfxTextureArrayForPaletteTextures(device, '128x128 Texture Array', texturesBySize[128]),
+        256: createGfxTextureArrayForPaletteTextures(device, '256x256 Texture Array', texturesBySize[256]),
+    };
+
+    return {
+        gfxTextures,
+        tfragTextureRemap,
+        tieTextureRemap,
+        shrubTextureRemap,
+    };
+}

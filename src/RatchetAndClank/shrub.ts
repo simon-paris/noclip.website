@@ -12,10 +12,10 @@ import { ImaginaryGsCommandType } from "./utils";
 export class ShrubProgram extends DeviceProgram {
     public static a_Position = 0;
     public static a_Normal = 1;
-    public static a_TextureIndex = 2;
+    public static a_TextureParams = 2;
     public static a_ST = 3;
 
-    public static elementsPerVertex = 9; // position (3), normal (3), texture index (1), st (2)
+    public static elementsPerVertex = 10; // position (3), normal (3), texture params (2), st (2)
 
     public static a_InstanceTransform0 = 4;
     public static a_InstanceTransform1 = 5;
@@ -31,19 +31,25 @@ export class ShrubProgram extends DeviceProgram {
     public static ub_ShrubParams = 1;
 
     public override both = `
+precision highp float;
+precision highp sampler2DArray;
+
 ${GfxShaderLibrary.MatrixLibrary}
 ${RatchetShaderLib.SceneParams}
 
-${nArray(16, i => `
-layout(location = ${i}) uniform sampler2D u_Texture${i};
-`).join('\n')}
+layout(location = 0) uniform sampler2DArray u_Texture_16;
+layout(location = 1) uniform sampler2DArray u_Texture_32;
+layout(location = 2) uniform sampler2DArray u_Texture_64;
+layout(location = 3) uniform sampler2DArray u_Texture_128;
+layout(location = 4) uniform sampler2DArray u_Texture_256;
+
 `;
 
     public override vert = `
 
 layout(location = ${ShrubProgram.a_Position}) in vec3 a_Position;
 layout(location = ${ShrubProgram.a_Normal}) in vec3 a_Normal;
-layout(location = ${ShrubProgram.a_TextureIndex}) in float a_TextureIndex;
+layout(location = ${ShrubProgram.a_TextureParams}) in vec2 a_TextureParams; // x = texture index, y = clamp flag
 layout(location = ${ShrubProgram.a_ST}) in vec2 a_ST;
 
 layout(location = ${ShrubProgram.a_InstanceTransform0}) in vec4 a_InstanceTransform0;
@@ -55,6 +61,7 @@ layout(location = ${ShrubProgram.a_InstanceDirectionLights}) in vec4 a_InstanceD
 layout(location = ${ShrubProgram.a_InstanceLodAlpha}) in float a_InstanceLodAlpha;
 
 flat out int v_TextureIndex;
+flat out int v_Clamp;
 out vec2 v_ST;
 out vec4 v_Rgba;
 out vec3 v_Normal;
@@ -75,32 +82,29 @@ void main() {
     v_Rgba = commonVertexLighting(rgba, normal, lights);
     v_Rgba.a *= a_InstanceLodAlpha;
     v_Normal = normal;
-    v_TextureIndex = int(a_TextureIndex);
+    v_TextureIndex = int(a_TextureParams.x);
+    v_Clamp = int(a_TextureParams.y);
 }
 `;
 
     public override frag = `
 
 flat in int v_TextureIndex;
+flat in int v_Clamp;
 in vec2 v_ST;
 in vec4 v_Rgba;
 in vec3 v_Normal;
 
 ${RatchetShaderLib.CommonFragmentShader}
+${RatchetShaderLib.Sampler}
 
 void main() {
-    // gross but fast
-    ${nArray(16, i => `
-            vec4 textureSample${i} = texture(SAMPLER_2D(u_Texture${i}), v_ST);
-    `).join('\n')
-        }
-    ${nArray(16, i => `
-            if (v_TextureIndex == ${i}) {
-                gl_FragColor = commonFragmentShader(v_Rgba, textureSample${i});
-                return;
-            }
-    `).join('\n')
-        }
+    vec2 texRemap = u_TextureRemaps.shrubs[v_TextureIndex].xy;
+    vec2 ddx = dFdx(v_ST);
+    vec2 ddy = dFdy(v_ST);
+    float gradSq = max(dot(ddx, ddx), dot(ddy, ddy));
+    vec4 textureSample = ratchetSampler(texRemap.x, texRemap.y, v_Clamp, v_ST, gradSq);
+    gl_FragColor = commonFragmentShader(v_Rgba, textureSample);
 }
 
 `;
@@ -113,10 +117,10 @@ export class ShrubGeometry {
 
     public inputLayout: GfxInputLayout;
 
-    constructor(cache: GfxRenderCache, shrub: ShrubClass) {
+    constructor(cache: GfxRenderCache, shrub: ShrubClass, textureIndices: number[]) {
         const device = cache.device;
 
-        const assembled = assembleShrubClassGeometry(shrub);
+        const assembled = assembleShrubClassGeometry(shrub, textureIndices);
         this.vertexBuffer = createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, assembled.vertexData.buffer);
         this.vertexCount = assembled.vertexData.length / ShrubProgram.elementsPerVertex;
 
@@ -127,8 +131,8 @@ export class ShrubGeometry {
                 // per vertex
                 { location: ShrubProgram.a_Position, format: GfxFormat.F32_RGB, bufferByteOffset: 0, bufferIndex: 0, },
                 { location: ShrubProgram.a_Normal, format: GfxFormat.F32_RGB, bufferByteOffset: 3 * 4, bufferIndex: 0, },
-                { location: ShrubProgram.a_TextureIndex, format: GfxFormat.F32_R, bufferByteOffset: 6 * 4, bufferIndex: 0, },
-                { location: ShrubProgram.a_ST, format: GfxFormat.F32_RG, bufferByteOffset: 7 * 4, bufferIndex: 0, },
+                { location: ShrubProgram.a_TextureParams, format: GfxFormat.F32_RG, bufferByteOffset: 6 * 4, bufferIndex: 0, },
+                { location: ShrubProgram.a_ST, format: GfxFormat.F32_RG, bufferByteOffset: 8 * 4, bufferIndex: 0, },
                 // per instance
                 { location: ShrubProgram.a_InstanceTransform0, format: GfxFormat.F32_RGBA, bufferByteOffset: 0 * 4, bufferIndex: 1, },
                 { location: ShrubProgram.a_InstanceTransform1, format: GfxFormat.F32_RGBA, bufferByteOffset: 4 * 4, bufferIndex: 1, },
@@ -152,17 +156,13 @@ export class ShrubGeometry {
     }
 }
 
-export function assembleShrubClassGeometry(shrub: ShrubClass) {
+export function assembleShrubClassGeometry(shrub: ShrubClass, textureIndices: number[]) {
     const scale = shrub.header.scale * (1 / 1024);
     const normalScale = 1 / 0x7fff;
     const texcoordScale = 1 / 4096;
 
-    // clean up command lists and sort by material
+    // clean up command lists
     const packets = shrub.body.packets.map(commandBufferToTriangles).flat(1);
-    packets.sort((a, b) => {
-        if (a.material.texture !== b.material.texture) return a.material.texture - b.material.texture;
-        return a.material.clamp - b.material.clamp;
-    });
 
     const triangleCount = packets.reduce((a, b) => a + b.vertices.length, 0) / 3; // shrubs are triangle lists not strips
     const expectedSize = triangleCount * 3 * ShrubProgram.elementsPerVertex;
@@ -178,7 +178,8 @@ export function assembleShrubClassGeometry(shrub: ShrubClass) {
             vertexArrayBuffer[ptr++] = normalScale * normal.x;
             vertexArrayBuffer[ptr++] = normalScale * normal.y;
             vertexArrayBuffer[ptr++] = normalScale * normal.z;
-            vertexArrayBuffer[ptr++] = material.texture;
+            vertexArrayBuffer[ptr++] = textureIndices[material.texture];
+            vertexArrayBuffer[ptr++] = material.clamp;
             vertexArrayBuffer[ptr++] = texcoordScale * vertex.s;
             vertexArrayBuffer[ptr++] = texcoordScale * vertex.t;
         }
@@ -208,7 +209,7 @@ function commandBufferToTriangles(commandBuffer: ShrubImaginaryGsCommand[]) {
             case ImaginaryGsCommandType.SET_MATERIAL: {
                 currentMaterial = {
                     texture: command.value.adGif.tex0.low,
-                    clamp: command.value.adGif.clamp.low,
+                    clamp: command.value.adGif.clamp.low + (command.value.adGif.clamp.high << 2),
                 };
                 break;
             }
