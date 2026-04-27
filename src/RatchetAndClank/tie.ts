@@ -15,7 +15,7 @@ export class TieProgram extends DeviceProgram {
     public static a_Normal = 3;
     public static a_LodMorphOffset = 4;
 
-    public static elementsPerVertex = 13; // position (3), extras(2), st (2), normal (3), morph offset (3) = 13
+    public static elementsPerVertex = 14; // position (3), extras(3), st (2), normal (3), morph offset (3) = 14
 
     public static a_InstanceTransform0 = 5;
     public static a_InstanceTransform1 = 6;
@@ -30,20 +30,26 @@ export class TieProgram extends DeviceProgram {
     public static ub_TieParams = 1;
 
     public override both = `
+precision highp float;
+precision highp sampler2DArray;
+
 ${GfxShaderLibrary.MatrixLibrary}
 ${RatchetShaderLib.SceneParams}
 
-layout(location = 0) uniform sampler2D u_AmbientRgbaTexture;
+layout(location = 0) uniform sampler2DArray u_Texture_16;
+layout(location = 1) uniform sampler2DArray u_Texture_32;
+layout(location = 2) uniform sampler2DArray u_Texture_64;
+layout(location = 3) uniform sampler2DArray u_Texture_128;
+layout(location = 4) uniform sampler2DArray u_Texture_256;
 
-${nArray(16, i => `
-layout(location = ${i + 1}) uniform sampler2D u_Texture${i};
-`).join('\n')}
+layout(location = 5) uniform sampler2D u_AmbientRgbaTexture;
+
 `;
 
     public override vert = `
 
 layout(location = ${TieProgram.a_Position}) in vec3 a_Position;
-layout(location = ${TieProgram.a_ExtraData}) in vec2 a_ExtraData; // x = texture index, y = rgba index
+layout(location = ${TieProgram.a_ExtraData}) in vec3 a_ExtraData; // x = texture index, y = clamp, z = rgba index
 layout(location = ${TieProgram.a_ST}) in vec2 a_ST;
 layout(location = ${TieProgram.a_Normal}) in vec3 a_Normal;
 layout(location = ${TieProgram.a_LodMorphOffset}) in vec3 a_LodMorphOffset;
@@ -59,6 +65,7 @@ out vec2 v_ST;
 out vec4 v_Rgba;
 out vec3 v_Normal;
 flat out int v_TextureIndex;
+flat out int v_Clamp;
 
 
 ${RatchetShaderLib.LightingFunctions}
@@ -73,7 +80,7 @@ void main() {
     gl_Position = UnpackMatrix(u_ClipFromWorld) * t_PositionWorld;
     v_ST = a_ST;
 
-    ivec2 ambientRgbaTexcoord = ivec2(int(a_ExtraData.y), int(a_InstanceExtraData.x));
+    ivec2 ambientRgbaTexcoord = ivec2(int(a_ExtraData.z), int(a_InstanceExtraData.x));
     vec4 rgba = texelFetch(TEXTURE(u_AmbientRgbaTexture), ambientRgbaTexcoord, 0);
     rgba.rgb *= 2.0; // not sure about this
     vec4 lights = a_InstanceDirectionLights;
@@ -81,31 +88,28 @@ void main() {
     v_Normal = normalize(inverse(transpose(mat3(instanceTransform))) * a_Normal);
     v_Rgba = commonVertexLighting(rgba, v_Normal, lights);
     v_TextureIndex = int(a_ExtraData.x);
+    v_Clamp = int(a_ExtraData.y);
 }
 
 `;
 
     public override frag = `
 ${RatchetShaderLib.CommonFragmentShader}
+${RatchetShaderLib.Sampler}
 
 in vec2 v_ST;
 in vec4 v_Rgba;
 in vec3 v_Normal;
 flat in int v_TextureIndex;
+flat in int v_Clamp;
 
 void main() {
-    // gross but fast
-    ${nArray(16, i => `
-            vec4 textureSample${i} = texture(SAMPLER_2D(u_Texture${i}), v_ST);
-    `).join('\n')
-        }
-    ${nArray(16, i => `
-            if (v_TextureIndex == ${i}) {
-                gl_FragColor = commonFragmentShader(v_Rgba, textureSample${i});
-                return;
-            }
-    `).join('\n')
-        }
+    vec2 texRemap = u_TextureRemaps.ties[v_TextureIndex].xy;
+    vec2 ddx = dFdx(v_ST);
+    vec2 ddy = dFdy(v_ST);
+    float gradSq = max(dot(ddx, ddx), dot(ddy, ddy));
+    vec4 textureSample = ratchetSampler(texRemap.x, texRemap.y, v_Clamp, v_ST, gradSq);
+    gl_FragColor = commonFragmentShader(v_Rgba, textureSample);
 }
 `;
 
@@ -117,10 +121,10 @@ export class TieGeometry {
 
     public vertexCount: number;
 
-    constructor(cache: GfxRenderCache, tieOClass: number, tie: TieClass, lodLevel: number) {
+    constructor(cache: GfxRenderCache, tieOClass: number, tie: TieClass, lodLevel: number, textureIndices: number[]) {
         const device = cache.device;
 
-        const vertexData = assembleTieClassGeometry(tieOClass, tie, lodLevel);
+        const vertexData = assembleTieClassGeometry(tieOClass, tie, lodLevel, textureIndices);
 
         this.vertexBuffer = createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, vertexData.vertexArrayBuffer.buffer);
         device.setResourceName(this.vertexBuffer, `Tie Class ${tieOClass} (VB)`);
@@ -131,10 +135,10 @@ export class TieGeometry {
             vertexAttributeDescriptors: [
                 // per vertex
                 { location: TieProgram.a_Position, format: GfxFormat.F32_RGB, bufferByteOffset: 0, bufferIndex: 0, },
-                { location: TieProgram.a_ExtraData, format: GfxFormat.F32_RG, bufferByteOffset: 3 * 4, bufferIndex: 0, },
-                { location: TieProgram.a_ST, format: GfxFormat.F32_RG, bufferByteOffset: 5 * 4, bufferIndex: 0, },
-                { location: TieProgram.a_Normal, format: GfxFormat.F32_RGB, bufferByteOffset: 7 * 4, bufferIndex: 0, },
-                { location: TieProgram.a_LodMorphOffset, format: GfxFormat.F32_RGB, bufferByteOffset: 10 * 4, bufferIndex: 0, },
+                { location: TieProgram.a_ExtraData, format: GfxFormat.F32_RGB, bufferByteOffset: 3 * 4, bufferIndex: 0, },
+                { location: TieProgram.a_ST, format: GfxFormat.F32_RG, bufferByteOffset: 6 * 4, bufferIndex: 0, },
+                { location: TieProgram.a_Normal, format: GfxFormat.F32_RGB, bufferByteOffset: 8 * 4, bufferIndex: 0, },
+                { location: TieProgram.a_LodMorphOffset, format: GfxFormat.F32_RGB, bufferByteOffset: 11 * 4, bufferIndex: 0, },
                 // per instance
                 { location: TieProgram.a_InstanceTransform0, format: GfxFormat.F32_RGBA, bufferByteOffset: 0 * 4, bufferIndex: 1, },
                 { location: TieProgram.a_InstanceTransform1, format: GfxFormat.F32_RGBA, bufferByteOffset: 4 * 4, bufferIndex: 1, },
@@ -156,7 +160,7 @@ export class TieGeometry {
     }
 }
 
-export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: number) {
+export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: number, textureIndices: number[]) {
     const positionScale = tie.scale * (1 / 1024);
     const texcoordScale = 1 / 4096;
     const normalScale = 1 / 0x7FFF;
@@ -172,7 +176,7 @@ export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: 
     const vertexArrayBuffer = new Float32Array(vertexBufferSize);
     let ptr = 0;
 
-    function pushTriangle(verts: { vertex: TieVertex, normalIndex: number, rgbaIndex: number }[], material: number) {
+    function pushTriangle(verts: { vertex: TieVertex, normalIndex: number, rgbaIndex: number }[], material: number, clamp: number) {
         assert(verts.length === 3);
         const fixedTexcoords = fixTexcoords(verts[0].vertex, verts[1].vertex, verts[2].vertex);
         for (let i = 0; i < 3; i++) {
@@ -184,7 +188,8 @@ export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: 
             vertexArrayBuffer[ptr++] = positionScale * vert.x;
             vertexArrayBuffer[ptr++] = positionScale * vert.y;
             vertexArrayBuffer[ptr++] = positionScale * vert.z;
-            vertexArrayBuffer[ptr++] = material;
+            vertexArrayBuffer[ptr++] = textureIndices[material];
+            vertexArrayBuffer[ptr++] = clamp;
             vertexArrayBuffer[ptr++] = vertAndNormalIndex.rgbaIndex;
             vertexArrayBuffer[ptr++] = texcoordScale * fixedTexcoord.s;
             vertexArrayBuffer[ptr++] = texcoordScale * fixedTexcoord.t;
@@ -202,7 +207,7 @@ export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: 
 
     for (const strip of strips) {
         for (let i = 0; i < strip.verts.length - 2; i++) {
-            pushTriangle([strip.verts[i + 0], strip.verts[i + 1], strip.verts[i + 2]], strip.material);
+            pushTriangle([strip.verts[i + 0], strip.verts[i + 1], strip.verts[i + 2]], strip.material, strip.clamp);
         }
     }
 
@@ -244,10 +249,11 @@ function fixTexcoords(...verts: { s: number, t: number }[]) {
 }
 
 function commandBufferToStrips(tieOClass: number, packets: TieImaginaryGsCommand[][]) {
-    type TieStrip = { material: number, windingOrder: number, isFirstStripInPacket: number, verts: { vertex: TieVertex, normalIndex: number, rgbaIndex: number }[] };
+    type TieStrip = { material: number, clamp: number, isFirstStripInPacket: number, verts: { vertex: TieVertex, normalIndex: number, rgbaIndex: number }[] };
 
     let strip: TieStrip | undefined;
-    let lastMaterial = null;
+    let lastMaterial = 0;
+    let lastClamp = 0;
 
     const strips: TieStrip[] = [];
 
@@ -260,12 +266,13 @@ function commandBufferToStrips(tieOClass: number, packets: TieImaginaryGsCommand
                     if (lastMaterial === null) {
                         throw new Error(`Unexpected primitive reset before material`);
                     }
-                    strip = { material: lastMaterial, windingOrder: command.value.windingOrder, isFirstStripInPacket: i, verts: [] }
+                    strip = { material: lastMaterial, clamp: lastClamp, isFirstStripInPacket: i, verts: [] }
                     strips.push(strip);
                     break;
                 }
                 case ImaginaryGsCommandType.SET_MATERIAL: {
-                    lastMaterial = command.value;
+                    lastMaterial = command.value.material;
+                    lastClamp = command.value.clamp;
                     strip = undefined;
                     break;
                 }

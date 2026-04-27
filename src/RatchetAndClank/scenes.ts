@@ -1,7 +1,7 @@
 import { mat4, quat, vec3, vec4 } from "gl-matrix";
 import { makeBackbufferDescSimple, standardFullClearRenderPassDescriptor } from "../gfx/helpers/RenderGraphHelpers";
 import { fillMatrix4x4, fillVec3v, fillVec4, fillVec4v } from "../gfx/helpers/UniformBufferHelpers";
-import { GfxBlendFactor, GfxBlendMode, GfxChannelWriteMask, GfxCompareMode, GfxCullMode, GfxDevice, GfxMipFilterMode, GfxProgram, GfxSampler, GfxSamplerFormatKind, GfxTexFilterMode, GfxTexture, GfxTextureDimension, GfxWrapMode } from "../gfx/platform/GfxPlatform";
+import { GfxBlendFactor, GfxBlendMode, GfxChannelWriteMask, GfxCompareMode, GfxCullMode, GfxDevice, GfxMipFilterMode, GfxProgram, GfxSampler, GfxSamplerBinding, GfxSamplerFormatKind, GfxTexFilterMode, GfxTexture, GfxTextureDimension, GfxWrapMode } from "../gfx/platform/GfxPlatform";
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { GfxRenderInst, GfxRenderInstList } from "../gfx/render/GfxRenderInstManager";
@@ -20,8 +20,8 @@ import { SkyGeometry, SkyProgram } from "./sky";
 import { RatchetShaderLib } from "./shader-lib";
 import { Frustum } from "../Geometry";
 import { MobyInstance } from "./structs-gameplay";
-import { nArray } from "../util";
-import { createGfxTextureArrayForPaletteTextures, createGfxTextureForPaletteTexture, createTieRgbaTexture } from "./textures";
+import { assert, nArray } from "../util";
+import { createGfxTextureArrayForPaletteTextures, createGfxTextureForPaletteTexture, createTextureAtlases, createTieRgbaTexture, TextureAtlases } from "./textures";
 import { CollisionGeometry, CollisionProgram } from "./collision";
 import { IS_DEVELOPMENT } from "../BuildVersion";
 
@@ -38,8 +38,8 @@ class RatchetAndClank1Scene implements SceneGfx {
     private skyProgram: GfxProgram;
     private collisionProgram: GfxProgram;
 
-    private samplerWrap: GfxSampler;
-    private samplerClamp: GfxSampler;
+    private samplerGeneral: GfxSampler;
+    private samplerSky: GfxSampler;
 
     public textureHolder = new FakeTextureHolder([]);
 
@@ -72,11 +72,16 @@ class RatchetAndClank1Scene implements SceneGfx {
         };
 
     private textures = {
-        tfragTextures: null as null | GfxTexture, // one array texture
-        tieTextures: new Array<GfxTexture>(),
+        textureAtlases: null as null | TextureAtlases,
         tieRgbaTexture: null as null | GfxTexture,
-        shrubTextures: new Array<GfxTexture>(),
         skyTextures: new Array<GfxTexture>(),
+    };
+
+    private textureMappings: {
+        tfrag: GfxSamplerBinding[],
+        tie: GfxSamplerBinding[],
+        shrub: GfxSamplerBinding[],
+        sky: GfxSamplerBinding[],
     };
 
     // meshes generated from level data
@@ -100,17 +105,18 @@ class RatchetAndClank1Scene implements SceneGfx {
         this.skyProgram = cache.createProgram(new SkyProgram());
         this.collisionProgram = cache.createProgram(new CollisionProgram());
 
-        this.samplerWrap = cache.createSampler({
-            minFilter: GfxTexFilterMode.Bilinear,
-            magFilter: GfxTexFilterMode.Bilinear,
+        this.samplerGeneral = cache.createSampler({
+            minFilter: GfxTexFilterMode.Point,
+            magFilter: GfxTexFilterMode.Point,
             mipFilter: GfxMipFilterMode.Nearest,
-            wrapS: GfxWrapMode.Repeat,
-            wrapT: GfxWrapMode.Repeat,
+            wrapS: GfxWrapMode.Clamp,
+            wrapT: GfxWrapMode.Clamp,
         });
-        this.samplerClamp = cache.createSampler({
+
+        this.samplerSky = cache.createSampler({
             minFilter: GfxTexFilterMode.Bilinear,
             magFilter: GfxTexFilterMode.Bilinear,
-            mipFilter: GfxMipFilterMode.Nearest,
+            mipFilter: GfxMipFilterMode.Linear,
             wrapS: GfxWrapMode.Clamp,
             wrapT: GfxWrapMode.Clamp,
         });
@@ -162,39 +168,24 @@ class RatchetAndClank1Scene implements SceneGfx {
         const cache = this.renderHelper.renderCache;
 
         const { tfrags, tfragTextures } = this.level;
-        this.textures.tfragTextures = createGfxTextureArrayForPaletteTextures(cache.device, "Tfrag texture", tfragTextures);
-        // for (let i = 0; i < tfragTextures.length; i++) {
-        //     const gfxTextures = createGfxTextureForPaletteTexture(cache.device, tfragTextures[i]);
-        //     this.textureHolder.viewerTextures.push({ gfxTexture: gfxTextures.pixelsTexture });
-        // }
         this.geometries.tfrag = new TfragGeometry(cache, tfrags, tfragTextures);
 
         const { ties, tieInstances, tieTextures } = this.level;
-        for (let i = 0; i < tieTextures.length; i++) {
-            const gfxTextures = createGfxTextureForPaletteTexture(cache.device, tieTextures[i]);
-            this.textures.tieTextures.push(gfxTextures.pixelsTexture);
-            this.textureHolder.viewerTextures.push({ gfxTexture: gfxTextures.pixelsTexture });
-        }
-        for (const { oClass, tieClass } of ties) {
+        for (const { oClass, tieClass, textureIndices } of ties) {
             this.geometries.ties.set(oClass, [null, null, null]);
             for (let i = 0; i < 3; i++) {
                 if (tieClass.packets[i].length === 0) continue; // nothing to render for this lod
-                this.geometries.ties.get(oClass)![i] = new TieGeometry(cache, oClass, tieClass, i);
+                this.geometries.ties.get(oClass)![i] = new TieGeometry(cache, oClass, tieClass, i, textureIndices);
             }
         }
         this.textures.tieRgbaTexture = createTieRgbaTexture(cache.device, tieInstances);
-        this.textureHolder.viewerTextures.push({ gfxTexture: this.textures.tieRgbaTexture });
 
         const { shrubs, shrubTextures } = this.level;
-        for (const { oClass, shrubClass } of shrubs) {
-            this.geometries.shrubs.set(oClass, new ShrubGeometry(cache, shrubClass));
+        for (const { oClass, shrubClass, textureIndices } of shrubs) {
+            this.geometries.shrubs.set(oClass, new ShrubGeometry(cache, shrubClass, textureIndices));
         }
-        for (let i = 0; i < shrubTextures.length; i++) {
-            const shrubTexture = shrubTextures[i];
-            const gfxTextures = createGfxTextureForPaletteTexture(cache.device, shrubTexture);
-            this.textures.shrubTextures.push(gfxTextures.pixelsTexture);
-            this.textureHolder.viewerTextures.push({ gfxTexture: gfxTextures.pixelsTexture });
-        }
+
+        this.textures.textureAtlases = createTextureAtlases(cache.device, tfragTextures, tieTextures, shrubTextures);
 
         const { sky, skyTextures } = this.level;
         for (let i = 0; i < sky.shells.length; i++) {
@@ -272,9 +263,25 @@ class RatchetAndClank1Scene implements SceneGfx {
                 offs += fillVec4(data, offs, 0, 0, 0, 0);
             }
         }
+
+        // texture remaps (3 * 256 * 4 floats)
+        const { textureAtlases } = this.textures;
+        assert(textureAtlases !== null);
+        const remapArrays = [textureAtlases.tfragTextureRemap, textureAtlases.tieTextureRemap, textureAtlases.shrubTextureRemap];
+        for (const remapArray of remapArrays) {
+            for (let i = 0; i < 256; i++) {
+                const remap = remapArray[i];
+                data[offs++] = remap ? remap.sizeBucket : 0;
+                data[offs++] = remap ? remap.index : 0;
+                data[offs++] = 0;
+                data[offs++] = 0;
+            }
+        }
     }
 
     private renderTfrag(cameraPosition: vec3): void {
+        assert(this.textures.textureAtlases !== null);
+
         const objectMatrix = noclipSpaceFromRatchetSpace; // the tfrag has no transform, it's already in world space
 
         let lodLevel = this.settings.lodSetting;
@@ -289,9 +296,13 @@ class RatchetAndClank1Scene implements SceneGfx {
         const renderInst = this.renderHelper.renderInstManager.newRenderInst();
         renderInst.setBindingLayouts([
             {
-                numSamplers: 1,
+                numSamplers: 5,
                 numUniformBuffers: 2,
                 samplerEntries: [
+                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
                     { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
                 ],
             }
@@ -309,8 +320,12 @@ class RatchetAndClank1Scene implements SceneGfx {
             ],
             null,
         );
-        renderInst.setSamplerBindings(0, [
-            { gfxTexture: this.textures.tfragTextures, gfxSampler: this.samplerWrap }
+        renderInst.setSamplerBindingsFromTextureMappings([
+            { gfxTexture: this.textures.textureAtlases.gfxTextures[16], gfxSampler: this.samplerGeneral },
+            { gfxTexture: this.textures.textureAtlases.gfxTextures[32], gfxSampler: this.samplerGeneral },
+            { gfxTexture: this.textures.textureAtlases.gfxTextures[64], gfxSampler: this.samplerGeneral },
+            { gfxTexture: this.textures.textureAtlases.gfxTextures[128], gfxSampler: this.samplerGeneral },
+            { gfxTexture: this.textures.textureAtlases.gfxTextures[256], gfxSampler: this.samplerGeneral },
         ]);
         renderInst.setDrawCount(tfragGeometry.lods[lodLevel].vertexCount, 0);
         this.renderInstList.submitRenderInst(renderInst);
@@ -389,7 +404,18 @@ class RatchetAndClank1Scene implements SceneGfx {
 
             const renderInst = this.renderHelper.renderInstManager.newRenderInst();
             renderInst.setBindingLayouts([
-                { numSamplers: 16, numUniformBuffers: 1 },
+                {
+                    numSamplers: 6,
+                    numUniformBuffers: 2,
+                    samplerEntries: [
+                        { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                        { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                        { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                        { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                        { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                        { dimension: GfxTextureDimension.n2D, formatKind: GfxSamplerFormatKind.Float, },
+                    ],
+                }
             ]);
             renderInst.setGfxProgram(this.tieProgram);
 
@@ -410,17 +436,16 @@ class RatchetAndClank1Scene implements SceneGfx {
                 null,
             );
 
-            renderInst.setSamplerBindings(0, [
+            renderInst.setSamplerBindingsFromTextureMappings([
+                { gfxTexture: this.textures.textureAtlases!.gfxTextures[16], gfxSampler: this.samplerGeneral },
+                { gfxTexture: this.textures.textureAtlases!.gfxTextures[32], gfxSampler: this.samplerGeneral },
+                { gfxTexture: this.textures.textureAtlases!.gfxTextures[64], gfxSampler: this.samplerGeneral },
+                { gfxTexture: this.textures.textureAtlases!.gfxTextures[128], gfxSampler: this.samplerGeneral },
+                { gfxTexture: this.textures.textureAtlases!.gfxTextures[256], gfxSampler: this.samplerGeneral },
                 {
                     gfxTexture: this.textures.tieRgbaTexture!,
-                    gfxSampler: this.samplerClamp,
+                    gfxSampler: this.samplerGeneral,
                 },
-                ...nArray(
-                    tieInstanceBatch.textureIndices.length, j => ({
-                        gfxTexture: this.textures.tieTextures[textureIndices[j]],
-                        gfxSampler: this.samplerWrap
-                    })
-                ),
             ]);
 
             renderInst.setInstanceCount(tieInstancesToDraw.length);
@@ -501,7 +526,17 @@ class RatchetAndClank1Scene implements SceneGfx {
 
         const renderInst = this.renderHelper.renderInstManager.newRenderInst();
         renderInst.setBindingLayouts([
-            { numSamplers: 16, numUniformBuffers: 1 },
+            {
+                numSamplers: 5,
+                numUniformBuffers: 2,
+                samplerEntries: [
+                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                ],
+            }
         ]);
         renderInst.setGfxProgram(this.shrubProgram);
 
@@ -525,10 +560,13 @@ class RatchetAndClank1Scene implements SceneGfx {
             null,
         );
 
-        renderInst.setSamplerBindings(0, nArray(shrubInstanceBatch.textureIndices.length, j => ({
-            gfxTexture: this.textures.shrubTextures[textureIndices[j]],
-            gfxSampler: this.samplerWrap
-        })));
+        renderInst.setSamplerBindingsFromTextureMappings([
+            { gfxTexture: this.textures.textureAtlases!.gfxTextures[16], gfxSampler: this.samplerGeneral },
+            { gfxTexture: this.textures.textureAtlases!.gfxTextures[32], gfxSampler: this.samplerGeneral },
+            { gfxTexture: this.textures.textureAtlases!.gfxTextures[64], gfxSampler: this.samplerGeneral },
+            { gfxTexture: this.textures.textureAtlases!.gfxTextures[128], gfxSampler: this.samplerGeneral },
+            { gfxTexture: this.textures.textureAtlases!.gfxTextures[256], gfxSampler: this.samplerGeneral },
+        ]);
 
         renderInst.setDrawCount(shrubGeometry.vertexCount, 0);
         renderInst.setInstanceCount(shrubInstancesToDraw.length);
@@ -612,8 +650,8 @@ class RatchetAndClank1Scene implements SceneGfx {
                 { buffer: skyShellGeometry.indexBuffer, byteOffset: 0 },
             );
             if (skyShellGeometry.hasTexture) {
-                renderInst.setSamplerBindings(0, [
-                    { gfxTexture: this.textures.skyTextures[draw.material], gfxSampler: this.samplerClamp }
+                renderInst.setSamplerBindingsFromTextureMappings([
+                    { gfxTexture: this.textures.skyTextures[draw.material], gfxSampler: this.samplerSky }
                 ]);
             }
             renderInst.setDrawCount(draw.indexCount, draw.startIndex);
@@ -819,10 +857,8 @@ class RatchetAndClank1Scene implements SceneGfx {
         }
 
         const allTextures = [
-            this.textures.tfragTextures,
-            ...this.textures.tieTextures,
+            ...(this.textures.textureAtlases ? Object.values(this.textures.textureAtlases?.gfxTextures) : []),
             this.textures.tieRgbaTexture,
-            ...this.textures.shrubTextures,
             ...this.textures.skyTextures,
         ]
         for (const texture of allTextures) {
@@ -835,7 +871,9 @@ class RatchetAndClank1Scene implements SceneGfx {
 
         this.textureHolder.destroy(device);
 
-        device.checkForLeaks();
+        if (IS_DEVELOPMENT) {
+            device.checkForLeaks();
+        }
     }
 }
 

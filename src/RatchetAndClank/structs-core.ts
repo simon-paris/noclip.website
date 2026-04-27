@@ -141,6 +141,13 @@ export function readTieClass(view: DataViewExt, oClass: number): TieClass {
 
     const packets: TiePacket[][] = [];
 
+    const textureCount = view.getUint8(0x23);
+    const adGifsOffset = view.getUint32(0x2c);
+    const adGifs = view.subdivide(adGifsOffset, textureCount, SIZEOF_TIE_AD_GIFS).map(readTieAdGifs);
+
+    const normalsOffset = view.getUint32(0xc);
+    const normalsData = view.subdivide(normalsOffset, 64, 8).map(view => view.getInt16_Xyzw(0));
+
     // there are always 3 lods
     for (let i = 0; i < 3; i++) {
         const packetOffset = packetOffsets[i];
@@ -150,7 +157,7 @@ export function readTieClass(view: DataViewExt, oClass: number): TieClass {
         const packetsInThisLod: TiePacket[] = [];
         for (let j = 0; j < packetCount; j++) {
             const packetDataOffset = packetOffset + packetHeaders[j].data;
-            const packetBody = readTiePacketBody(view.subview(packetDataOffset), packetHeaders[j], oClass, i, j);
+            const packetBody = readTiePacketBody(view.subview(packetDataOffset), packetHeaders[j], adGifs, oClass, i, j);
             packetsInThisLod.push({
                 header: packetHeaders[j],
                 body: packetBody,
@@ -159,13 +166,6 @@ export function readTieClass(view: DataViewExt, oClass: number): TieClass {
 
         packets.push(packetsInThisLod);
     }
-
-    const textureCount = view.getUint8(0x23);
-    const adGifsOffset = view.getUint32(0x2c);
-    const adGifs = view.subdivide(adGifsOffset, textureCount, SIZEOF_TIE_AD_GIFS).map(readTieAdGifs);
-
-    const normalsOffset = view.getUint32(0xc);
-    const normalsData = view.subdivide(normalsOffset, 64, 8).map(view => view.getInt16_Xyzw(0));
 
     return {
         normalsData,
@@ -217,7 +217,7 @@ export function readTiePacketHeader(view: DataViewExt): TiePacketHeader {
     };
 }
 
-export type TieImaginaryGsCommand = ImaginaryGsCommand<TieStrip, number, { vertex: TieVertex, normalIndex: number, rgbaIndex: number }>;
+export type TieImaginaryGsCommand = ImaginaryGsCommand<TieStrip, { material: number, clamp: number }, { vertex: TieVertex, normalIndex: number, rgbaIndex: number }>;
 
 const tieCommandSizes = {
     primitiveReset: 1,
@@ -226,7 +226,7 @@ const tieCommandSizes = {
 };
 
 export type TiePacketBody = ReturnType<typeof readTiePacketBody>;
-export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketHeader, oClass: number, lod: number, packetIndex: number) {
+export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketHeader, adGifs: TieGifAds[], oClass: number, lod: number, packetIndex: number) {
     /*
     struct TiePacketBody {
         // 0x0
@@ -245,9 +245,9 @@ export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketH
         // align 0x4
         uint8vec4 morphingNormalIndices[tieVuHeader.morphingVertexCount];
         // align 0x10
-        uint8 regularUnknown[tieVuHeader.regularVertexCount];
+        uint8 regularRgbaIndices[tieVuHeader.regularVertexCount];
         // align 0x4
-        uint8vec4 morphingUnknown[tieVuHeader.morphingVertexCount];
+        uint8vec4 morphingRgbaIndices[tieVuHeader.morphingVertexCount];
         // align 0x10
         uint8 unknown[?];
     }
@@ -302,10 +302,13 @@ export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketH
     // there's one more array of bytes after this but not sure what it is or what its length is (usually 50-60 bytes)
     alignTo(0x10);
 
-    const imaginaryGsBuffer = new ImaginaryGsCommandBuffer<TieStrip, number, { vertex: TieVertex, normalIndex: number, rgbaIndex: number }>();
+    const imaginaryGsBuffer = new ImaginaryGsCommandBuffer<TieStrip, { material: number, clamp: number }, { vertex: TieVertex, normalIndex: number, rgbaIndex: number }>();
 
     // first command always sets the material to the first material
-    imaginaryGsBuffer.writeSetMaterial(0, tieCommandSizes.setMaterial, adGifSrcOffsets[0] / SIZEOF_TIE_AD_GIFS);
+    const firstMaterialId = adGifSrcOffsets[0] / SIZEOF_TIE_AD_GIFS;
+    const firstAdGif = adGifs[firstMaterialId];
+    const firstClamp = firstAdGif.clamp.low + (firstAdGif.clamp.high << 2);
+    imaginaryGsBuffer.writeSetMaterial(0, tieCommandSizes.setMaterial, { material: firstMaterialId, clamp: firstClamp });
 
     // Write verts into command buffer
     // Some are written twice.
@@ -339,7 +342,9 @@ export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketH
         if (destAddr === 0) continue; // unused slot
         // destOffset[i] corresponds to srcOffset[i+1] because the first destOffset is for the first material which is implicit
         const materialId = adGifSrcOffsets[i + 1] / SIZEOF_TIE_AD_GIFS;
-        imaginaryGsBuffer.writeSetMaterial(destAddr, tieCommandSizes.setMaterial, materialId);
+        const nextAdGif = adGifs[materialId];
+        const clamp = nextAdGif.clamp.low + (nextAdGif.clamp.high << 2);
+        imaginaryGsBuffer.writeSetMaterial(destAddr, tieCommandSizes.setMaterial, { material: materialId, clamp });
     }
 
     return {
@@ -1493,9 +1498,10 @@ export function readCollisionMeshGrid(view: DataViewExt) {
                     const axisX = readCollisionAxis_YX(view.subview(xOffset));
                     let worldX = axisX.coord * 4 + 2;
                     for (let x = 0; x < axisX.count; x++) {
+                        const maxLength16 = axisX.offsets[x] & 0xFF; // the length of the pointed-to data divided by 16, rounded up
                         const octantOffset = axisX.offsets[x] >> 8;
                         if (octantOffset !== 0) {
-                            octants.push(readCollisionOctant(view.subview(octantOffset), worldX, worldY, worldZ));
+                            octants.push(readCollisionOctant(view.subview(octantOffset), maxLength16, worldX, worldY, worldZ));
                         }
                         worldX += 4;
                     }
@@ -1529,7 +1535,7 @@ export type CollisionOctant = {
         type: number,
     }[],
 };
-export function readCollisionOctant(view: DataViewExt, worldX: number, worldY: number, worldZ: number): CollisionOctant {
+export function readCollisionOctant(view: DataViewExt, maxLength16: number, worldX: number, worldY: number, worldZ: number): CollisionOctant {
     const faceCount = view.getUint16(0x0);
     const vertCount = view.getUint8(0x2);
     const quadCount = view.getUint8(0x3);
@@ -1562,6 +1568,8 @@ export function readCollisionOctant(view: DataViewExt, worldX: number, worldY: n
         faces[i].quad = true;
     }
     ptr += quadCount * 0x1;
+
+    assert(Math.ceil(ptr / 0x10) === maxLength16);
 
     return {
         pos: {

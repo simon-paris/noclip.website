@@ -12,11 +12,11 @@ export class TfragProgram extends DeviceProgram {
     public static a_Position = 0;
     public static a_Normal = 1;
     public static a_Rgba = 2;
-    public static a_TextureLayer = 3;
+    public static a_TextureParams = 3;
     public static a_ST = 4;
     public static a_DirLightIndices = 5;
 
-    public static elementsPerVertex = 17; // position(3) + normal(3) + rgba(4) + texture(1) + st(2) + lights(4) = 17
+    public static elementsPerVertex = 18; // position(3) + normal(3) + rgba(4) + texture(2) + st(2) + lights(4) = 18
 
     public static ub_SceneParams = 0;
     public static ub_TfragParams = 1;
@@ -32,7 +32,11 @@ layout(std140) uniform ub_TfragParams {
     Mat4x4 u_WorldFromLocal;
 };
 
-layout(location = 0) uniform sampler2DArray u_Texture;
+layout(location = 0) uniform sampler2DArray u_Texture_16;
+layout(location = 1) uniform sampler2DArray u_Texture_32;
+layout(location = 2) uniform sampler2DArray u_Texture_64;
+layout(location = 3) uniform sampler2DArray u_Texture_128;
+layout(location = 4) uniform sampler2DArray u_Texture_256;
 
 `;
 
@@ -41,14 +45,15 @@ layout(location = 0) uniform sampler2DArray u_Texture;
 layout(location = ${TfragProgram.a_Position}) in vec3 a_Position;
 layout(location = ${TfragProgram.a_Normal}) in vec3 a_Normal;
 layout(location = ${TfragProgram.a_Rgba}) in vec4 a_Rgba;
-layout(location = ${TfragProgram.a_TextureLayer}) in float a_TextureLayer;
+layout(location = ${TfragProgram.a_TextureParams}) in vec2 a_TextureParams;
 layout(location = ${TfragProgram.a_ST}) in vec2 a_ST;
 layout(location = ${TfragProgram.a_DirLightIndices}) in vec4 a_DirLightIndices;
 
 out vec3 v_Normal;
 out vec4 v_Rgba;
 out vec2 v_ST;
-flat out float v_TextureLayer;
+flat out int v_TextureLayer;
+flat out int v_Clamp;
 
 ${RatchetShaderLib.LightingFunctions}
 
@@ -64,20 +69,28 @@ void main() {
 
     v_ST = a_ST.xy;
     v_Normal = normal;
-    v_TextureLayer = a_TextureLayer;
+    v_TextureLayer = int(a_TextureParams.x);
+    v_Clamp = int(a_TextureParams.y);
 }
 `;
 
     public override frag = `
 ${RatchetShaderLib.CommonFragmentShader}
+${RatchetShaderLib.Sampler}
 
 in vec3 v_Normal;
 in vec4 v_Rgba;
 in vec2 v_ST;
-flat in float v_TextureLayer;
+flat in int v_TextureLayer;
+flat in int v_Clamp;
 
 void main() {
-    gl_FragColor = commonFragmentShader(v_Rgba, texture(SAMPLER_2DArray(u_Texture), vec3(v_ST, v_TextureLayer)));
+    vec2 texRemap = u_TextureRemaps.tfrags[v_TextureLayer].xy;
+    vec2 ddx = dFdx(v_ST);
+    vec2 ddy = dFdy(v_ST);
+    float gradSq = max(dot(ddx, ddx), dot(ddy, ddy));
+    vec4 textureSample = ratchetSampler(texRemap.x, texRemap.y, v_Clamp, v_ST, gradSq);
+    gl_FragColor = commonFragmentShader(v_Rgba, textureSample);
 }
 `;
 
@@ -115,9 +128,9 @@ export class TfragGeometry {
                 { location: TfragProgram.a_Position, format: GfxFormat.F32_RGB, bufferByteOffset: 0, bufferIndex: 0, },
                 { location: TfragProgram.a_Normal, format: GfxFormat.F32_RGB, bufferByteOffset: 3 * 0x4, bufferIndex: 0, },
                 { location: TfragProgram.a_Rgba, format: GfxFormat.F32_RGBA, bufferByteOffset: 6 * 0x4, bufferIndex: 0, },
-                { location: TfragProgram.a_TextureLayer, format: GfxFormat.F32_R, bufferByteOffset: 10 * 0x4, bufferIndex: 0, },
-                { location: TfragProgram.a_ST, format: GfxFormat.F32_RG, bufferByteOffset: 11 * 0x4, bufferIndex: 0, },
-                { location: TfragProgram.a_DirLightIndices, format: GfxFormat.F32_RGBA, bufferByteOffset: 13 * 0x4, bufferIndex: 0, },
+                { location: TfragProgram.a_TextureParams, format: GfxFormat.F32_RG, bufferByteOffset: 10 * 0x4, bufferIndex: 0, },
+                { location: TfragProgram.a_ST, format: GfxFormat.F32_RG, bufferByteOffset: 12 * 0x4, bufferIndex: 0, },
+                { location: TfragProgram.a_DirLightIndices, format: GfxFormat.F32_RGBA, bufferByteOffset: 14 * 0x4, bufferIndex: 0, },
             ],
             vertexBufferDescriptors: [
                 { byteStride: TfragProgram.elementsPerVertex * 0x4, frequency: GfxVertexBufferFrequency.PerVertex, },
@@ -154,6 +167,7 @@ type TfragVertex = {
 
 type TfragVertexWithTexture = TfragVertex & {
     textureLayer: number,
+    clamp: number,
 }
 
 export function assembleTfragGeometry(tfrags: Tfrag[], tfragTextures: PaletteTexture[]) {
@@ -208,6 +222,7 @@ function flattenTfragVerts(triangleGroups: TfragTriangleGroup[]) {
             result.push({
                 ...vert,
                 textureLayer: group.material,
+                clamp: group.clamp,
             });
         }
     }
@@ -305,17 +320,19 @@ function lightToNormal(light: TfragLight) {
 
 type TfragTriangleGroup = {
     material: number,
+    clamp: number,
     indices: number[],
     verts: TfragVertex[],
 }
 
-// decode the strips into triangle lists, grouped by material
+// decode the strips into triangle lists, preserving materials and clamp settings
 function stripsIntoTriangles(tfragId: number, strips: TfragStrip[], indices: Uint8Array, adGifs: TfragAdGifs[], verts: TfragVertex[]): TfragTriangleGroup[] {
     const groups: TfragTriangleGroup[] = [];
 
     let stripPtr = 0;
     let vertexPtr = 0;
     let activeMaterial = -1;
+    let activeClamp = 0;
 
 
     outer: while (true) {
@@ -340,7 +357,9 @@ function stripsIntoTriangles(tfragId: number, strips: TfragStrip[], indices: Uin
                 // do nothing
             } else if (strip.adGifOffset >= 0) {
                 const localAdGifIndex = strip.adGifOffset / 0x5;
-                activeMaterial = adGifs[localAdGifIndex] ? adGifs[localAdGifIndex].tex0.low : -1;
+                assert(adGifs[localAdGifIndex] !== undefined);
+                activeMaterial = adGifs[localAdGifIndex].tex0.low;
+                activeClamp = adGifs[localAdGifIndex].clamp.low + (adGifs[localAdGifIndex].clamp.high << 2);
             } else {
                 throw new Error(`invalid adGifOffset`);
             }
@@ -356,7 +375,7 @@ function stripsIntoTriangles(tfragId: number, strips: TfragStrip[], indices: Uin
         }
         vertexPtr += 2;
 
-        groups.push({ indices: newIndices, verts: newVerts, material: activeMaterial });
+        groups.push({ indices: newIndices, verts: newVerts, material: activeMaterial, clamp: activeClamp });
 
         stripPtr++;
     }
@@ -379,6 +398,7 @@ function encodeVerts(verts: TfragVertexWithTexture[]) {
         vertexArrayBuffer[ptr++] = vert.b;
         vertexArrayBuffer[ptr++] = vert.a;
         vertexArrayBuffer[ptr++] = vert.textureLayer;
+        vertexArrayBuffer[ptr++] = vert.clamp;
         vertexArrayBuffer[ptr++] = vert.s;
         vertexArrayBuffer[ptr++] = vert.t;
         vertexArrayBuffer[ptr++] = vert.light0;

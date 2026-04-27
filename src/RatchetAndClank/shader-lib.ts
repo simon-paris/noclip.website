@@ -7,6 +7,7 @@ export const RatchetShaderLib = {
         4, // sky color
         4 + 4, // fog params
         (4 + 4 + 4 + 4) * 16, // directional lights
+        3 * 256 * 4, // texture remaps (3 arrays of 256 vec4s)
     ].reduce((a, b) => a + b, 0),
     SceneParams: `
 
@@ -27,6 +28,13 @@ struct DirectionLight {
     vec4 colorB;
 };
 
+struct TextureRemaps {
+    // x = size bucket, y = index within bucket, z/w unused padding
+    vec4 tfrags[256];
+    vec4 ties[256];
+    vec4 shrubs[256];
+};
+
 layout(std140) uniform ub_SceneParams {
     Mat4x4 u_ClipFromWorld;
     vec3 u_CameraPosWorld;
@@ -37,6 +45,7 @@ layout(std140) uniform ub_SceneParams {
     vec4 u_SkyColor;
     FogParams u_FogParams;
     DirectionLight u_DirectionLights[16];
+    TextureRemaps u_TextureRemaps;
 };
 
     `,
@@ -137,4 +146,95 @@ vec4 commonFragmentShader(vec4 rgba, vec4 textureSample) {
 }
 
     `,
+    Sampler: `
+/*
+Custom texture sampling function that can dynamically select textures and sampling parameters.
+- bucket: the atlas to read from
+- slice: the slice within the atlas
+- clampRegister: bit 1 = S clamp, bit 3 = T clamp (other bits are used for region clamp, not supported)
+- st: the texture coordinates
+- grad: the magnitude squared of the derivative of the texture coordinates, for mip selection
+*/
+vec4 ratchetSampler(float bucket, float slice, int clampRegister, vec2 st, float grad) {
+    float mipLevel = 0.5 * log2(max(grad, 0.0001));
+    float maxMipLevel = log2(bucket);
+    mipLevel = clamp(mipLevel, 0.0, maxMipLevel);
+    int lod = int(mipLevel);
+    
+    vec2 texSize = vec2(bucket);
+    vec2 texelCoord = st * texSize - 0.5;
+    
+    vec2 texelFloor = floor(texelCoord);
+    vec2 frac = texelCoord - texelFloor;
+    
+    ivec2 tc00 = ivec2(texelFloor);
+    ivec2 tc10 = tc00 + ivec2(1, 0);
+    ivec2 tc01 = tc00 + ivec2(0, 1);
+    ivec2 tc11 = tc00 + ivec2(1, 1);
+    
+    int iTexSize = int(bucket);
+    bool clampS = (clampRegister & 1) != 0;
+    bool clampT = (clampRegister & 4) != 0;
+    
+    if (clampS) {
+        tc00.x = clamp(tc00.x, 0, iTexSize - 1);
+        tc10.x = clamp(tc10.x, 0, iTexSize - 1);
+        tc01.x = clamp(tc01.x, 0, iTexSize - 1);
+        tc11.x = clamp(tc11.x, 0, iTexSize - 1);
+    } else {
+        tc00.x = int(mod(float(tc00.x), bucket));
+        tc10.x = int(mod(float(tc10.x), bucket));
+        tc01.x = int(mod(float(tc01.x), bucket));
+        tc11.x = int(mod(float(tc11.x), bucket));
+    }
+    
+    if (clampT) {
+        tc00.y = clamp(tc00.y, 0, iTexSize - 1);
+        tc10.y = clamp(tc10.y, 0, iTexSize - 1);
+        tc01.y = clamp(tc01.y, 0, iTexSize - 1);
+        tc11.y = clamp(tc11.y, 0, iTexSize - 1);
+    } else {
+        tc00.y = int(mod(float(tc00.y), bucket));
+        tc10.y = int(mod(float(tc10.y), bucket));
+        tc01.y = int(mod(float(tc01.y), bucket));
+        tc11.y = int(mod(float(tc11.y), bucket));
+    }
+    
+    vec4 s00, s10, s01, s11;
+    if (bucket == 16.0) {
+        s00 = texelFetch(TEXTURE(u_Texture_16), ivec3(tc00, slice), lod);
+        s10 = texelFetch(TEXTURE(u_Texture_16), ivec3(tc10, slice), lod);
+        s01 = texelFetch(TEXTURE(u_Texture_16), ivec3(tc01, slice), lod);
+        s11 = texelFetch(TEXTURE(u_Texture_16), ivec3(tc11, slice), lod);
+    } else if (bucket == 32.0) {
+        s00 = texelFetch(TEXTURE(u_Texture_32), ivec3(tc00, slice), lod);
+        s10 = texelFetch(TEXTURE(u_Texture_32), ivec3(tc10, slice), lod);
+        s01 = texelFetch(TEXTURE(u_Texture_32), ivec3(tc01, slice), lod);
+        s11 = texelFetch(TEXTURE(u_Texture_32), ivec3(tc11, slice), lod);
+    } else if (bucket == 64.0) {
+        s00 = texelFetch(TEXTURE(u_Texture_64), ivec3(tc00, slice), lod);
+        s10 = texelFetch(TEXTURE(u_Texture_64), ivec3(tc10, slice), lod);
+        s01 = texelFetch(TEXTURE(u_Texture_64), ivec3(tc01, slice), lod);
+        s11 = texelFetch(TEXTURE(u_Texture_64), ivec3(tc11, slice), lod);
+    } else if (bucket == 128.0) {
+        s00 = texelFetch(TEXTURE(u_Texture_128), ivec3(tc00, slice), lod);
+        s10 = texelFetch(TEXTURE(u_Texture_128), ivec3(tc10, slice), lod);
+        s01 = texelFetch(TEXTURE(u_Texture_128), ivec3(tc01, slice), lod);
+        s11 = texelFetch(TEXTURE(u_Texture_128), ivec3(tc11, slice), lod);
+    } else if (bucket == 256.0) {
+        s00 = texelFetch(TEXTURE(u_Texture_256), ivec3(tc00, slice), lod);
+        s10 = texelFetch(TEXTURE(u_Texture_256), ivec3(tc10, slice), lod);
+        s01 = texelFetch(TEXTURE(u_Texture_256), ivec3(tc01, slice), lod);
+        s11 = texelFetch(TEXTURE(u_Texture_256), ivec3(tc11, slice), lod);
+    } else {
+        return vec4(1.0, 0.0, 1.0, 1.0);
+    }
+    
+    vec4 s0 = mix(s00, s10, frac.x);
+    vec4 s1 = mix(s01, s11, frac.x);
+    vec4 res = mix(s0, s1, frac.y);
+    return res;
+}
+`
 };
+
