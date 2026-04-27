@@ -1,6 +1,6 @@
-import { mat4, quat, vec3, vec4 } from "gl-matrix";
+import { mat4, quat, vec3 } from "gl-matrix";
 import { makeBackbufferDescSimple, standardFullClearRenderPassDescriptor } from "../gfx/helpers/RenderGraphHelpers";
-import { fillMatrix4x4, fillVec3v, fillVec4, fillVec4v } from "../gfx/helpers/UniformBufferHelpers";
+import { fillMatrix4x4, fillVec3v, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
 import { GfxBlendFactor, GfxBlendMode, GfxChannelWriteMask, GfxCompareMode, GfxCullMode, GfxDevice, GfxMipFilterMode, GfxProgram, GfxSampler, GfxSamplerBinding, GfxSamplerFormatKind, GfxTexFilterMode, GfxTexture, GfxTextureDimension, GfxWrapMode } from "../gfx/platform/GfxPlatform";
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
@@ -15,15 +15,16 @@ import { buildLevelFromFiles, LevelFiles, ShrubInstanceBatch, TieInstanceBatch }
 import { createMegaBuffer, MegaBuffer, noclipSpaceFromRatchetSpace, lineChainToLineSegments } from "./utils";
 import { TfragGeometry, TfragProgram } from "./tfrag";
 import { ShrubGeometry, ShrubProgram } from "./shrub";
-import { colorNewFromRGBA, White } from "../Color";
+import { colorNewFromRGBA, OpaqueBlack, White } from "../Color";
 import { SkyGeometry, SkyProgram } from "./sky";
 import { RatchetShaderLib } from "./shader-lib";
 import { Frustum } from "../Geometry";
-import { MobyInstance } from "./structs-gameplay";
-import { assert, nArray } from "../util";
-import { createGfxTextureArrayForPaletteTextures, createGfxTextureForPaletteTexture, createTextureAtlases, createTieRgbaTexture, TextureAtlases } from "./textures";
+import { DirectionLightInstance, GameplayHeader, LevelSettings, MobyInstance, PointLightInstance, ShrubInstance, Spline, TieInstance } from "./structs-gameplay";
+import { assert } from "../util";
+import { createGfxTextureForPaletteTexture, createTextureAtlases, createTieRgbaTexture, PaletteTexture, TextureAtlases } from "./textures";
 import { CollisionGeometry, CollisionProgram } from "./collision";
 import { IS_DEVELOPMENT } from "../BuildVersion";
+import { CollisionOctant, LevelCoreHeader, Sky, Tfrag } from "./structs-core";
 
 const pathBase = (gameNumber: number) => `RatchetAndClank${gameNumber}`;
 
@@ -57,40 +58,55 @@ class RatchetAndClank1Scene implements SceneGfx {
         showPaths: false,
     };
 
-    // raw data files
-    private files:
-        | { ready: false; }
-        | ({ ready: true, } & LevelFiles) = {
-            ready: false,
-        };
+    private files: LevelFiles | null = null;
 
-    // parsed and assembled level structure
-    private level: {
-        ready: false,
-    } | ReturnType<typeof buildLevelFromFiles> = {
-            ready: false,
-        };
+    private levelResources: {
+        levelCoreHeader: LevelCoreHeader | null,
+        gameplayHeader: GameplayHeader | null,
 
-    private textures = {
-        textureAtlases: null as null | TextureAtlases,
-        tieRgbaTexture: null as null | GfxTexture,
-        skyTextures: new Array<GfxTexture>(),
+        levelSettings: LevelSettings | null,
+        paths: Spline[] | null,
+        grindPaths: Spline[] | null,
+        directionLights: DirectionLightInstance[] | null,
+        pointLights: PointLightInstance[] | null,
+        collision: CollisionOctant[] | null,
+
+        tfrags: Tfrag[] | null,
+        tfragTextures: PaletteTexture[] | null,
+
+        ties: TieInstanceBatch[] | null,
+        tieInstances: TieInstance[] | null,
+        tieTextures: PaletteTexture[] | null,
+
+        shrubs: ShrubInstanceBatch[] | null,
+        shrubInstances: ShrubInstance[] | null,
+        shrubTextures: PaletteTexture[] | null,
+
+        sky: Sky | null,
+        skyTextures: PaletteTexture[] | null,
+
+        mobyInstances: MobyInstance[] | null,
+    };
+
+    private textures: {
+        textureAtlases: TextureAtlases | null,
+        tieRgbaTexture: GfxTexture | null,
+        skyTextures: GfxTexture[],
     };
 
     private textureMappings: {
-        tfrag: GfxSamplerBinding[],
-        tie: GfxSamplerBinding[],
-        shrub: GfxSamplerBinding[],
-        sky: GfxSamplerBinding[],
+        tfrag: GfxSamplerBinding[] | null,
+        tie: GfxSamplerBinding[] | null,
+        shrub: GfxSamplerBinding[] | null,
+        sky: GfxSamplerBinding[] | null,
     };
 
-    // meshes generated from level data
-    private geometries = {
-        tfrag: null as null | TfragGeometry,
-        ties: new Map<number, (TieGeometry | null)[]>(), // map of oClass to array of LOD geometries
-        shrubs: new Map<number, ShrubGeometry>(),
-        skyShells: new Array<SkyGeometry>(),
-        collision: null as null | CollisionGeometry,
+    private geometries: {
+        tfrag: TfragGeometry | null,
+        ties: Map<number, (TieGeometry | null)[]>, // map of oClass to array of LOD geometries
+        shrubs: Map<number, ShrubGeometry>,
+        skyShells: SkyGeometry[],
+        collision: CollisionGeometry | null,
     };
 
     private instanceDataBuffer: MegaBuffer;
@@ -104,6 +120,28 @@ class RatchetAndClank1Scene implements SceneGfx {
         this.shrubProgram = cache.createProgram(new ShrubProgram());
         this.skyProgram = cache.createProgram(new SkyProgram());
         this.collisionProgram = cache.createProgram(new CollisionProgram());
+
+        this.levelResources = {
+            levelCoreHeader: null,
+            gameplayHeader: null,
+            levelSettings: null,
+            paths: null,
+            grindPaths: null,
+            directionLights: null,
+            pointLights: null,
+            collision: null,
+            tfrags: null,
+            tfragTextures: null,
+            ties: null,
+            tieInstances: null,
+            tieTextures: null,
+            shrubs: null,
+            shrubInstances: null,
+            shrubTextures: null,
+            sky: null,
+            skyTextures: null,
+            mobyInstances: null,
+        };
 
         this.samplerGeneral = cache.createSampler({
             minFilter: GfxTexFilterMode.Point,
@@ -121,16 +159,38 @@ class RatchetAndClank1Scene implements SceneGfx {
             wrapT: GfxWrapMode.Clamp,
         });
 
+        this.textures = {
+            textureAtlases: null,
+            tieRgbaTexture: null,
+            skyTextures: [],
+        }
+
+        this.textureMappings = {
+            tfrag: null,
+            tie: null,
+            shrub: null,
+            sky: null,
+        };
+
+        this.geometries = {
+            tfrag: null,
+            ties: new Map(),
+            shrubs: new Map(),
+            skyShells: [],
+            collision: null,
+        }
+
         this.instanceDataBuffer = createMegaBuffer(cache.device, "Instance Data", 1024 * 1024);
 
         this.fetchLevelFiles().then(() => {
-            if (!this.files.ready) {
-                throw new Error("Level files not ready");
+            if (!this.files) {
+                throw new Error("Files not loaded");
             }
-            this.level = buildLevelFromFiles(this.files);
+
+            this.levelResources = buildLevelFromFiles(this.files);
 
             if (IS_DEVELOPMENT) {
-                console.log(this.level);
+                console.log(this.levelResources);
             }
 
             this.buildAssetGeometry();
@@ -152,7 +212,6 @@ class RatchetAndClank1Scene implements SceneGfx {
         const [coreIndexBuffer, coreDataBuffer, gameplayBuffer, gsRamBuffer] = await Promise.all(promises);
 
         this.files = {
-            ready: true,
             coreIndexBuffer,
             coreDataBuffer,
             gameplayBuffer,
@@ -161,16 +220,19 @@ class RatchetAndClank1Scene implements SceneGfx {
     }
 
     private buildAssetGeometry() {
-        if (!this.level.ready) {
-            throw new Error("Not ready")
-        }
-
         const cache = this.renderHelper.renderCache;
 
-        const { tfrags, tfragTextures } = this.level;
+        // tfrags
+        const { tfrags, tfragTextures } = this.levelResources;
+        assert(tfrags !== null);
+        assert(tfragTextures !== null);
         this.geometries.tfrag = new TfragGeometry(cache, tfrags, tfragTextures);
 
-        const { ties, tieInstances, tieTextures } = this.level;
+        // ties
+        const { ties, tieInstances, tieTextures } = this.levelResources;
+        assert(ties !== null);
+        assert(tieInstances !== null);
+        assert(tieTextures !== null);
         for (const { oClass, tieClass, textureIndices } of ties) {
             this.geometries.ties.set(oClass, [null, null, null]);
             for (let i = 0; i < 3; i++) {
@@ -180,14 +242,34 @@ class RatchetAndClank1Scene implements SceneGfx {
         }
         this.textures.tieRgbaTexture = createTieRgbaTexture(cache.device, tieInstances);
 
-        const { shrubs, shrubTextures } = this.level;
+        // shrubs
+        const { shrubs, shrubTextures } = this.levelResources;
+        assert(shrubs !== null);
+        assert(shrubTextures !== null);
         for (const { oClass, shrubClass, textureIndices } of shrubs) {
             this.geometries.shrubs.set(oClass, new ShrubGeometry(cache, shrubClass, textureIndices));
         }
 
+        // texture atlases shared by tfrags, ties, and shrubs
         this.textures.textureAtlases = createTextureAtlases(cache.device, tfragTextures, tieTextures, shrubTextures);
+        const textureAtlasMappings = [
+            { gfxTexture: this.textures.textureAtlases.gfxTextures[16], gfxSampler: this.samplerGeneral },
+            { gfxTexture: this.textures.textureAtlases.gfxTextures[32], gfxSampler: this.samplerGeneral },
+            { gfxTexture: this.textures.textureAtlases.gfxTextures[64], gfxSampler: this.samplerGeneral },
+            { gfxTexture: this.textures.textureAtlases.gfxTextures[128], gfxSampler: this.samplerGeneral },
+            { gfxTexture: this.textures.textureAtlases.gfxTextures[256], gfxSampler: this.samplerGeneral },
+        ];
+        this.textureMappings.shrub = textureAtlasMappings;
+        this.textureMappings.tfrag = textureAtlasMappings;
+        this.textureMappings.tie = [
+            ...textureAtlasMappings,
+            { gfxTexture: this.textures.tieRgbaTexture!, gfxSampler: this.samplerGeneral },
+        ];
 
-        const { sky, skyTextures } = this.level;
+        // sky
+        const { sky, skyTextures } = this.levelResources;
+        assert(sky !== null);
+        assert(skyTextures !== null);
         for (let i = 0; i < sky.shells.length; i++) {
             this.geometries.skyShells.push(new SkyGeometry(cache, sky.shells[i]));
         }
@@ -197,22 +279,29 @@ class RatchetAndClank1Scene implements SceneGfx {
             this.textures.skyTextures.push(gfxTextures.pixelsTexture);
             this.textureHolder.viewerTextures.push({ gfxTexture: gfxTextures.pixelsTexture });
         }
+        this.textureMappings.sky = this.textures.skyTextures.map((gfxTexture) => ({ gfxTexture, gfxSampler: this.samplerSky }));
 
-        const { collision } = this.level;
-        this.geometries.collision = new CollisionGeometry(cache, collision.meshGrid);
+        // collision
+        const { collision } = this.levelResources;
+        assert(collision !== null);
+        this.geometries.collision = new CollisionGeometry(cache, collision);
 
         if (IS_DEVELOPMENT) {
             console.log(this.geometries);
         }
-
         this.textureHolder.onnewtextures();
     }
 
     private fillSceneParams(template: GfxRenderInst, viewerInput: ViewerRenderInput, cameraPosition: vec3): void {
-        if (!this.level.ready) {
-            throw new Error("Not ready");
-        }
-        const levelSettings = this.level.levelSettings;
+        const levelSettings = this.levelResources.levelSettings ?? {
+            backgroundColor: OpaqueBlack,
+            skyColor: OpaqueBlack,
+            fogColor: OpaqueBlack,
+            fogNearDistance: 0,
+            fogFarDistance: 1000000,
+            fogNearIntensity: 0,
+            fogFarIntensity: 0,
+        };
 
         const data = template.allocateUniformBufferF32(TieProgram.ub_SceneParams, RatchetShaderLib.SceneParamsSizeInFloats);
         let offs = 0;
@@ -226,10 +315,10 @@ class RatchetAndClank1Scene implements SceneGfx {
         offs += fillVec4(data, offs, nearClip, farClip, 0, 0);
 
         // background color (4 floats)
-        const backgroundColor = this.level.levelSettings.backgroundColor;
+        const backgroundColor = levelSettings.backgroundColor;
         offs += fillVec4(data, offs, backgroundColor.r / 0xFF, backgroundColor.g / 0xFF, backgroundColor.b / 0xFF, 1);
         // sky color (4 floats)
-        const skyColor = this.level.sky.header.skyColor;
+        const skyColor = this.levelResources.sky?.header.skyColor ?? OpaqueBlack;
         offs += fillVec4(data, offs, skyColor.r / 0xFF, skyColor.g / 0xFF, skyColor.b / 0xFF, skyColor.a / 0xFF);
 
         // fog params (8 floats)
@@ -248,7 +337,7 @@ class RatchetAndClank1Scene implements SceneGfx {
         }
 
         // lights (16 * 16 floats)
-        const directionalLights = this.level.directionLights;
+        const directionalLights = this.levelResources.directionLights ?? [];
         for (let i = 0; i < 16; i++) {
             if (i < directionalLights.length) {
                 const light = directionalLights[i];
@@ -266,8 +355,7 @@ class RatchetAndClank1Scene implements SceneGfx {
 
         // texture remaps (3 * 256 * 4 floats)
         const { textureAtlases } = this.textures;
-        assert(textureAtlases !== null);
-        const remapArrays = [textureAtlases.tfragTextureRemap, textureAtlases.tieTextureRemap, textureAtlases.shrubTextureRemap];
+        const remapArrays = textureAtlases ? [textureAtlases.tfragTextureRemap, textureAtlases.tieTextureRemap, textureAtlases.shrubTextureRemap] : [[], [], []];
         for (const remapArray of remapArrays) {
             for (let i = 0; i < 256; i++) {
                 const remap = remapArray[i];
@@ -280,7 +368,8 @@ class RatchetAndClank1Scene implements SceneGfx {
     }
 
     private renderTfrag(cameraPosition: vec3): void {
-        assert(this.textures.textureAtlases !== null);
+        if (!this.settings.enableTfrag) return;
+        if (!this.textureMappings.tfrag) return;
 
         const objectMatrix = noclipSpaceFromRatchetSpace; // the tfrag has no transform, it's already in world space
 
@@ -320,22 +409,17 @@ class RatchetAndClank1Scene implements SceneGfx {
             ],
             null,
         );
-        renderInst.setSamplerBindingsFromTextureMappings([
-            { gfxTexture: this.textures.textureAtlases.gfxTextures[16], gfxSampler: this.samplerGeneral },
-            { gfxTexture: this.textures.textureAtlases.gfxTextures[32], gfxSampler: this.samplerGeneral },
-            { gfxTexture: this.textures.textureAtlases.gfxTextures[64], gfxSampler: this.samplerGeneral },
-            { gfxTexture: this.textures.textureAtlases.gfxTextures[128], gfxSampler: this.samplerGeneral },
-            { gfxTexture: this.textures.textureAtlases.gfxTextures[256], gfxSampler: this.samplerGeneral },
-        ]);
+        renderInst.setSamplerBindingsFromTextureMappings(this.textureMappings.tfrag);
         renderInst.setDrawCount(tfragGeometry.lods[lodLevel].vertexCount, 0);
         this.renderInstList.submitRenderInst(renderInst);
 
     }
 
     private renderTie(tieInstanceBatch: TieInstanceBatch, cameraPosition: vec3, cameraFrustum: Frustum): void {
-        if (!this.level.ready) return;
+        if (!this.settings.enableTies) return;
+        if (!this.textureMappings.tie) return;
 
-        const { tieClass, textureIndices, oClass } = tieInstanceBatch;
+        const { tieClass, oClass } = tieInstanceBatch;
 
         const scratchVec3 = vec3.create();
 
@@ -378,7 +462,7 @@ class RatchetAndClank1Scene implements SceneGfx {
             if (modelLodLevel === 2 && !hasLod2) { modelLodLevel = 1; lodMorphFactor = 0; }
             if (modelLodLevel === 1 && !hasLod1) { modelLodLevel = 0; lodMorphFactor = 0; }
 
-            // this is much slower than doing nothing because of the jumps into rust
+            // this is much slower than doing nothing
             // // find bounding sphere and frustum cull
             // const objectScale = Math.hypot(objectMatrix[0], objectMatrix[1], objectMatrix[2]);
             // if (!cameraFrustum.containsSphere(position, 0x7FFF / 1024 * tieClass.scale * objectScale)) {
@@ -403,6 +487,7 @@ class RatchetAndClank1Scene implements SceneGfx {
             if (!tieGeometry) continue;
 
             const renderInst = this.renderHelper.renderInstManager.newRenderInst();
+            renderInst.setGfxProgram(this.tieProgram);
             renderInst.setBindingLayouts([
                 {
                     numSamplers: 6,
@@ -417,7 +502,6 @@ class RatchetAndClank1Scene implements SceneGfx {
                     ],
                 }
             ]);
-            renderInst.setGfxProgram(this.tieProgram);
 
             const instanceDataStartBytes = this.instanceDataBuffer.ptr * 4;
             for (let i = 0; i < tieInstancesToDraw.length; i++) {
@@ -436,18 +520,7 @@ class RatchetAndClank1Scene implements SceneGfx {
                 null,
             );
 
-            renderInst.setSamplerBindingsFromTextureMappings([
-                { gfxTexture: this.textures.textureAtlases!.gfxTextures[16], gfxSampler: this.samplerGeneral },
-                { gfxTexture: this.textures.textureAtlases!.gfxTextures[32], gfxSampler: this.samplerGeneral },
-                { gfxTexture: this.textures.textureAtlases!.gfxTextures[64], gfxSampler: this.samplerGeneral },
-                { gfxTexture: this.textures.textureAtlases!.gfxTextures[128], gfxSampler: this.samplerGeneral },
-                { gfxTexture: this.textures.textureAtlases!.gfxTextures[256], gfxSampler: this.samplerGeneral },
-                {
-                    gfxTexture: this.textures.tieRgbaTexture!,
-                    gfxSampler: this.samplerGeneral,
-                },
-            ]);
-
+            renderInst.setSamplerBindingsFromTextureMappings(this.textureMappings.tie);
             renderInst.setInstanceCount(tieInstancesToDraw.length);
             renderInst.setDrawCount(tieGeometry.vertexCount, 0);
             this.renderInstList.submitRenderInst(renderInst);
@@ -455,6 +528,8 @@ class RatchetAndClank1Scene implements SceneGfx {
     }
 
     private renderMoby(mobyInstance: MobyInstance, cameraWorldMatrix: mat4, cameraPos: vec3): void {
+        if (!this.settings.enableMobys) return;
+
         const pos = vec3.fromValues(mobyInstance.position.x, mobyInstance.position.y, mobyInstance.position.z);
         vec3.transformMat4(pos, pos, noclipSpaceFromRatchetSpace);
         this.renderHelper.debugDraw.drawLocator(pos, 0.3, White);
@@ -468,9 +543,11 @@ class RatchetAndClank1Scene implements SceneGfx {
     }
 
     private renderShrubs(shrubInstanceBatch: ShrubInstanceBatch, cameraPosition: vec3, cameraFrustum: Frustum): void {
-        if (!this.level.ready) return;
+        if (!this.settings.enableShrubs) return;
+        if (!this.textureMappings.shrub) return;
+        if (!this.levelResources.directionLights) return;
 
-        const { shrubClass, instances: shrubInstances, textureIndices } = shrubInstanceBatch;
+        const { shrubClass, instances: shrubInstances } = shrubInstanceBatch;
         const oClass = shrubClass.header.oClass;
 
         const shrubGeometry = this.geometries.shrubs.get(oClass);
@@ -508,7 +585,7 @@ class RatchetAndClank1Scene implements SceneGfx {
             // }
 
             for (const dirLightIndex of shrubInstance.directionalLights) {
-                if (dirLightIndex < 0 || (dirLightIndex >= this.level.directionLights.length && dirLightIndex !== 0xF)) {
+                if (dirLightIndex < 0 || (dirLightIndex >= this.levelResources.directionLights.length && dirLightIndex !== 0xF)) {
                     throw new Error("invalid directional light index");
                 }
             }
@@ -525,6 +602,7 @@ class RatchetAndClank1Scene implements SceneGfx {
         if (!shrubInstancesToDraw.length) return;
 
         const renderInst = this.renderHelper.renderInstManager.newRenderInst();
+        renderInst.setGfxProgram(this.shrubProgram);
         renderInst.setBindingLayouts([
             {
                 numSamplers: 5,
@@ -538,7 +616,6 @@ class RatchetAndClank1Scene implements SceneGfx {
                 ],
             }
         ]);
-        renderInst.setGfxProgram(this.shrubProgram);
 
         // per instance data
         const instanceDataStartBytes = this.instanceDataBuffer.ptr * 4;
@@ -559,21 +636,15 @@ class RatchetAndClank1Scene implements SceneGfx {
             ],
             null,
         );
-
-        renderInst.setSamplerBindingsFromTextureMappings([
-            { gfxTexture: this.textures.textureAtlases!.gfxTextures[16], gfxSampler: this.samplerGeneral },
-            { gfxTexture: this.textures.textureAtlases!.gfxTextures[32], gfxSampler: this.samplerGeneral },
-            { gfxTexture: this.textures.textureAtlases!.gfxTextures[64], gfxSampler: this.samplerGeneral },
-            { gfxTexture: this.textures.textureAtlases!.gfxTextures[128], gfxSampler: this.samplerGeneral },
-            { gfxTexture: this.textures.textureAtlases!.gfxTextures[256], gfxSampler: this.samplerGeneral },
-        ]);
-
+        renderInst.setSamplerBindingsFromTextureMappings(this.textureMappings.shrub);
         renderInst.setDrawCount(shrubGeometry.vertexCount, 0);
         renderInst.setInstanceCount(shrubInstancesToDraw.length);
         this.renderInstList.submitRenderInst(renderInst);
     }
 
     private renderCollision(cameraPosition: vec3): void {
+        if (!this.settings.showCollision) return;
+
         const objectMatrix = mat4.create();
         mat4.multiply(objectMatrix, objectMatrix, noclipSpaceFromRatchetSpace);
 
@@ -600,6 +671,8 @@ class RatchetAndClank1Scene implements SceneGfx {
     }
 
     private renderSky(cameraPosition: vec3, time: number, skyShellIndex: number): void {
+        if (!this.settings.enableSky) return;
+
         const objectMatrix = mat4.create();
         mat4.translate(objectMatrix, objectMatrix, cameraPosition);
         mat4.multiply(objectMatrix, objectMatrix, noclipSpaceFromRatchetSpace);
@@ -662,8 +735,6 @@ class RatchetAndClank1Scene implements SceneGfx {
     }
 
     public render(device: GfxDevice, viewerInput: ViewerRenderInput): void {
-        if (!this.level.ready) return;
-
         const cameraPosition = vec3.create();
         mat4.getTranslation(cameraPosition, viewerInput.camera.worldMatrix);
         const cameraFrustum = viewerInput.camera.frustum;
@@ -692,46 +763,34 @@ class RatchetAndClank1Scene implements SceneGfx {
 
         this.renderHelper.debugDraw.beginFrame(viewerInput.camera.projectionMatrix, viewerInput.camera.viewMatrix, viewerInput.backbufferWidth, viewerInput.backbufferHeight);
 
-        if (this.settings.enableSky) {
-            for (let i = 0; i < this.geometries.skyShells.length; i++) {
-                this.renderSky(cameraPosition, viewerInput.time, i);
-            }
+        for (let i = 0; i < this.geometries.skyShells.length; i++) {
+            this.renderSky(cameraPosition, viewerInput.time, i);
         }
+        this.renderCollision(cameraPosition);
+        this.renderTfrag(cameraPosition);
 
-        if (this.settings.showCollision) {
-            this.renderCollision(cameraPosition);
+        const tieBatches = this.levelResources.ties ?? [];
+        for (let i = 0; i < tieBatches.length; i++) {
+            this.renderTie(tieBatches[i], cameraPosition, cameraFrustum);
         }
-
-        if (this.settings.enableTfrag) {
-            this.renderTfrag(cameraPosition);
-        }
-
-        if (this.settings.enableTies) {
-            for (let i = 0; i < this.level.ties.length; i++) {
-                this.renderTie(this.level.ties[i], cameraPosition, cameraFrustum);
-            }
-        }
-
         if (this.settings.enableMobys) {
-            for (let i = 0; i < this.level.mobyInstances.length; i++) {
-                this.renderMoby(this.level.mobyInstances[i], viewerInput.camera.worldMatrix, cameraPosition);
+            const mobyInstances = this.levelResources.mobyInstances ?? [];
+            for (let i = 0; i < mobyInstances.length; i++) {
+                this.renderMoby(mobyInstances[i], viewerInput.camera.worldMatrix, cameraPosition);
             }
         }
-
-        if (this.settings.enableShrubs) {
-            for (let i = 0; i < this.level.shrubs.length; i++) {
-                this.renderShrubs(this.level.shrubs[i], cameraPosition, cameraFrustum);
-            }
+        const shrubBatches = this.levelResources.shrubs ?? [];
+        for (let i = 0; i < shrubBatches.length; i++) {
+            this.renderShrubs(shrubBatches[i], cameraPosition, cameraFrustum);
         }
-
         if (this.settings.showPaths) {
-            for (const path of this.level.paths) {
-                const lines = lineChainToLineSegments(path.points, colorNewFromRGBA(0.1, 0.3, 0.8, 1));
-                for (const line of lines) this.renderHelper.debugDraw.drawLine(line.from, line.to, line.color);
+            const paths = this.levelResources.paths ?? [];
+            const grindPaths = this.levelResources.grindPaths ?? [];
+            for (const path of paths) {
+                for (const line of lineChainToLineSegments(path.points, colorNewFromRGBA(0.1, 0.3, 0.8, 1))) this.renderHelper.debugDraw.drawLine(line.from, line.to, line.color);
             }
-            for (const path of this.level.grindPaths) {
-                const lines = lineChainToLineSegments(path.points, colorNewFromRGBA(0.7, 0.4, 0.1, 1));
-                for (const line of lines) this.renderHelper.debugDraw.drawLine(line.from, line.to, line.color);
+            for (const path of grindPaths) {
+                for (const line of lineChainToLineSegments(path.points, colorNewFromRGBA(0.7, 0.4, 0.1, 1))) this.renderHelper.debugDraw.drawLine(line.from, line.to, line.color);
             }
         }
 
@@ -739,7 +798,7 @@ class RatchetAndClank1Scene implements SceneGfx {
 
         const builder = this.renderHelper.renderGraph.newGraphBuilder();
         const mainColorDesc = makeBackbufferDescSimple(GfxrAttachmentSlot.Color0, viewerInput, standardFullClearRenderPassDescriptor);
-        const backgroundColor = this.level.levelSettings.backgroundColor;
+        const backgroundColor = this.levelResources.levelSettings?.backgroundColor ?? OpaqueBlack;
         mainColorDesc.clearColor = { r: backgroundColor.r / 255, g: backgroundColor.g / 255, b: backgroundColor.b / 255, a: 1 };
         const mainDepthDesc = makeBackbufferDescSimple(GfxrAttachmentSlot.DepthStencil, viewerInput, standardFullClearRenderPassDescriptor);
         const mainColorTargetID = builder.createRenderTargetID(mainColorDesc, 'Main Color');

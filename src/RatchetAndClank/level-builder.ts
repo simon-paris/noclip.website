@@ -124,8 +124,6 @@ export function buildLevelFromFiles(filesAsSlices: LevelFiles) {
     const collision = readCollision(files.coreData.subview(levelCoreHeader.collision));
 
     return {
-        ready: true,
-
         levelCoreHeader,
         gameplayHeader,
 
@@ -134,7 +132,7 @@ export function buildLevelFromFiles(filesAsSlices: LevelFiles) {
         grindPaths,
         directionLights: directionLights.instances,
         pointLights: pointLights.instances,
-        collision,
+        collision: collision.meshGrid,
 
         tfrags,
         tfragTextures,
