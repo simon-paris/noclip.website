@@ -1,11 +1,16 @@
 import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
-import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice, GfxFormat, GfxInputLayout, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
+import { GfxBlendFactor, GfxBlendMode, GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxChannelWriteMask, GfxCompareMode, GfxCullMode, GfxDevice, GfxFormat, GfxInputLayout, GfxProgram, GfxSampler, GfxTexture, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { DeviceProgram } from "../Program";
 import { assert } from "../util";
 import { RatchetShaderLib } from "./shader-lib";
-import { SkyShell } from "./structs-core";
+import { SkyShell } from "./bin-core";
+import { mat4, vec3 } from "gl-matrix";
+import { noclipSpaceFromRatchetSpace } from "./utils";
+import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
+import { fillMatrix4x4, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
+import { GfxRenderInstList } from "../gfx/render/GfxRenderInstManager";
 
 export class SkyProgram extends DeviceProgram {
     public static a_Position = 0;
@@ -115,6 +120,72 @@ export class SkyGeometry {
     }
 }
 
+export class SkyRenderer {
+    private skyProgram: GfxProgram;
+
+    constructor(private renderHelper: GfxRenderHelper) {
+        this.skyProgram = renderHelper.renderCache.createProgram(new SkyProgram());
+    }
+
+    renderSky(renderInstList: GfxRenderInstList, cameraPosition: vec3, time: number, skyShellGeometry: SkyGeometry, skyShellTextures: GfxTexture[], skySampler: GfxSampler): void {
+        const objectMatrix = mat4.create();
+        mat4.translate(objectMatrix, objectMatrix, cameraPosition);
+        mat4.multiply(objectMatrix, objectMatrix, noclipSpaceFromRatchetSpace);
+
+        // can't find data for sky shell rotation speed
+        // if (...) {
+        //     mat4.rotateZ(objectMatrix, objectMatrix, time / ...);
+        // }
+
+        const template1 = this.renderHelper.pushTemplateRenderInst();
+        template1.setGfxProgram(this.skyProgram);
+        template1.setBindingLayouts([
+            { numSamplers: 1, numUniformBuffers: 2 },
+        ]);
+        template1.setMegaStateFlags({
+            cullMode: GfxCullMode.None,
+            depthWrite: false,
+            depthCompare: GfxCompareMode.Always,
+            attachmentsState: [{
+                channelWriteMask: GfxChannelWriteMask.AllChannels,
+                rgbBlendState: {
+                    blendMode: GfxBlendMode.Add,
+                    blendSrcFactor: GfxBlendFactor.SrcAlpha,
+                    blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
+                },
+                alphaBlendState: {
+                    blendMode: GfxBlendMode.Add,
+                    blendSrcFactor: GfxBlendFactor.One,
+                    blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
+                },
+            }],
+        });
+
+        for (const draw of skyShellGeometry.draws) {
+            const renderInst = this.renderHelper.renderInstManager.newRenderInst();
+
+            const skyParams = renderInst.allocateUniformBufferF32(SkyProgram.ub_SkyParams, 20);
+            let offs = 0;
+            offs += fillMatrix4x4(skyParams, offs, objectMatrix);
+            offs += fillVec4(skyParams, offs, Number(draw.flags.textured), 0, 0, 0);
+
+            renderInst.setVertexInput(
+                skyShellGeometry.inputLayout,
+                [{ buffer: skyShellGeometry.vertexBuffer, byteOffset: 0 }],
+                { buffer: skyShellGeometry.indexBuffer, byteOffset: 0 },
+            );
+            if (skyShellGeometry.hasTexture) {
+                renderInst.setSamplerBindingsFromTextureMappings([
+                    { gfxTexture: skyShellTextures[draw.material], gfxSampler: skySampler }
+                ]);
+            }
+            renderInst.setDrawCount(draw.indexCount, draw.startIndex);
+            renderInstList.submitRenderInst(renderInst);
+        }
+
+        this.renderHelper.renderInstManager.popTemplate();
+    }
+}
 
 function assembleSkyShellGeometry(skyShell: SkyShell) {
     const positionScale = 1 / 1024;

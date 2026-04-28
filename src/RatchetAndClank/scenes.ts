@@ -9,22 +9,23 @@ import { SceneContext, SceneDesc, SceneGroup } from "../SceneBase";
 import { SceneGfx, ViewerRenderInput } from "../viewer";
 import * as UI from "../ui";
 import { FakeTextureHolder } from "../TextureHolder";
-import { TieGeometry, TieProgram } from "./tie";
+import { TieGeometry, TieProgram, TieRenderer } from "./render-tie";
 import { CameraController } from "../Camera";
 import { buildLevelFromFiles, LevelFiles, ShrubInstanceBatch, TieInstanceBatch } from "./level-builder";
 import { createMegaBuffer, MegaBuffer, noclipSpaceFromRatchetSpace, lineChainToLineSegments } from "./utils";
-import { TfragGeometry, TfragProgram } from "./tfrag";
-import { ShrubGeometry, ShrubProgram } from "./shrub";
+import { TfragGeometry, TfragProgram, TfragRenderer } from "./render-tfrag";
+import { ShrubGeometry, ShrubProgram, ShrubRenderer } from "./render-shrub";
 import { colorNewFromRGBA, OpaqueBlack, White } from "../Color";
-import { SkyGeometry, SkyProgram } from "./sky";
+import { SkyGeometry, SkyProgram, SkyRenderer } from "./render-sky";
 import { RatchetShaderLib } from "./shader-lib";
 import { Frustum } from "../Geometry";
-import { DirectionLightInstance, GameplayHeader, LevelSettings, MobyInstance, PointLightInstance, ShrubInstance, Spline, TieInstance } from "./structs-gameplay";
+import { DirectionLightInstance, GameplayHeader, LevelSettings, MobyInstance, PointLightInstance, ShrubInstance, Spline, TieInstance } from "./bin-gameplay";
 import { assert } from "../util";
 import { createGfxTextureForPaletteTexture, createTextureAtlases, createTieRgbaTexture, PaletteTexture, TextureAtlases } from "./textures";
-import { CollisionGeometry, CollisionProgram } from "./collision";
+import { CollisionGeometry, CollisionProgram, CollisionRenderer } from "./render-collision";
 import { IS_DEVELOPMENT } from "../BuildVersion";
-import { CollisionOctant, LevelCoreHeader, Sky, Tfrag } from "./structs-core";
+import { CollisionOctant, Sky, Tfrag } from "./bin-core";
+import { LevelCoreHeader } from "./bin-index";
 
 const pathBase = (gameNumber: number) => `RatchetAndClank${gameNumber}`;
 
@@ -32,12 +33,6 @@ class RatchetAndClank1Scene implements SceneGfx {
     private renderHelper: GfxRenderHelper;
 
     private renderInstList = new GfxRenderInstList();
-
-    private tfragProgram: GfxProgram;
-    private tieProgram: GfxProgram;
-    private shrubProgram: GfxProgram;
-    private skyProgram: GfxProgram;
-    private collisionProgram: GfxProgram;
 
     private samplerGeneral: GfxSampler;
     private samplerSky: GfxSampler;
@@ -94,11 +89,10 @@ class RatchetAndClank1Scene implements SceneGfx {
         skyTextures: GfxTexture[],
     };
 
-    private textureMappings: {
+    private textureAtlasMappings: {
         tfrag: GfxSamplerBinding[] | null,
         tie: GfxSamplerBinding[] | null,
         shrub: GfxSamplerBinding[] | null,
-        sky: GfxSamplerBinding[] | null,
     };
 
     private geometries: {
@@ -109,17 +103,19 @@ class RatchetAndClank1Scene implements SceneGfx {
         collision: CollisionGeometry | null,
     };
 
+    private renderers: {
+        tfrag: TfragRenderer,
+        tie: TieRenderer,
+        shrub: ShrubRenderer,
+        sky: SkyRenderer,
+        collision: CollisionRenderer,
+    };
+
     private instanceDataBuffer: MegaBuffer;
 
     constructor(private sceneContext: SceneContext, public gameNumber: number, public levelNumber: number) {
         this.renderHelper = new GfxRenderHelper(sceneContext.device, sceneContext);
         const cache = this.renderHelper.renderCache;
-
-        this.tfragProgram = cache.createProgram(new TfragProgram());
-        this.tieProgram = cache.createProgram(new TieProgram());
-        this.shrubProgram = cache.createProgram(new ShrubProgram());
-        this.skyProgram = cache.createProgram(new SkyProgram());
-        this.collisionProgram = cache.createProgram(new CollisionProgram());
 
         this.levelResources = {
             levelCoreHeader: null,
@@ -165,11 +161,10 @@ class RatchetAndClank1Scene implements SceneGfx {
             skyTextures: [],
         }
 
-        this.textureMappings = {
+        this.textureAtlasMappings = {
             tfrag: null,
             tie: null,
             shrub: null,
-            sky: null,
         };
 
         this.geometries = {
@@ -178,7 +173,15 @@ class RatchetAndClank1Scene implements SceneGfx {
             shrubs: new Map(),
             skyShells: [],
             collision: null,
-        }
+        };
+
+        this.renderers = {
+            tfrag: new TfragRenderer(this.renderHelper),
+            tie: new TieRenderer(this.renderHelper),
+            shrub: new ShrubRenderer(this.renderHelper),
+            sky: new SkyRenderer(this.renderHelper),
+            collision: new CollisionRenderer(this.renderHelper),
+        };
 
         this.instanceDataBuffer = createMegaBuffer(cache.device, "Instance Data", 1024 * 1024);
 
@@ -188,10 +191,6 @@ class RatchetAndClank1Scene implements SceneGfx {
             }
 
             this.levelResources = buildLevelFromFiles(this.files);
-
-            if (IS_DEVELOPMENT) {
-                console.log(this.levelResources);
-            }
 
             this.buildAssetGeometry();
         });
@@ -203,10 +202,10 @@ class RatchetAndClank1Scene implements SceneGfx {
 
     private async fetchLevelFiles() {
         const promises = [
-            this.sceneContext.dataFetcher.fetchData(`${pathBase(this.gameNumber)}/level_${this.levelNumber}.core_index`),
-            this.sceneContext.dataFetcher.fetchData(`${pathBase(this.gameNumber)}/level_${this.levelNumber}.core_data`),
+            this.sceneContext.dataFetcher.fetchData(`${pathBase(this.gameNumber)}/level_${this.levelNumber}.index`),
+            this.sceneContext.dataFetcher.fetchData(`${pathBase(this.gameNumber)}/level_${this.levelNumber}.core`),
             this.sceneContext.dataFetcher.fetchData(`${pathBase(this.gameNumber)}/level_${this.levelNumber}.gameplay`),
-            this.sceneContext.dataFetcher.fetchData(`${pathBase(this.gameNumber)}/level_${this.levelNumber}.gs_ram`),
+            this.sceneContext.dataFetcher.fetchData(`${pathBase(this.gameNumber)}/level_${this.levelNumber}.gs`),
         ];
 
         const [coreIndexBuffer, coreDataBuffer, gameplayBuffer, gsRamBuffer] = await Promise.all(promises);
@@ -259,9 +258,9 @@ class RatchetAndClank1Scene implements SceneGfx {
             { gfxTexture: this.textures.textureAtlases.gfxTextures[128], gfxSampler: this.samplerGeneral },
             { gfxTexture: this.textures.textureAtlases.gfxTextures[256], gfxSampler: this.samplerGeneral },
         ];
-        this.textureMappings.shrub = textureAtlasMappings;
-        this.textureMappings.tfrag = textureAtlasMappings;
-        this.textureMappings.tie = [
+        this.textureAtlasMappings.shrub = textureAtlasMappings;
+        this.textureAtlasMappings.tfrag = textureAtlasMappings;
+        this.textureAtlasMappings.tie = [
             ...textureAtlasMappings,
             { gfxTexture: this.textures.tieRgbaTexture!, gfxSampler: this.samplerGeneral },
         ];
@@ -279,17 +278,17 @@ class RatchetAndClank1Scene implements SceneGfx {
             this.textures.skyTextures.push(gfxTextures.pixelsTexture);
             this.textureHolder.viewerTextures.push({ gfxTexture: gfxTextures.pixelsTexture });
         }
-        this.textureMappings.sky = this.textures.skyTextures.map((gfxTexture) => ({ gfxTexture, gfxSampler: this.samplerSky }));
 
         // collision
         const { collision } = this.levelResources;
         assert(collision !== null);
         this.geometries.collision = new CollisionGeometry(cache, collision);
 
-        if (IS_DEVELOPMENT) {
-            console.log(this.geometries);
-        }
         this.textureHolder.onnewtextures();
+
+        if (IS_DEVELOPMENT) {
+            console.log(this);
+        }
     }
 
     private fillSceneParams(template: GfxRenderInst, viewerInput: ViewerRenderInput, cameraPosition: vec3): void {
@@ -298,7 +297,7 @@ class RatchetAndClank1Scene implements SceneGfx {
             skyColor: OpaqueBlack,
             fogColor: OpaqueBlack,
             fogNearDistance: 0,
-            fogFarDistance: 1000000,
+            fogFarDistance: 1,
             fogNearIntensity: 0,
             fogFarIntensity: 0,
         };
@@ -333,7 +332,7 @@ class RatchetAndClank1Scene implements SceneGfx {
             );
         } else {
             offs += fillVec4(data, offs, 0, 0, 0, 0);
-            offs += fillVec4(data, offs, 1, 2, 0, 0);
+            offs += fillVec4(data, offs, 0, 1, 0, 0);
         }
 
         // lights (16 * 16 floats)
@@ -367,378 +366,11 @@ class RatchetAndClank1Scene implements SceneGfx {
         }
     }
 
-    private renderTfrag(cameraPosition: vec3): void {
-        if (!this.settings.enableTfrag) return;
-        if (!this.textureMappings.tfrag) return;
-
-        const objectMatrix = noclipSpaceFromRatchetSpace; // the tfrag has no transform, it's already in world space
-
-        let lodLevel = this.settings.lodSetting;
-        if (this.settings.lodSetting === -1) {
-            lodLevel = 0;
-        }
-
-        const tfragGeometry = this.geometries.tfrag;
-        if (!tfragGeometry) return;
-        if (tfragGeometry.lods[lodLevel].vertexCount === 0) return;
-
-        const renderInst = this.renderHelper.renderInstManager.newRenderInst();
-        renderInst.setBindingLayouts([
-            {
-                numSamplers: 5,
-                numUniformBuffers: 2,
-                samplerEntries: [
-                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                ],
-            }
-        ]);
-        renderInst.setGfxProgram(this.tfragProgram);
-
-        const tfragParams = renderInst.allocateUniformBufferF32(TfragProgram.ub_TfragParams, 16);
-        let offs = 0;
-        offs += fillMatrix4x4(tfragParams, offs, objectMatrix);
-
-        renderInst.setVertexInput(
-            tfragGeometry.inputLayout,
-            [
-                { buffer: tfragGeometry.lods[lodLevel].vertexBuffer, byteOffset: 0 },
-            ],
-            null,
-        );
-        renderInst.setSamplerBindingsFromTextureMappings(this.textureMappings.tfrag);
-        renderInst.setDrawCount(tfragGeometry.lods[lodLevel].vertexCount, 0);
-        this.renderInstList.submitRenderInst(renderInst);
-
-    }
-
-    private renderTie(tieInstanceBatch: TieInstanceBatch, cameraPosition: vec3, cameraFrustum: Frustum): void {
-        if (!this.settings.enableTies) return;
-        if (!this.textureMappings.tie) return;
-
-        const { tieClass, oClass } = tieInstanceBatch;
-
-        const scratchVec3 = vec3.create();
-
-        type TieDrawInstance = { objectMatrix: mat4, directionLights: number[], rgbasRow: number, lodMorphFactor: number, i: number };
-        const tieInstancesToDrawByLod: TieDrawInstance[][] = [[], [], []];
-        for (let i = 0; i < tieInstanceBatch.instances.length; i++) {
-            const tieInstance = tieInstanceBatch.instances[i];
-
-            // tie instance transform
-            const objectMatrix = mat4.create();
-            mat4.multiply(objectMatrix, noclipSpaceFromRatchetSpace, tieInstance.matrix);
-            let position = scratchVec3;
-            mat4.getTranslation(position, objectMatrix);
-
-            // camera position
-            const distanceToCamera = vec3.distance(position, cameraPosition);
-
-            // determine LOD level
-            const hasLod2 = tieClass.packets[2].length > 0;
-            const hasLod1 = tieClass.packets[1].length > 0;
-            let modelLodLevel = this.settings.lodSetting;
-            let lodMorphFactor = 0;
-            if (this.settings.lodSetting === -1) {
-                let smoothLod = 0;
-                let nearDist = tieClass.nearDist + this.settings.lodBias;
-                let midDist = tieClass.midDist + this.settings.lodBias * 2;
-                let farDist = tieClass.farDist + this.settings.lodBias * 3;
-                if (distanceToCamera < nearDist) {
-                    smoothLod = 0;
-                } else if (distanceToCamera < midDist) {
-                    smoothLod = (distanceToCamera - nearDist) / (midDist - nearDist);
-                } else if (distanceToCamera < farDist) {
-                    smoothLod = 1 + (distanceToCamera - midDist) / (farDist - midDist);
-                } else {
-                    smoothLod = 2;
-                }
-                modelLodLevel = Math.floor(smoothLod);
-                lodMorphFactor = smoothLod - modelLodLevel;
-            }
-            if (modelLodLevel === 2 && !hasLod2) { modelLodLevel = 1; lodMorphFactor = 0; }
-            if (modelLodLevel === 1 && !hasLod1) { modelLodLevel = 0; lodMorphFactor = 0; }
-
-            // this is much slower than doing nothing
-            // // find bounding sphere and frustum cull
-            // const objectScale = Math.hypot(objectMatrix[0], objectMatrix[1], objectMatrix[2]);
-            // if (!cameraFrustum.containsSphere(position, 0x7FFF / 1024 * tieClass.scale * objectScale)) {
-            //     continue;
-            // }
-
-            tieInstancesToDrawByLod[modelLodLevel].push({
-                objectMatrix,
-                directionLights: tieInstance.directionalLights,
-                lodMorphFactor,
-                rgbasRow: tieInstance.instanceIndex,
-                i,
-            });
-        }
-
-        for (let i = 0; i < tieInstancesToDrawByLod.length; i++) {
-            const lodLevel = i;
-            const tieInstancesToDraw = tieInstancesToDrawByLod[i];
-            if (!tieInstancesToDraw.length) continue;
-
-            const tieGeometry = this.geometries.ties.get(oClass)?.[lodLevel];
-            if (!tieGeometry) continue;
-
-            const renderInst = this.renderHelper.renderInstManager.newRenderInst();
-            renderInst.setGfxProgram(this.tieProgram);
-            renderInst.setBindingLayouts([
-                {
-                    numSamplers: 6,
-                    numUniformBuffers: 2,
-                    samplerEntries: [
-                        { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                        { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                        { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                        { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                        { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                        { dimension: GfxTextureDimension.n2D, formatKind: GfxSamplerFormatKind.Float, },
-                    ],
-                }
-            ]);
-
-            const instanceDataStartBytes = this.instanceDataBuffer.ptr * 4;
-            for (let i = 0; i < tieInstancesToDraw.length; i++) {
-                const inst = tieInstancesToDraw[i];
-                this.instanceDataBuffer.ptr += fillMatrix4x4(this.instanceDataBuffer.f32View, this.instanceDataBuffer.ptr, inst.objectMatrix);
-                this.instanceDataBuffer.ptr += fillVec4(this.instanceDataBuffer.f32View, this.instanceDataBuffer.ptr, inst.directionLights[0], inst.directionLights[1], inst.directionLights[2], inst.directionLights[3]);
-                this.instanceDataBuffer.ptr += fillVec4(this.instanceDataBuffer.f32View, this.instanceDataBuffer.ptr, inst.rgbasRow, inst.lodMorphFactor, 0, 0);
-            }
-
-            renderInst.setVertexInput(
-                tieGeometry.inputLayout,
-                [
-                    { buffer: tieGeometry.vertexBuffer, byteOffset: 0 },
-                    { buffer: this.instanceDataBuffer.gfxBuffer, byteOffset: instanceDataStartBytes },
-                ],
-                null,
-            );
-
-            renderInst.setSamplerBindingsFromTextureMappings(this.textureMappings.tie);
-            renderInst.setInstanceCount(tieInstancesToDraw.length);
-            renderInst.setDrawCount(tieGeometry.vertexCount, 0);
-            this.renderInstList.submitRenderInst(renderInst);
-        }
-    }
-
-    private renderMoby(mobyInstance: MobyInstance, cameraWorldMatrix: mat4, cameraPos: vec3): void {
-        if (!this.settings.enableMobys) return;
-
-        const pos = vec3.fromValues(mobyInstance.position.x, mobyInstance.position.y, mobyInstance.position.z);
-        vec3.transformMat4(pos, pos, noclipSpaceFromRatchetSpace);
-        this.renderHelper.debugDraw.drawLocator(pos, 0.3, White);
-        const mat = mat4.fromTranslation(mat4.create(), pos);
-        const rotation = quat.create();
-        mat4.getRotation(rotation, cameraWorldMatrix);
-        mat4.fromRotationTranslationScale(mat, rotation, pos, vec3.fromValues(0.01, 0.01, 0.01));
-        if (vec3.distance(pos, cameraPos) < 40) {
-            this.renderHelper.debugDraw.drawWorldTextMtx(String(mobyInstance.oClass), mat, White);
-        }
-    }
-
-    private renderShrubs(shrubInstanceBatch: ShrubInstanceBatch, cameraPosition: vec3, cameraFrustum: Frustum): void {
-        if (!this.settings.enableShrubs) return;
-        if (!this.textureMappings.shrub) return;
-        if (!this.levelResources.directionLights) return;
-
-        const { shrubClass, instances: shrubInstances } = shrubInstanceBatch;
-        const oClass = shrubClass.header.oClass;
-
-        const shrubGeometry = this.geometries.shrubs.get(oClass);
-        if (!shrubGeometry) return;
-
-        type ShrubDrawInstance = { objectMatrix: mat4, directionalLights: number[], rgb: { r: number, g: number, b: number }, lodAlpha: number, i: number };
-        const shrubInstancesToDraw: ShrubDrawInstance[] = [];
-        for (let i = 0; i < shrubInstances.length; i++) {
-            const shrubInstance = shrubInstances[i];
-
-            // shrub instance transform
-            const objectMatrix = mat4.create();
-            mat4.multiply(objectMatrix, noclipSpaceFromRatchetSpace, shrubInstance.matrix);
-            const position = vec3.create();
-            mat4.getTranslation(position, objectMatrix);
-            const distanceToCamera = vec3.distance(position, cameraPosition);
-
-            // lod
-            let lodAlpha = this.settings.lodSetting === 0 ? 1 : 0;
-            if (this.settings.lodSetting === -1) {
-                const farDist = shrubInstance.drawDistance + this.settings.lodBias * 1.5;
-                if (farDist > 0) {
-                    const nearDist = farDist * 0.5;
-                    lodAlpha = 1 - (distanceToCamera - nearDist) / (farDist - nearDist);
-                    lodAlpha = Math.max(0, Math.min(1, lodAlpha));
-                }
-            }
-            if (lodAlpha <= 0) continue;
-
-            // this is much slower than doing nothing because of the jumps into rust
-            // // find bounding sphere and frustum cull
-            // const objectScale = Math.hypot(objectMatrix[0], objectMatrix[1], objectMatrix[2]);
-            // if (!cameraFrustum.containsSphere(position, 0x7FFF / 1024 * shrubClass.header.scale * objectScale)) {
-            //     continue;
-            // }
-
-            for (const dirLightIndex of shrubInstance.directionalLights) {
-                if (dirLightIndex < 0 || (dirLightIndex >= this.levelResources.directionLights.length && dirLightIndex !== 0xF)) {
-                    throw new Error("invalid directional light index");
-                }
-            }
-
-            shrubInstancesToDraw.push({
-                objectMatrix,
-                directionalLights: shrubInstance.directionalLights,
-                rgb: shrubInstance.color,
-                lodAlpha,
-                i,
-            })
-        }
-
-        if (!shrubInstancesToDraw.length) return;
-
-        const renderInst = this.renderHelper.renderInstManager.newRenderInst();
-        renderInst.setGfxProgram(this.shrubProgram);
-        renderInst.setBindingLayouts([
-            {
-                numSamplers: 5,
-                numUniformBuffers: 2,
-                samplerEntries: [
-                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                ],
-            }
-        ]);
-
-        // per instance data
-        const instanceDataStartBytes = this.instanceDataBuffer.ptr * 4;
-        for (let i = 0; i < shrubInstancesToDraw.length; i++) {
-            const inst = shrubInstancesToDraw[i];
-            const color = inst.rgb;
-            this.instanceDataBuffer.ptr += fillMatrix4x4(this.instanceDataBuffer.f32View, this.instanceDataBuffer.ptr, inst.objectMatrix);
-            this.instanceDataBuffer.ptr += fillVec4(this.instanceDataBuffer.f32View, this.instanceDataBuffer.ptr, color.r / 0x80, color.g / 0x80, color.b / 0x80, 1);
-            this.instanceDataBuffer.ptr += fillVec4(this.instanceDataBuffer.f32View, this.instanceDataBuffer.ptr, inst.directionalLights[0], inst.directionalLights[1], inst.directionalLights[2], inst.directionalLights[3]);
-            this.instanceDataBuffer.f32View[this.instanceDataBuffer.ptr++] = inst.lodAlpha;
-        }
-
-        renderInst.setVertexInput(
-            shrubGeometry.inputLayout,
-            [
-                { buffer: shrubGeometry.vertexBuffer, byteOffset: 0 },
-                { buffer: this.instanceDataBuffer.gfxBuffer, byteOffset: instanceDataStartBytes },
-            ],
-            null,
-        );
-        renderInst.setSamplerBindingsFromTextureMappings(this.textureMappings.shrub);
-        renderInst.setDrawCount(shrubGeometry.vertexCount, 0);
-        renderInst.setInstanceCount(shrubInstancesToDraw.length);
-        this.renderInstList.submitRenderInst(renderInst);
-    }
-
-    private renderCollision(cameraPosition: vec3): void {
-        if (!this.settings.showCollision) return;
-
-        const objectMatrix = mat4.create();
-        mat4.multiply(objectMatrix, objectMatrix, noclipSpaceFromRatchetSpace);
-
-        const collisionGeometry = this.geometries.collision;
-        if (!collisionGeometry) return;
-
-        const renderInst = this.renderHelper.renderInstManager.newRenderInst();
-        renderInst.setGfxProgram(this.collisionProgram);
-        renderInst.setBindingLayouts([
-            { numSamplers: 0, numUniformBuffers: 2 },
-        ]);
-
-        const collisionParams = renderInst.allocateUniformBufferF32(CollisionProgram.ub_CollisionParams, 16);
-        let offs = 0;
-        offs += fillMatrix4x4(collisionParams, offs, objectMatrix);
-
-        renderInst.setVertexInput(
-            collisionGeometry.inputLayout,
-            [{ buffer: collisionGeometry.vertexBuffer, byteOffset: 0 }],
-            null,
-        );
-        renderInst.setDrawCount(collisionGeometry.vertexCount, 0);
-        this.renderInstList.submitRenderInst(renderInst);
-    }
-
-    private renderSky(cameraPosition: vec3, time: number, skyShellIndex: number): void {
-        if (!this.settings.enableSky) return;
-
-        const objectMatrix = mat4.create();
-        mat4.translate(objectMatrix, objectMatrix, cameraPosition);
-        mat4.multiply(objectMatrix, objectMatrix, noclipSpaceFromRatchetSpace);
-
-        // can't find data for sky shell rotation speed
-        // if (...) {
-        //     mat4.rotateZ(objectMatrix, objectMatrix, time / ...);
-        // }
-
-        const skyShellGeometry = this.geometries.skyShells[skyShellIndex];
-        if (!skyShellGeometry) return;
-
-        const template1 = this.renderHelper.pushTemplateRenderInst();
-        template1.setGfxProgram(this.skyProgram);
-        template1.setBindingLayouts([
-            { numSamplers: 1, numUniformBuffers: 2 },
-        ]);
-        template1.setMegaStateFlags({
-            cullMode: GfxCullMode.None,
-            depthWrite: false,
-            depthCompare: GfxCompareMode.Always,
-            attachmentsState: [{
-                channelWriteMask: GfxChannelWriteMask.AllChannels,
-                rgbBlendState: {
-                    blendMode: GfxBlendMode.Add,
-                    blendSrcFactor: GfxBlendFactor.SrcAlpha,
-                    blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
-                },
-                alphaBlendState: {
-                    blendMode: GfxBlendMode.Add,
-                    blendSrcFactor: GfxBlendFactor.One,
-                    blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
-                },
-            }],
-        });
-
-        for (const draw of skyShellGeometry.draws) {
-            const renderInst = this.renderHelper.renderInstManager.newRenderInst();
-
-            const skyParams = renderInst.allocateUniformBufferF32(SkyProgram.ub_SkyParams, 20);
-            let offs = 0;
-            offs += fillMatrix4x4(skyParams, offs, objectMatrix);
-            offs += fillVec4(skyParams, offs, Number(draw.flags.textured), 0, 0, 0);
-
-            renderInst.setVertexInput(
-                skyShellGeometry.inputLayout,
-                [{ buffer: skyShellGeometry.vertexBuffer, byteOffset: 0 }],
-                { buffer: skyShellGeometry.indexBuffer, byteOffset: 0 },
-            );
-            if (skyShellGeometry.hasTexture) {
-                renderInst.setSamplerBindingsFromTextureMappings([
-                    { gfxTexture: this.textures.skyTextures[draw.material], gfxSampler: this.samplerSky }
-                ]);
-            }
-            renderInst.setDrawCount(draw.indexCount, draw.startIndex);
-            this.renderInstList.submitRenderInst(renderInst);
-        }
-
-        this.renderHelper.renderInstManager.popTemplate();
-    }
-
     public render(device: GfxDevice, viewerInput: ViewerRenderInput): void {
         const cameraPosition = vec3.create();
         mat4.getTranslation(cameraPosition, viewerInput.camera.worldMatrix);
-        const cameraFrustum = viewerInput.camera.frustum;
 
+        // setup
         const template = this.renderHelper.pushTemplateRenderInst();
         template.setMegaStateFlags({
             cullMode: GfxCullMode.None, // ps2 don't do backface culling
@@ -760,37 +392,79 @@ class RatchetAndClank1Scene implements SceneGfx {
             { numSamplers: 1, numUniformBuffers: 2 },
         ]);
         this.fillSceneParams(template, viewerInput, cameraPosition);
-
         this.renderHelper.debugDraw.beginFrame(viewerInput.camera.projectionMatrix, viewerInput.camera.viewMatrix, viewerInput.backbufferWidth, viewerInput.backbufferHeight);
 
-        for (let i = 0; i < this.geometries.skyShells.length; i++) {
-            this.renderSky(cameraPosition, viewerInput.time, i);
+        // sky
+        if (this.settings.enableSky) {
+            for (let i = 0; i < this.geometries.skyShells.length; i++) {
+                const skyShellGeometry = this.geometries.skyShells[i];
+                this.renderers.sky.renderSky(this.renderInstList, cameraPosition, viewerInput.time, skyShellGeometry, this.textures.skyTextures, this.samplerSky);
+            }
         }
-        this.renderCollision(cameraPosition);
-        this.renderTfrag(cameraPosition);
 
-        const tieBatches = this.levelResources.ties ?? [];
-        for (let i = 0; i < tieBatches.length; i++) {
-            this.renderTie(tieBatches[i], cameraPosition, cameraFrustum);
+        // collision
+        if (this.settings.showCollision && this.geometries.collision) {
+            this.renderers.collision.renderCollision(this.renderInstList, cameraPosition, this.geometries.collision);
         }
+
+        // tfrag
+        if (this.settings.enableTfrag && this.geometries.tfrag && this.textureAtlasMappings.tfrag) {
+            this.renderers.tfrag.renderTfrag(this.renderInstList, this.geometries.tfrag, this.settings.lodSetting, this.textureAtlasMappings.tfrag);
+        }
+
+        // ties
+        if (this.settings.enableTies && this.levelResources.ties && this.textureAtlasMappings.tie) {
+            const tieBatches = this.levelResources.ties;
+            for (let i = 0; i < tieBatches.length; i++) {
+                const tieBatch = tieBatches[i];
+                const { tieClass, instances } = tieBatch;
+                const geometriesByLod = this.geometries.ties.get(tieBatch.oClass);
+                if (!geometriesByLod) continue;
+                this.renderers.tie.renderTie(this.renderInstList, geometriesByLod, tieClass, instances, this.textureAtlasMappings.tie, cameraPosition, this.settings.lodSetting, this.settings.lodBias, this.instanceDataBuffer);
+            }
+        }
+
+        // mobys
         if (this.settings.enableMobys) {
             const mobyInstances = this.levelResources.mobyInstances ?? [];
             for (let i = 0; i < mobyInstances.length; i++) {
-                this.renderMoby(mobyInstances[i], viewerInput.camera.worldMatrix, cameraPosition);
+                const mobyInstance = mobyInstances[i];
+                const pos = vec3.fromValues(mobyInstance.position.x, mobyInstance.position.y, mobyInstance.position.z);
+                vec3.transformMat4(pos, pos, noclipSpaceFromRatchetSpace);
+                this.renderHelper.debugDraw.drawLocator(pos, 0.3, White);
+                const mat = mat4.fromTranslation(mat4.create(), pos);
+                const rotation = quat.create();
+                mat4.getRotation(rotation, viewerInput.camera.worldMatrix);
+                mat4.fromRotationTranslationScale(mat, rotation, pos, vec3.fromValues(0.01, 0.01, 0.01));
+                if (vec3.distance(pos, cameraPosition) < 40) {
+                    this.renderHelper.debugDraw.drawWorldTextMtx(String(mobyInstance.oClass), mat, White);
+                }
             }
         }
-        const shrubBatches = this.levelResources.shrubs ?? [];
-        for (let i = 0; i < shrubBatches.length; i++) {
-            this.renderShrubs(shrubBatches[i], cameraPosition, cameraFrustum);
+
+        // shrubs
+        if (this.settings.enableShrubs && this.levelResources.shrubs && this.textureAtlasMappings.shrub) {
+            const shrubBatches = this.levelResources.shrubs;
+            for (let i = 0; i < shrubBatches.length; i++) {
+                const shrubBatch = shrubBatches[i];
+                const { oClass, instances } = shrubBatch;
+                const geometry = this.geometries.shrubs.get(oClass);
+                if (!geometry) continue;
+                this.renderers.shrub.renderShrub(this.renderInstList, geometry, instances, this.textureAtlasMappings.shrub, cameraPosition, this.settings.lodSetting, this.settings.lodBias, this.instanceDataBuffer);
+            }
         }
+
+        // paths
         if (this.settings.showPaths) {
             const paths = this.levelResources.paths ?? [];
             const grindPaths = this.levelResources.grindPaths ?? [];
+            const regularPathColor = colorNewFromRGBA(0.1, 0.3, 0.8, 1);
+            const grindPathColor = colorNewFromRGBA(0.7, 0.4, 0.1, 1);
             for (const path of paths) {
-                for (const line of lineChainToLineSegments(path.points, colorNewFromRGBA(0.1, 0.3, 0.8, 1))) this.renderHelper.debugDraw.drawLine(line.from, line.to, line.color);
+                for (const line of lineChainToLineSegments(path.points, regularPathColor)) this.renderHelper.debugDraw.drawLine(line.from, line.to, line.color);
             }
             for (const path of grindPaths) {
-                for (const line of lineChainToLineSegments(path.points, colorNewFromRGBA(0.7, 0.4, 0.1, 1))) this.renderHelper.debugDraw.drawLine(line.from, line.to, line.color);
+                for (const line of lineChainToLineSegments(path.points, grindPathColor)) this.renderHelper.debugDraw.drawLine(line.from, line.to, line.color);
             }
         }
 

@@ -1,9 +1,10 @@
 import { Color } from "../Color";
 import { DataViewExt } from "./DataViewExt";
 import { GfxDevice, GfxFormat, GfxTexture, GfxTextureDimension, GfxTextureUsage, makeTextureDescriptor2D } from "../gfx/platform/GfxPlatform";
-import { SkyHeader, SkyTextureEntry, TextureEntry } from "./structs-core";
-import { TieInstance } from "./structs-gameplay";
+import { SkyHeader, SkyTextureEntry } from "./bin-core";
+import { TieInstance } from "./bin-gameplay";
 import { assert } from "../util";
+import { TextureEntry } from "./bin-index";
 
 export type PaletteTexture = {
     name: string,

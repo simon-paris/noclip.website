@@ -1,12 +1,17 @@
 import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
-import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice, GfxFormat, GfxInputLayout, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
+import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice, GfxFormat, GfxInputLayout, GfxProgram, GfxSamplerBinding, GfxSamplerFormatKind, GfxTextureDimension, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { DeviceProgram } from "../Program";
-import { assert, nArray } from "../util";
+import { assert } from "../util";
 import { RatchetShaderLib } from "./shader-lib";
-import { TieClass, TieImaginaryGsCommand, TieVertex } from "./structs-core";
-import { ImaginaryGsCommandType } from "./utils";
+import { TieClass, TieImaginaryGsCommand, TieVertex } from "./bin-core";
+import { ImaginaryGsCommandType, MegaBuffer, noclipSpaceFromRatchetSpace } from "./utils";
+import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
+import { GfxRenderInstList } from "../gfx/render/GfxRenderInstManager";
+import { mat4, vec3 } from "gl-matrix";
+import { TieInstance } from "./bin-gameplay";
+import { fillMatrix4x4, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
 
 export class TieProgram extends DeviceProgram {
     public static a_Position = 0;
@@ -157,6 +162,121 @@ export class TieGeometry {
 
     public destroy(device: GfxDevice): void {
         device.destroyBuffer(this.vertexBuffer);
+    }
+}
+
+export class TieRenderer {
+    private tieProgram: GfxProgram;
+
+    constructor(private renderHelper: GfxRenderHelper) {
+        this.tieProgram = renderHelper.renderCache.createProgram(new TieProgram());
+    }
+
+    renderTie(renderInstList: GfxRenderInstList, tieGeometriesByLod: (TieGeometry | null)[], tieClass: TieClass, tieInstanceBatch: TieInstance[], textureMappings: GfxSamplerBinding[], cameraPosition: vec3, settingLodPreset: number, settingLodBias: number, instanceDataBuffer: MegaBuffer): void {
+        const scratchVec3 = vec3.create();
+
+        type TieDrawInstance = { objectMatrix: mat4, directionLights: number[], rgbasRow: number, lodMorphFactor: number, i: number };
+        const tieInstancesToDrawByLod: TieDrawInstance[][] = [[], [], []];
+        for (let i = 0; i < tieInstanceBatch.length; i++) {
+            const tieInstance = tieInstanceBatch[i];
+
+            // tie instance transform
+            const objectMatrix = mat4.create();
+            mat4.multiply(objectMatrix, noclipSpaceFromRatchetSpace, tieInstance.matrix);
+            let position = scratchVec3;
+            mat4.getTranslation(position, objectMatrix);
+
+            // camera position
+            const distanceToCamera = vec3.distance(position, cameraPosition);
+
+            // determine LOD level
+            const hasLod2 = !!tieGeometriesByLod[2];
+            const hasLod1 = !!tieGeometriesByLod[1];
+            let modelLodLevel = settingLodPreset;
+            let lodMorphFactor = 0;
+            if (settingLodPreset === -1) {
+                let smoothLod = 0;
+                let nearDist = tieClass.nearDist + settingLodBias;
+                let midDist = tieClass.midDist + settingLodBias * 2;
+                let farDist = tieClass.farDist + settingLodBias * 3;
+                if (distanceToCamera < nearDist) {
+                    smoothLod = 0;
+                } else if (distanceToCamera < midDist) {
+                    smoothLod = (distanceToCamera - nearDist) / (midDist - nearDist);
+                } else if (distanceToCamera < farDist) {
+                    smoothLod = 1 + (distanceToCamera - midDist) / (farDist - midDist);
+                } else {
+                    smoothLod = 2;
+                }
+                modelLodLevel = Math.floor(smoothLod);
+                lodMorphFactor = smoothLod - modelLodLevel;
+            }
+            if (modelLodLevel === 2 && !hasLod2) { modelLodLevel = 1; lodMorphFactor = 0; }
+            if (modelLodLevel === 1 && !hasLod1) { modelLodLevel = 0; lodMorphFactor = 0; }
+
+            // this is much slower than doing nothing
+            // // find bounding sphere and frustum cull
+            // const objectScale = Math.hypot(objectMatrix[0], objectMatrix[1], objectMatrix[2]);
+            // if (!cameraFrustum.containsSphere(position, 0x7FFF / 1024 * tieClass.scale * objectScale)) {
+            //     continue;
+            // }
+
+            tieInstancesToDrawByLod[modelLodLevel].push({
+                objectMatrix,
+                directionLights: tieInstance.directionalLights,
+                lodMorphFactor,
+                rgbasRow: tieInstance.instanceIndex,
+                i,
+            });
+        }
+
+        for (let i = 0; i < tieInstancesToDrawByLod.length; i++) {
+            const lodLevel = i;
+            const tieInstancesToDraw = tieInstancesToDrawByLod[i];
+            if (!tieInstancesToDraw.length) continue;
+
+            const tieGeometry = tieGeometriesByLod[lodLevel];
+            if (!tieGeometry) continue;
+
+            const renderInst = this.renderHelper.renderInstManager.newRenderInst();
+            renderInst.setGfxProgram(this.tieProgram);
+            renderInst.setBindingLayouts([
+                {
+                    numSamplers: 6,
+                    numUniformBuffers: 2,
+                    samplerEntries: [
+                        { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                        { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                        { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                        { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                        { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                        { dimension: GfxTextureDimension.n2D, formatKind: GfxSamplerFormatKind.Float, },
+                    ],
+                }
+            ]);
+
+            const instanceDataStartBytes = instanceDataBuffer.ptr * 4;
+            for (let i = 0; i < tieInstancesToDraw.length; i++) {
+                const inst = tieInstancesToDraw[i];
+                instanceDataBuffer.ptr += fillMatrix4x4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, inst.objectMatrix);
+                instanceDataBuffer.ptr += fillVec4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, inst.directionLights[0], inst.directionLights[1], inst.directionLights[2], inst.directionLights[3]);
+                instanceDataBuffer.ptr += fillVec4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, inst.rgbasRow, inst.lodMorphFactor, 0, 0);
+            }
+
+            renderInst.setVertexInput(
+                tieGeometry.inputLayout,
+                [
+                    { buffer: tieGeometry.vertexBuffer, byteOffset: 0 },
+                    { buffer: instanceDataBuffer.gfxBuffer, byteOffset: instanceDataStartBytes },
+                ],
+                null,
+            );
+
+            renderInst.setSamplerBindingsFromTextureMappings(textureMappings);
+            renderInst.setInstanceCount(tieInstancesToDraw.length);
+            renderInst.setDrawCount(tieGeometry.vertexCount, 0);
+            renderInstList.submitRenderInst(renderInst);
+        }
     }
 }
 
