@@ -1,7 +1,7 @@
 import { mat4, quat, vec3 } from "gl-matrix";
 import { makeBackbufferDescSimple, standardFullClearRenderPassDescriptor } from "../gfx/helpers/RenderGraphHelpers";
 import { fillMatrix4x4, fillVec3v, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
-import { GfxBlendFactor, GfxBlendMode, GfxChannelWriteMask, GfxCompareMode, GfxCullMode, GfxDevice, GfxMipFilterMode, GfxProgram, GfxSampler, GfxSamplerBinding, GfxSamplerFormatKind, GfxTexFilterMode, GfxTexture, GfxTextureDimension, GfxWrapMode } from "../gfx/platform/GfxPlatform";
+import { GfxBlendFactor, GfxBlendMode, GfxChannelWriteMask, GfxCullMode, GfxDevice, GfxMipFilterMode, GfxSampler, GfxSamplerBinding, GfxTexFilterMode, GfxTexture, GfxWrapMode } from "../gfx/platform/GfxPlatform";
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { GfxRenderInst, GfxRenderInstList } from "../gfx/render/GfxRenderInstManager";
@@ -13,19 +13,18 @@ import { TieGeometry, TieProgram, TieRenderer } from "./render-tie";
 import { CameraController } from "../Camera";
 import { buildLevelFromFiles, LevelFiles, ShrubInstanceBatch, TieInstanceBatch } from "./level-builder";
 import { createMegaBuffer, MegaBuffer, noclipSpaceFromRatchetSpace, lineChainToLineSegments } from "./utils";
-import { TfragGeometry, TfragProgram, TfragRenderer } from "./render-tfrag";
-import { ShrubGeometry, ShrubProgram, ShrubRenderer } from "./render-shrub";
+import { TfragGeometry, TfragRenderer } from "./render-tfrag";
+import { ShrubGeometry, ShrubRenderer } from "./render-shrub";
 import { colorNewFromRGBA, OpaqueBlack, White } from "../Color";
-import { SkyGeometry, SkyProgram, SkyRenderer } from "./render-sky";
+import { SkyGeometry, SkyRenderer } from "./render-sky";
 import { RatchetShaderLib } from "./shader-lib";
-import { Frustum } from "../Geometry";
 import { DirectionLightInstance, GameplayHeader, LevelSettings, MobyInstance, PointLightInstance, ShrubInstance, Spline, TieInstance } from "./bin-gameplay";
 import { assert } from "../util";
 import { createGfxTextureForPaletteTexture, createTextureAtlases, createTieRgbaTexture, PaletteTexture, TextureAtlases } from "./textures";
-import { CollisionGeometry, CollisionProgram, CollisionRenderer } from "./render-collision";
+import { CollisionGeometry, CollisionRenderer } from "./render-collision";
 import { IS_DEVELOPMENT } from "../BuildVersion";
-import { CollisionOctant, Sky, Tfrag } from "./bin-core";
-import { LevelCoreHeader } from "./bin-index";
+import { CollisionOctant, ShrubClass, Sky, Tfrag, TieClass } from "./bin-core";
+import { ClassEntry, LevelCoreHeader } from "./bin-index";
 
 const pathBase = (gameNumber: number) => `RatchetAndClank${gameNumber}`;
 
@@ -69,13 +68,19 @@ class RatchetAndClank1Scene implements SceneGfx {
         tfrags: Tfrag[] | null,
         tfragTextures: PaletteTexture[] | null,
 
-        ties: TieInstanceBatch[] | null,
-        tieInstances: TieInstance[] | null,
         tieTextures: PaletteTexture[] | null,
+        tieOClasses: number[] | null,
+        tieClasses: Map<number, TieClass> | null,
+        tieClassTextureIndices: Map<number, number[]> | null,
+        tieInstances: TieInstance[] | null,
+        tieInstancesByOClass: Map<number, TieInstance[]> | null,
 
-        shrubs: ShrubInstanceBatch[] | null,
-        shrubInstances: ShrubInstance[] | null,
         shrubTextures: PaletteTexture[] | null,
+        shrubOClasses: number[] | null,
+        shrubClasses: Map<number, ShrubClass> | null,
+        shrubClassTextureIndices: Map<number, number[]> | null,
+        shrubInstances: ShrubInstance[] | null,
+        shrubInstancesByOClass: Map<number, ShrubInstance[]> | null,
 
         sky: Sky | null,
         skyTextures: PaletteTexture[] | null,
@@ -89,17 +94,11 @@ class RatchetAndClank1Scene implements SceneGfx {
         skyTextures: GfxTexture[],
     };
 
-    private textureAtlasMappings: {
-        tfrag: GfxSamplerBinding[] | null,
-        tie: GfxSamplerBinding[] | null,
-        shrub: GfxSamplerBinding[] | null,
-    };
-
     private geometries: {
         tfrag: TfragGeometry | null,
         ties: Map<number, (TieGeometry | null)[]>, // map of oClass to array of LOD geometries
         shrubs: Map<number, ShrubGeometry>,
-        skyShells: SkyGeometry[],
+        skyShells: Map<number, SkyGeometry>,
         collision: CollisionGeometry | null,
     };
 
@@ -128,12 +127,18 @@ class RatchetAndClank1Scene implements SceneGfx {
             collision: null,
             tfrags: null,
             tfragTextures: null,
-            ties: null,
-            tieInstances: null,
             tieTextures: null,
-            shrubs: null,
-            shrubInstances: null,
+            tieOClasses: null,
+            tieClasses: null,
+            tieClassTextureIndices: null,
+            tieInstances: null,
+            tieInstancesByOClass: null,
             shrubTextures: null,
+            shrubOClasses: null,
+            shrubClasses: null,
+            shrubClassTextureIndices: null,
+            shrubInstances: null,
+            shrubInstancesByOClass: null,
             sky: null,
             skyTextures: null,
             mobyInstances: null,
@@ -161,17 +166,11 @@ class RatchetAndClank1Scene implements SceneGfx {
             skyTextures: [],
         }
 
-        this.textureAtlasMappings = {
-            tfrag: null,
-            tie: null,
-            shrub: null,
-        };
-
         this.geometries = {
             tfrag: null,
             ties: new Map(),
             shrubs: new Map(),
-            skyShells: [],
+            skyShells: new Map(),
             collision: null,
         };
 
@@ -185,14 +184,19 @@ class RatchetAndClank1Scene implements SceneGfx {
 
         this.instanceDataBuffer = createMegaBuffer(cache.device, "Instance Data", 1024 * 1024);
 
-        this.fetchLevelFiles().then(() => {
-            if (!this.files) {
-                throw new Error("Files not loaded");
-            }
-
+        Promise.all([
+            this.sceneContext.dataFetcher.fetchData(`${pathBase(this.gameNumber)}/level_${this.levelNumber}.index`),
+            this.sceneContext.dataFetcher.fetchData(`${pathBase(this.gameNumber)}/level_${this.levelNumber}.core`),
+            this.sceneContext.dataFetcher.fetchData(`${pathBase(this.gameNumber)}/level_${this.levelNumber}.gameplay`),
+            this.sceneContext.dataFetcher.fetchData(`${pathBase(this.gameNumber)}/level_${this.levelNumber}.gs`),
+        ]).then(([coreIndexBuffer, coreDataBuffer, gameplayBuffer, gsRamBuffer]) => {
+            this.files = {
+                coreIndexBuffer,
+                coreDataBuffer,
+                gameplayBuffer,
+                gsRamBuffer,
+            };
             this.levelResources = buildLevelFromFiles(this.files);
-
-            this.buildAssetGeometry();
         });
     }
 
@@ -200,95 +204,117 @@ class RatchetAndClank1Scene implements SceneGfx {
         c.setSceneMoveSpeedMult(1 / 400);
     }
 
-    private async fetchLevelFiles() {
-        const promises = [
-            this.sceneContext.dataFetcher.fetchData(`${pathBase(this.gameNumber)}/level_${this.levelNumber}.index`),
-            this.sceneContext.dataFetcher.fetchData(`${pathBase(this.gameNumber)}/level_${this.levelNumber}.core`),
-            this.sceneContext.dataFetcher.fetchData(`${pathBase(this.gameNumber)}/level_${this.levelNumber}.gameplay`),
-            this.sceneContext.dataFetcher.fetchData(`${pathBase(this.gameNumber)}/level_${this.levelNumber}.gs`),
-        ];
+    getOrCreateTfragGeometry(): TfragGeometry | null {
+        const existing = this.geometries.tfrag;
+        if (existing) return existing;
 
-        const [coreIndexBuffer, coreDataBuffer, gameplayBuffer, gsRamBuffer] = await Promise.all(promises);
+        const { tfrags, tfragTextures } = this.levelResources;
+        if (!tfrags || !tfragTextures) return null;
 
-        this.files = {
-            coreIndexBuffer,
-            coreDataBuffer,
-            gameplayBuffer,
-            gsRamBuffer,
-        };
+        this.geometries.tfrag = new TfragGeometry(this.renderHelper.renderCache, tfrags, tfragTextures);
+        return this.geometries.tfrag;
     }
 
-    private buildAssetGeometry() {
-        const cache = this.renderHelper.renderCache;
+    getOrCreateTieGeometry(oClass: number): (TieGeometry | null)[] | null {
+        const existing = this.geometries.ties.get(oClass);
+        if (existing) return existing;
 
-        // tfrags
-        const { tfrags, tfragTextures } = this.levelResources;
-        assert(tfrags !== null);
-        assert(tfragTextures !== null);
-        this.geometries.tfrag = new TfragGeometry(cache, tfrags, tfragTextures);
+        const tieClass = this.levelResources.tieClasses?.get(oClass);
+        if (!tieClass) return null;
+        const tieTextureIndices = this.levelResources.tieClassTextureIndices?.get(oClass);
+        if (!tieTextureIndices) return null;
 
-        // ties
-        const { ties, tieInstances, tieTextures } = this.levelResources;
-        assert(ties !== null);
-        assert(tieInstances !== null);
-        assert(tieTextures !== null);
-        for (const { oClass, tieClass, textureIndices } of ties) {
-            this.geometries.ties.set(oClass, [null, null, null]);
-            for (let i = 0; i < 3; i++) {
-                if (tieClass.packets[i].length === 0) continue; // nothing to render for this lod
-                this.geometries.ties.get(oClass)![i] = new TieGeometry(cache, oClass, tieClass, i, textureIndices);
-            }
+        const tieGeometry: (TieGeometry | null)[] = [null, null, null];
+        for (let i = 0; i < 3; i++) {
+            if (tieClass.packets[i].length === 0) continue; // no mesh for this lod
+            tieGeometry[i] = new TieGeometry(this.renderHelper.renderCache, oClass, tieClass, i, tieTextureIndices);
         }
-        this.textures.tieRgbaTexture = createTieRgbaTexture(cache.device, tieInstances);
+        this.geometries.ties.set(oClass, tieGeometry);
+        return tieGeometry;
+    }
 
-        // shrubs
-        const { shrubs, shrubTextures } = this.levelResources;
-        assert(shrubs !== null);
-        assert(shrubTextures !== null);
-        for (const { oClass, shrubClass, textureIndices } of shrubs) {
-            this.geometries.shrubs.set(oClass, new ShrubGeometry(cache, shrubClass, textureIndices));
+    getOrCreateShrubGeometry(oClass: number): ShrubGeometry | null {
+        const existing = this.geometries.shrubs.get(oClass);
+        if (existing) return existing;
+
+        const shrubClass = this.levelResources.shrubClasses?.get(oClass);
+        if (!shrubClass) return null;
+        const shrubTextureIndices = this.levelResources.shrubClassTextureIndices?.get(oClass);
+        if (!shrubTextureIndices) return null;
+
+        const shrubGeometry = new ShrubGeometry(this.renderHelper.renderCache, shrubClass, shrubTextureIndices);
+        this.geometries.shrubs.set(oClass, shrubGeometry);
+        return shrubGeometry;
+    }
+
+    getOrCreateCollisionGeometry(): CollisionGeometry | null {
+        const existing = this.geometries.collision;
+        if (existing) return existing;
+
+        const { collision } = this.levelResources;
+        if (!collision) return null;
+
+        this.geometries.collision = new CollisionGeometry(this.renderHelper.renderCache, collision);
+        return this.geometries.collision;
+    }
+
+    getOrCreateSkyGeometry(i: number): SkyGeometry | null {
+        const existing = this.geometries.skyShells.get(i);
+        if (existing) return existing;
+
+        const { sky } = this.levelResources;
+        if (!sky) return null;
+
+        const skyGeometry = new SkyGeometry(this.renderHelper.renderCache, sky.shells[i]);
+        this.geometries.skyShells.set(i, skyGeometry);
+        return skyGeometry;
+    }
+
+    getOrCreateSkyTextures(): GfxTexture[] | null {
+        const existing = this.textures.skyTextures;
+        if (existing.length > 0) return existing;
+
+        const { skyTextures } = this.levelResources;
+        if (!skyTextures) return null;
+
+        const gfxTextures: GfxTexture[] = [];
+        for (let i = 0; i < skyTextures.length; i++) {
+            const skyTexture = skyTextures[i];
+            const gfxTexture = createGfxTextureForPaletteTexture(this.renderHelper.device, skyTexture).pixelsTexture;
+            this.textures.skyTextures.push(gfxTexture);
+            this.textureHolder.viewerTextures.push({ gfxTexture: gfxTexture });
+            gfxTextures.push(gfxTexture);
         }
+        this.textureHolder.onnewtextures();
+        this.textures.skyTextures = gfxTextures;
+        return gfxTextures;
+    }
 
-        // texture atlases shared by tfrags, ties, and shrubs
-        this.textures.textureAtlases = createTextureAtlases(cache.device, tfragTextures, tieTextures, shrubTextures);
-        const textureAtlasMappings = [
+    getOrCreateTieRgbaTexture(): GfxTexture | null {
+        const existing = this.textures.tieRgbaTexture;
+        if (existing) return existing;
+
+        const { tieInstances } = this.levelResources;
+        if (!tieInstances) return null;
+
+        this.textures.tieRgbaTexture = createTieRgbaTexture(this.renderHelper.device, tieInstances);
+        return this.textures.tieRgbaTexture;
+    }
+
+    getOrCreateAtlasTextures(): GfxSamplerBinding[] | null {
+        const { tfragTextures, tieTextures, shrubTextures } = this.levelResources;
+        if (!tfragTextures || !tieTextures || !shrubTextures) return null;
+
+        if (!this.textures.textureAtlases) {
+            this.textures.textureAtlases = createTextureAtlases(this.renderHelper.device, tfragTextures, tieTextures, shrubTextures);
+        }
+        return [
             { gfxTexture: this.textures.textureAtlases.gfxTextures[16], gfxSampler: this.samplerGeneral },
             { gfxTexture: this.textures.textureAtlases.gfxTextures[32], gfxSampler: this.samplerGeneral },
             { gfxTexture: this.textures.textureAtlases.gfxTextures[64], gfxSampler: this.samplerGeneral },
             { gfxTexture: this.textures.textureAtlases.gfxTextures[128], gfxSampler: this.samplerGeneral },
             { gfxTexture: this.textures.textureAtlases.gfxTextures[256], gfxSampler: this.samplerGeneral },
         ];
-        this.textureAtlasMappings.shrub = textureAtlasMappings;
-        this.textureAtlasMappings.tfrag = textureAtlasMappings;
-        this.textureAtlasMappings.tie = [
-            ...textureAtlasMappings,
-            { gfxTexture: this.textures.tieRgbaTexture!, gfxSampler: this.samplerGeneral },
-        ];
-
-        // sky
-        const { sky, skyTextures } = this.levelResources;
-        assert(sky !== null);
-        assert(skyTextures !== null);
-        for (let i = 0; i < sky.shells.length; i++) {
-            this.geometries.skyShells.push(new SkyGeometry(cache, sky.shells[i]));
-        }
-        for (let i = 0; i < skyTextures.length; i++) {
-            const skyTexture = skyTextures[i];
-            const gfxTextures = createGfxTextureForPaletteTexture(cache.device, skyTexture);
-            this.textures.skyTextures.push(gfxTextures.pixelsTexture);
-            this.textureHolder.viewerTextures.push({ gfxTexture: gfxTextures.pixelsTexture });
-        }
-
-        // collision
-        const { collision } = this.levelResources;
-        assert(collision !== null);
-        this.geometries.collision = new CollisionGeometry(cache, collision);
-
-        this.textureHolder.onnewtextures();
-
-        if (IS_DEVELOPMENT) {
-            console.log(this);
-        }
     }
 
     private fillSceneParams(template: GfxRenderInst, viewerInput: ViewerRenderInput, cameraPosition: vec3): void {
@@ -316,6 +342,7 @@ class RatchetAndClank1Scene implements SceneGfx {
         // background color (4 floats)
         const backgroundColor = levelSettings.backgroundColor;
         offs += fillVec4(data, offs, backgroundColor.r / 0xFF, backgroundColor.g / 0xFF, backgroundColor.b / 0xFF, 1);
+
         // sky color (4 floats)
         const skyColor = this.levelResources.sky?.header.skyColor ?? OpaqueBlack;
         offs += fillVec4(data, offs, skyColor.r / 0xFF, skyColor.g / 0xFF, skyColor.b / 0xFF, skyColor.a / 0xFF);
@@ -394,33 +421,50 @@ class RatchetAndClank1Scene implements SceneGfx {
         this.fillSceneParams(template, viewerInput, cameraPosition);
         this.renderHelper.debugDraw.beginFrame(viewerInput.camera.projectionMatrix, viewerInput.camera.viewMatrix, viewerInput.backbufferWidth, viewerInput.backbufferHeight);
 
+        // textures shared between tfrags, ties, and shrubs
+        const atlasTextures = this.getOrCreateAtlasTextures();
+
         // sky
-        if (this.settings.enableSky) {
-            for (let i = 0; i < this.geometries.skyShells.length; i++) {
-                const skyShellGeometry = this.geometries.skyShells[i];
-                this.renderers.sky.renderSky(this.renderInstList, cameraPosition, viewerInput.time, skyShellGeometry, this.textures.skyTextures, this.samplerSky);
+        const skyTextures = this.getOrCreateSkyTextures();
+        if (this.settings.enableSky && skyTextures && this.levelResources.sky?.shells) {
+            for (let i = 0; i < this.levelResources.sky.shells.length; i++) {
+                const skyShellGeometry = this.getOrCreateSkyGeometry(i);
+                if (!skyShellGeometry) continue;
+                if (!skyTextures) continue;
+                this.renderers.sky.renderSky(this.renderInstList, cameraPosition, viewerInput.time, skyShellGeometry, skyTextures, this.samplerSky);
             }
         }
 
         // collision
-        if (this.settings.showCollision && this.geometries.collision) {
-            this.renderers.collision.renderCollision(this.renderInstList, cameraPosition, this.geometries.collision);
+        if (this.settings.showCollision) {
+            const collisionGeometry = this.getOrCreateCollisionGeometry();
+            if (collisionGeometry) {
+                this.renderers.collision.renderCollision(this.renderInstList, cameraPosition, collisionGeometry);
+            }
         }
 
         // tfrag
-        if (this.settings.enableTfrag && this.geometries.tfrag && this.textureAtlasMappings.tfrag) {
-            this.renderers.tfrag.renderTfrag(this.renderInstList, this.geometries.tfrag, this.settings.lodSetting, this.textureAtlasMappings.tfrag);
+        if (this.settings.enableTfrag && atlasTextures) {
+            const tfragGeometry = this.getOrCreateTfragGeometry();
+            if (tfragGeometry) {
+                this.renderers.tfrag.renderTfrag(this.renderInstList, tfragGeometry, this.settings.lodSetting, atlasTextures);
+            }
         }
 
         // ties
-        if (this.settings.enableTies && this.levelResources.ties && this.textureAtlasMappings.tie) {
-            const tieBatches = this.levelResources.ties;
-            for (let i = 0; i < tieBatches.length; i++) {
-                const tieBatch = tieBatches[i];
-                const { tieClass, instances } = tieBatch;
-                const geometriesByLod = this.geometries.ties.get(tieBatch.oClass);
+        const tieRgbaTexture = this.getOrCreateTieRgbaTexture();
+        if (this.settings.enableTies && atlasTextures && tieRgbaTexture) {
+            const tieTextureMappings = [...atlasTextures, { gfxTexture: tieRgbaTexture, gfxSampler: this.samplerGeneral }];
+            const tieOClasses = this.levelResources.tieOClasses ?? [];
+            for (let i = 0; i < tieOClasses.length; i++) {
+                const oClass = tieOClasses[i];
+                const tieClass = this.levelResources.tieClasses?.get(oClass);
+                if (!tieClass) continue;
+                const instances = this.levelResources.tieInstancesByOClass?.get(oClass);
+                if (!instances) continue;
+                const geometriesByLod = this.getOrCreateTieGeometry(oClass);
                 if (!geometriesByLod) continue;
-                this.renderers.tie.renderTie(this.renderInstList, geometriesByLod, tieClass, instances, this.textureAtlasMappings.tie, cameraPosition, this.settings.lodSetting, this.settings.lodBias, this.instanceDataBuffer);
+                this.renderers.tie.renderTie(this.renderInstList, geometriesByLod, tieClass, instances, tieTextureMappings, cameraPosition, this.settings.lodSetting, this.settings.lodBias, this.instanceDataBuffer);
             }
         }
 
@@ -443,14 +487,17 @@ class RatchetAndClank1Scene implements SceneGfx {
         }
 
         // shrubs
-        if (this.settings.enableShrubs && this.levelResources.shrubs && this.textureAtlasMappings.shrub) {
-            const shrubBatches = this.levelResources.shrubs;
-            for (let i = 0; i < shrubBatches.length; i++) {
-                const shrubBatch = shrubBatches[i];
-                const { oClass, instances } = shrubBatch;
-                const geometry = this.geometries.shrubs.get(oClass);
+        if (this.settings.enableShrubs && atlasTextures) {
+            const shrubOClasses = this.levelResources.shrubOClasses ?? [];
+            for (let i = 0; i < shrubOClasses.length; i++) {
+                const oClass = shrubOClasses[i];
+                const shrubClass = this.levelResources.shrubClasses?.get(oClass);
+                if (!shrubClass) continue;
+                const instances = this.levelResources.shrubInstancesByOClass?.get(oClass);
+                if (!instances) continue;
+                const geometry = this.getOrCreateShrubGeometry(oClass);
                 if (!geometry) continue;
-                this.renderers.shrub.renderShrub(this.renderInstList, geometry, instances, this.textureAtlasMappings.shrub, cameraPosition, this.settings.lodSetting, this.settings.lodBias, this.instanceDataBuffer);
+                this.renderers.shrub.renderShrub(this.renderInstList, geometry, instances, atlasTextures, cameraPosition, this.settings.lodSetting, this.settings.lodBias, this.instanceDataBuffer);
             }
         }
 
@@ -582,7 +629,7 @@ class RatchetAndClank1Scene implements SceneGfx {
             this.geometries.tfrag,
             ...(Array.from(this.geometries.ties.values()).flat(1)),
             ...this.geometries.shrubs.values(),
-            ...this.geometries.skyShells,
+            ...this.geometries.skyShells.values(),
             this.geometries.collision,
         ];
         for (const geometry of allGeometries) {

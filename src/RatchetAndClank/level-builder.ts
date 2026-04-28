@@ -1,8 +1,8 @@
-import { readDirectionLightInstance, readGameplayHeader, readGrindPathBlock, readInstanceBlock, readLevelSettings, readMobyInstance, readPathBlock, readPointLightInstance, readShrubInstance, readTieInstance, ShrubInstance, SIZEOF_DIRECTION_LIGHT_INSTANCE, SIZEOF_MOBY_INSTANCE, SIZEOF_POINT_LIGHT_INSTANCE, SIZEOF_SHRUB_INSTANCE, SIZEOF_TIE_INSTANCE, TieInstance } from "./bin-gameplay";
+import { readClassPositionBlock, readDirectionLightInstance, readGameplayHeader, readGrindPathBlock, readInstanceBlock, readLevelSettings, readMobyInstance, readPathBlock, readPointLightInstance, readShrubInstance, readTieInstance, ShrubInstance, SIZEOF_DIRECTION_LIGHT_INSTANCE, SIZEOF_MOBY_INSTANCE, SIZEOF_POINT_LIGHT_INSTANCE, SIZEOF_SHRUB_INSTANCE, SIZEOF_TIE_INSTANCE, TieInstance } from "./bin-gameplay";
 import { DataViewExt } from "./DataViewExt";
 import { assert } from "../util";
 import { readCollision, readShrubClass, readSky, readTfrag, readTfragBlockHeader, readTfragHeader, readTieClass, ShrubClass, SIZEOF_TFRAG_HEADER, TieClass } from "./bin-core";
-import { makeInstanceOClassMap, truncateTrailing0xFF } from "./utils";
+import { makeClassOClassMap, makeInstanceOClassMap, makeTextureIndicesByOClassMap, truncateTrailing0xFF } from "./utils";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { readPalette8TextureSky, readPalette8TextureWithPaletteInGsRam } from "./textures";
 import { readClassEntry, readLevelCoreHeader, readTextureEntry, SIZEOF_SHRUB_CLASS_ENTRY, SIZEOF_TEXTURE_ENTRY, SIZEOF_TIE_CLASS_ENTRY } from "./bin-index";
@@ -56,34 +56,15 @@ export function buildLevelFromFiles(filesAsSlices: LevelFiles) {
     const tfragTextures = tfragTexureEntries.map((entry, i) => readPalette8TextureWithPaletteInGsRam(entry, textureData, files.gsRam, "Tfrag", i));
     const tfrags = tfragHeaders.map(tfragHeader => readTfrag(files.coreData.subview(tfragBlockHeader.tableOffset + tfragHeader.data), tfragHeader));
 
-    // read tie classes and tie textures
+    // read ties
     const tieClassEntries = files.coreIndex.subdivide(levelCoreHeader.tieClasses.offset, levelCoreHeader.tieClasses.count, SIZEOF_TIE_CLASS_ENTRY).map(readClassEntry);
     const tieTextureEntries = files.coreIndex.subdivide(levelCoreHeader.tieTextures.offset, levelCoreHeader.tieTextures.count, SIZEOF_TEXTURE_ENTRY).map(readTextureEntry);
     const tieTextures = tieTextureEntries.map((entry, i) => readPalette8TextureWithPaletteInGsRam(entry, textureData, files.gsRam, "Tie", i));
-    const tieClassesAndTextures = tieClassEntries.map((entry, i) => {
-        return {
-            tieEntry: entry,
-            tieClass: readTieClass(files.coreData.subview(entry.offsetInCoreData), entry.oClass),
-            textureIndices: truncateTrailing0xFF(entry.textures),
-        };
-    });
-
-    // read tie instances
-    const tieInstances = readInstanceBlock(files.gameplay.subview(gameplayHeader.tieInstances), SIZEOF_TIE_INSTANCE, readTieInstance);
-    const tiesInstancesGroupedByClass = makeInstanceOClassMap(tieInstances.instances);
-
-    // assemble into batches
-    const ties = tieClassesAndTextures.map<TieInstanceBatch>(classAndTexture => {
-        const { tieEntry, tieClass, textureIndices } = classAndTexture;
-        const oClass = tieEntry.oClass;
-        const instances = tiesInstancesGroupedByClass.get(oClass) ?? [];
-        return {
-            oClass,
-            tieClass,
-            textureIndices,
-            instances,
-        };
-    });
+    const tieOClasses = readClassPositionBlock(files.gameplay.subview(gameplayHeader.tieClasses));
+    const tieClasses = makeClassOClassMap(tieClassEntries, tieClassEntries.map(tieEntry => readTieClass(files.coreData.subview(tieEntry.offsetInCoreData), tieEntry.oClass)));
+    const tieInstances = readInstanceBlock(files.gameplay.subview(gameplayHeader.tieInstances), SIZEOF_TIE_INSTANCE, readTieInstance).instances;
+    const tieInstancesByOClass = makeInstanceOClassMap(tieInstances);
+    const tieClassTextureIndices = makeTextureIndicesByOClassMap(tieClassEntries);
 
     // read moby instances
     const mobyInstances = readInstanceBlock(files.gameplay.subview(gameplayHeader.mobyInstances), SIZEOF_MOBY_INSTANCE, readMobyInstance);
@@ -92,30 +73,11 @@ export function buildLevelFromFiles(filesAsSlices: LevelFiles) {
     const shrubClassEntries = files.coreIndex.subdivide(levelCoreHeader.shrubClasses.offset, levelCoreHeader.shrubClasses.count, SIZEOF_SHRUB_CLASS_ENTRY).map(readClassEntry);
     const shrubTextureEntries = files.coreIndex.subdivide(levelCoreHeader.shrubTextures.offset, levelCoreHeader.shrubTextures.count, SIZEOF_TEXTURE_ENTRY).map(readTextureEntry);
     const shrubTextures = shrubTextureEntries.map((entry, i) => readPalette8TextureWithPaletteInGsRam(entry, textureData, files.gsRam, "Shrub", i));
-    const shrubClassesAndTextures = shrubClassEntries.map(shrubEntry => {
-        return {
-            shrubEntry,
-            shrubClass: readShrubClass(files.coreData.subview(shrubEntry.offsetInCoreData)),
-            textureIndices: truncateTrailing0xFF(shrubEntry.textures),
-        };
-    });
-
-    // read shrub instances
-    const shrubInstances = readInstanceBlock(files.gameplay.subview(gameplayHeader.shrubInstances), SIZEOF_SHRUB_INSTANCE, readShrubInstance);
-    const shrubInstancesGroupedByClass = makeInstanceOClassMap(shrubInstances.instances);
-
-    // assemble into batches
-    const shrubs = shrubClassesAndTextures.map<ShrubInstanceBatch>((classAndTexture) => {
-        const { shrubClass, textureIndices } = classAndTexture;
-        const oClass = classAndTexture.shrubClass.header.oClass;
-        const instances = shrubInstancesGroupedByClass.get(oClass) ?? [];
-        return {
-            oClass,
-            shrubClass,
-            textureIndices,
-            instances,
-        };
-    });
+    const shrubOClasses = readClassPositionBlock(files.gameplay.subview(gameplayHeader.shrubClasses));
+    const shrubClasses = makeClassOClassMap(shrubClassEntries, shrubClassEntries.map(shrubEntry => readShrubClass(files.coreData.subview(shrubEntry.offsetInCoreData))));
+    const shrubInstances = readInstanceBlock(files.gameplay.subview(gameplayHeader.shrubInstances), SIZEOF_SHRUB_INSTANCE, readShrubInstance).instances;
+    const shrubInstancesByOClass = makeInstanceOClassMap(shrubInstances);
+    const shrubClassTextureIndices = makeTextureIndicesByOClassMap(shrubClassEntries);
 
     // read sky
     const sky = readSky(files.coreData.subview(levelCoreHeader.sky));
@@ -137,12 +99,21 @@ export function buildLevelFromFiles(filesAsSlices: LevelFiles) {
 
         tfrags,
         tfragTextures,
-        ties,
-        tieInstances: tieInstances.instances,
+
         tieTextures,
-        shrubs,
-        shrubInstances: shrubInstances.instances,
+        tieOClasses,
+        tieClasses,
+        tieClassTextureIndices,
+        tieInstances,
+        tieInstancesByOClass,
+
         shrubTextures,
+        shrubOClasses,
+        shrubClasses,
+        shrubClassTextureIndices,
+        shrubInstances,
+        shrubInstancesByOClass,
+
         sky,
         skyTextures,
 

@@ -3,13 +3,14 @@ import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice } from "..
 import { Color } from "../Color";
 import { assert, nArray } from "../util";
 import { IS_DEVELOPMENT } from "../BuildVersion";
+import { ClassEntry } from "./bin-index";
 
 // rotate the whole world 90 degrees
 const _noclipSpaceFromRatchetSpace = mat4.create();
 mat4.rotateX(_noclipSpaceFromRatchetSpace, mat4.clone(_noclipSpaceFromRatchetSpace), -Math.PI / 2);
 export const noclipSpaceFromRatchetSpace = _noclipSpaceFromRatchetSpace as ReadonlyMat4;
 
-// turn an array of objects into a map of arrays, using their oClass field as the key
+// make map of oClass to instances of that oClass
 export function makeInstanceOClassMap<T extends { oClass: number }>(instances: T[]) {
     const map = new Map<number, T[]>();
     for (const inst of instances) {
@@ -17,6 +18,28 @@ export function makeInstanceOClassMap<T extends { oClass: number }>(instances: T
             map.set(inst.oClass, []);
         }
         map.get(inst.oClass)!.push(inst);
+    }
+    return map;
+}
+
+// make map of oClass to texture indices
+export function makeTextureIndicesByOClassMap(classEntries: ClassEntry[]) {
+    const map = new Map<number, number[]>();
+    for (const classEntry of classEntries) {
+        const oClass = classEntry.oClass;
+        map.set(oClass, truncateTrailing0xFF(classEntry.textures));
+    }
+    return map;
+}
+
+// make map of oClass to class
+export function makeClassOClassMap<T>(entries: { oClass: number }[], classes: T[]): Map<number, T> {
+    const map = new Map<number, T>();
+    for (let i = 0; i < entries.length; i++) {
+        const oClass = entries[i]!.oClass;
+        if (!map.has(oClass)) {
+            map.set(oClass, classes[i]);
+        }
     }
     return map;
 }
