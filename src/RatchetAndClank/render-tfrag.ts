@@ -1,12 +1,16 @@
 import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
-import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice, GfxFormat, GfxInputLayout, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
+import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice, GfxFormat, GfxInputLayout, GfxProgram, GfxSamplerBinding, GfxSamplerFormatKind, GfxTextureDimension, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { DeviceProgram } from "../Program";
 import { assert } from "../util";
 import { RatchetShaderLib } from "./shader-lib";
-import { Tfrag, TfragAdGifs, TfragLight, TfragStrip, TfragVertexInfo } from "./structs-core";
+import { Tfrag, TfragAdGifs, TfragLight, TfragStrip, TfragVertexInfo } from "./bin-core";
 import { PaletteTexture } from "./textures";
+import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
+import { GfxRenderInstList } from "../gfx/render/GfxRenderInstManager";
+import { noclipSpaceFromRatchetSpace } from "./utils";
+import { fillMatrix4x4 } from "../gfx/helpers/UniformBufferHelpers";
 
 export class TfragProgram extends DeviceProgram {
     public static a_Position = 0;
@@ -143,6 +147,56 @@ export class TfragGeometry {
         for (const lod of this.lods) {
             device.destroyBuffer(lod.vertexBuffer);
         }
+    }
+}
+
+export class TfragRenderer {
+    private tfragProgram: GfxProgram;
+
+    constructor(private renderHelper: GfxRenderHelper) {
+        this.tfragProgram = renderHelper.renderCache.createProgram(new TfragProgram());
+    }
+
+    renderTfrag(renderInstList: GfxRenderInstList, tfragGeometry: TfragGeometry, settingLodPreset: number, textureMappings: GfxSamplerBinding[]) {
+        const objectMatrix = noclipSpaceFromRatchetSpace; // the tfrag has no transform, it's already in world space
+
+        let lodLevel = settingLodPreset;
+        if (settingLodPreset === -1) {
+            lodLevel = 0;
+        }
+
+        if (tfragGeometry.lods[lodLevel].vertexCount === 0) return;
+
+        const renderInst = this.renderHelper.renderInstManager.newRenderInst();
+        renderInst.setBindingLayouts([
+            {
+                numSamplers: 5,
+                numUniformBuffers: 2,
+                samplerEntries: [
+                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                ],
+            }
+        ]);
+        renderInst.setGfxProgram(this.tfragProgram);
+
+        const tfragParams = renderInst.allocateUniformBufferF32(TfragProgram.ub_TfragParams, 16);
+        let offs = 0;
+        offs += fillMatrix4x4(tfragParams, offs, objectMatrix);
+
+        renderInst.setVertexInput(
+            tfragGeometry.inputLayout,
+            [
+                { buffer: tfragGeometry.lods[lodLevel].vertexBuffer, byteOffset: 0 },
+            ],
+            null,
+        );
+        renderInst.setSamplerBindingsFromTextureMappings(textureMappings);
+        renderInst.setDrawCount(tfragGeometry.lods[lodLevel].vertexCount, 0);
+        renderInstList.submitRenderInst(renderInst);
     }
 }
 

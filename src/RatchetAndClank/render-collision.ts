@@ -1,12 +1,16 @@
-import { vec3 } from "gl-matrix";
+import { mat4, vec3 } from "gl-matrix";
 import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
-import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice, GfxFormat, GfxInputLayout, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
+import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice, GfxFormat, GfxInputLayout, GfxProgram, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { DeviceProgram } from "../Program";
 import { assert } from "../util";
 import { RatchetShaderLib } from "./shader-lib";
-import { CollisionOctant } from "./structs-core";
+import { CollisionOctant } from "./bin-core";
+import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
+import { GfxRenderInstList } from "../gfx/render/GfxRenderInstManager";
+import { noclipSpaceFromRatchetSpace } from "./utils";
+import { fillMatrix4x4 } from "../gfx/helpers/UniformBufferHelpers";
 
 const collisionTypeMap = Object.fromEntries([
     [0b0000, vec3.fromValues(0.3, 0.3, 0.9)], // 0 water
@@ -123,6 +127,37 @@ export class CollisionGeometry {
     }
 }
 
+
+export class CollisionRenderer {
+    private collisionProgram: GfxProgram;
+
+    constructor(private renderHelper: GfxRenderHelper) {
+        this.collisionProgram = renderHelper.renderCache.createProgram(new CollisionProgram());
+    }
+
+    renderCollision(renderInstList: GfxRenderInstList, cameraPosition: vec3, collisionGeometry: CollisionGeometry): void {
+        const objectMatrix = mat4.create();
+        mat4.multiply(objectMatrix, objectMatrix, noclipSpaceFromRatchetSpace);
+
+        const renderInst = this.renderHelper.renderInstManager.newRenderInst();
+        renderInst.setGfxProgram(this.collisionProgram);
+        renderInst.setBindingLayouts([
+            { numSamplers: 0, numUniformBuffers: 2 },
+        ]);
+
+        const collisionParams = renderInst.allocateUniformBufferF32(CollisionProgram.ub_CollisionParams, 16);
+        let offs = 0;
+        offs += fillMatrix4x4(collisionParams, offs, objectMatrix);
+
+        renderInst.setVertexInput(
+            collisionGeometry.inputLayout,
+            [{ buffer: collisionGeometry.vertexBuffer, byteOffset: 0 }],
+            null,
+        );
+        renderInst.setDrawCount(collisionGeometry.vertexCount, 0);
+        renderInstList.submitRenderInst(renderInst);
+    }
+}
 
 function assembleCollisionGeometry(collisionOctants: CollisionOctant[]) {
     const positionScale = 1;

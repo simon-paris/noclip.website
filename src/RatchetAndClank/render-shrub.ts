@@ -1,13 +1,18 @@
 import { GsPrimitiveType } from "../Common/PS2/GS";
 import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
-import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice, GfxFormat, GfxInputLayout, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
+import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice, GfxFormat, GfxInputLayout, GfxProgram, GfxSamplerBinding, GfxSamplerFormatKind, GfxTextureDimension, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { DeviceProgram } from "../Program";
-import { assert, nArray } from "../util";
+import { assert } from "../util";
 import { RatchetShaderLib } from "./shader-lib";
-import { ShrubClass, ShrubImaginaryGsCommand, ShrubVertex } from "./structs-core";
-import { ImaginaryGsCommandType } from "./utils";
+import { ShrubClass, ShrubImaginaryGsCommand, ShrubVertex } from "./bin-core";
+import { ImaginaryGsCommandType, MegaBuffer, noclipSpaceFromRatchetSpace } from "./utils";
+import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
+import { GfxRenderInstList } from "../gfx/render/GfxRenderInstManager";
+import { mat4, vec3 } from "gl-matrix";
+import { fillMatrix4x4, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
+import { ShrubInstance } from "./bin-gameplay";
 
 export class ShrubProgram extends DeviceProgram {
     public static a_Position = 0;
@@ -153,6 +158,98 @@ export class ShrubGeometry {
 
     public destroy(device: GfxDevice): void {
         device.destroyBuffer(this.vertexBuffer);
+    }
+}
+
+export class ShrubRenderer {
+    private shrubProgram: GfxProgram;
+
+    constructor(private renderHelper: GfxRenderHelper) {
+        this.shrubProgram = renderHelper.renderCache.createProgram(new ShrubProgram());
+    }
+
+    renderShrub(renderInstList: GfxRenderInstList, shrubGeometry: ShrubGeometry, shrubInstances: ShrubInstance[], textureMappings: GfxSamplerBinding[], cameraPosition: vec3, settingLodPreset: number, settingLodBias: number, instanceDataBuffer: MegaBuffer): void {
+        type ShrubDrawInstance = { objectMatrix: mat4, directionalLights: number[], rgb: { r: number, g: number, b: number }, lodAlpha: number, i: number };
+        const shrubInstancesToDraw: ShrubDrawInstance[] = [];
+        for (let i = 0; i < shrubInstances.length; i++) {
+            const shrubInstance = shrubInstances[i];
+
+            // shrub instance transform
+            const objectMatrix = mat4.create();
+            mat4.multiply(objectMatrix, noclipSpaceFromRatchetSpace, shrubInstance.matrix);
+            const position = vec3.create();
+            mat4.getTranslation(position, objectMatrix);
+            const distanceToCamera = vec3.distance(position, cameraPosition);
+
+            // lod
+            let lodAlpha = settingLodPreset === 0 ? 1 : 0;
+            if (settingLodPreset === -1) {
+                const farDist = shrubInstance.drawDistance + settingLodBias * 1.5;
+                if (farDist > 0) {
+                    const nearDist = farDist * 0.5;
+                    lodAlpha = 1 - (distanceToCamera - nearDist) / (farDist - nearDist);
+                    lodAlpha = Math.max(0, Math.min(1, lodAlpha));
+                }
+            }
+            if (lodAlpha <= 0) continue;
+
+            // this is much slower than doing nothing because of the jumps into rust
+            // // find bounding sphere and frustum cull
+            // const objectScale = Math.hypot(objectMatrix[0], objectMatrix[1], objectMatrix[2]);
+            // if (!cameraFrustum.containsSphere(position, 0x7FFF / 1024 * shrubClass.header.scale * objectScale)) {
+            //     continue;
+            // }
+
+            shrubInstancesToDraw.push({
+                objectMatrix,
+                directionalLights: shrubInstance.directionalLights,
+                rgb: shrubInstance.color,
+                lodAlpha,
+                i,
+            })
+        }
+
+        if (!shrubInstancesToDraw.length) return;
+
+        const renderInst = this.renderHelper.renderInstManager.newRenderInst();
+        renderInst.setGfxProgram(this.shrubProgram);
+        renderInst.setBindingLayouts([
+            {
+                numSamplers: 5,
+                numUniformBuffers: 2,
+                samplerEntries: [
+                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+                ],
+            }
+        ]);
+
+        // per instance data
+        const instanceDataStartBytes = instanceDataBuffer.ptr * 4;
+        for (let i = 0; i < shrubInstancesToDraw.length; i++) {
+            const inst = shrubInstancesToDraw[i];
+            const color = inst.rgb;
+            instanceDataBuffer.ptr += fillMatrix4x4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, inst.objectMatrix);
+            instanceDataBuffer.ptr += fillVec4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, color.r / 0x80, color.g / 0x80, color.b / 0x80, 1);
+            instanceDataBuffer.ptr += fillVec4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, inst.directionalLights[0], inst.directionalLights[1], inst.directionalLights[2], inst.directionalLights[3]);
+            instanceDataBuffer.f32View[instanceDataBuffer.ptr++] = inst.lodAlpha;
+        }
+
+        renderInst.setVertexInput(
+            shrubGeometry.inputLayout,
+            [
+                { buffer: shrubGeometry.vertexBuffer, byteOffset: 0 },
+                { buffer: instanceDataBuffer.gfxBuffer, byteOffset: instanceDataStartBytes },
+            ],
+            null,
+        );
+        renderInst.setSamplerBindingsFromTextureMappings(textureMappings);
+        renderInst.setDrawCount(shrubGeometry.vertexCount, 0);
+        renderInst.setInstanceCount(shrubInstancesToDraw.length);
+        renderInstList.submitRenderInst(renderInst);
     }
 }
 

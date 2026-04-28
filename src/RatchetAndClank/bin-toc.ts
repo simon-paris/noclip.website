@@ -1,5 +1,5 @@
-import { assert } from "../../util";
-import { DataViewExt } from "../DataViewExt";
+import { assert } from "../util";
+import { DataViewExt } from "./DataViewExt";
 
 export type TableOfContents = {
     version: number,

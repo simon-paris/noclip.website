@@ -1,10 +1,11 @@
-import { readDirectionLightInstance, readGameplayHeader, readGrindPathBlock, readInstanceBlock, readLevelSettings, readMobyInstance, readPathBlock, readPointLightInstance, readShrubInstance, readTieInstance, ShrubInstance, SIZEOF_DIRECTION_LIGHT_INSTANCE, SIZEOF_MOBY_INSTANCE, SIZEOF_POINT_LIGHT_INSTANCE, SIZEOF_SHRUB_INSTANCE, SIZEOF_TIE_INSTANCE, TieInstance } from "./structs-gameplay";
+import { readDirectionLightInstance, readGameplayHeader, readGrindPathBlock, readInstanceBlock, readLevelSettings, readMobyInstance, readPathBlock, readPointLightInstance, readShrubInstance, readTieInstance, ShrubInstance, SIZEOF_DIRECTION_LIGHT_INSTANCE, SIZEOF_MOBY_INSTANCE, SIZEOF_POINT_LIGHT_INSTANCE, SIZEOF_SHRUB_INSTANCE, SIZEOF_TIE_INSTANCE, TieInstance } from "./bin-gameplay";
 import { DataViewExt } from "./DataViewExt";
 import { assert } from "../util";
-import { readClassEntry, readCollision, readLevelCoreHeader, readShrubClass, readSky, readTextureEntry, readTfrag, readTfragBlockHeader, readTfragHeader, readTieClass, ShrubClass, SIZEOF_SHRUB_CLASS_ENTRY, SIZEOF_TEXTURE_ENTRY, SIZEOF_TFRAG_HEADER, SIZEOF_TIE_CLASS_ENTRY, TieClass } from "./structs-core";
+import { readCollision, readShrubClass, readSky, readTfrag, readTfragBlockHeader, readTfragHeader, readTieClass, ShrubClass, SIZEOF_TFRAG_HEADER, TieClass } from "./bin-core";
 import { makeInstanceOClassMap, truncateTrailing0xFF } from "./utils";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { readPalette8TextureSky, readPalette8TextureWithPaletteInGsRam } from "./textures";
+import { readClassEntry, readLevelCoreHeader, readTextureEntry, SIZEOF_SHRUB_CLASS_ENTRY, SIZEOF_TEXTURE_ENTRY, SIZEOF_TIE_CLASS_ENTRY } from "./bin-index";
 
 export type LevelFiles = {
     coreIndexBuffer: ArrayBufferSlice,
