@@ -69,7 +69,9 @@ export function readGameplayHeader(view: DataViewExt) {
     */
     return {
         levelSettings: view.getInt32(0x0),
+        tieClasses: view.getInt32(0x30),
         tieInstances: view.getInt32(0x34),
+        shrubClasses: view.getInt32(0x38),
         shrubInstances: view.getInt32(0x3c),
         mobyInstances: view.getInt32(0x44),
         directionLightInstances: view.getInt32(0x4),
@@ -116,6 +118,18 @@ export function readLevelSettings(view: DataViewExt): LevelSettings {
         shipCameraCuboidStart: view.getInt32(0x40),
         shipCameraCuboidEnd: view.getInt32(0x44),
     }
+}
+
+export function readClassPositionBlock(view: DataViewExt) {
+    /*
+    struct ClassPositionBlock {
+        int32 oClassCount;
+        int32 oClasses[oClassCount];
+    }
+    */
+    const oClassCount = view.getInt32(0);
+    const oClasses = view.subdivide(4, oClassCount, 4).map(view => view.getInt32(0));
+    return oClasses;
 }
 
 export type TieInstance = {
