@@ -22,7 +22,7 @@ import { DirectionLightInstance, GameplayHeader, LevelSettings, MobyInstance, Po
 import { createGfxTextureForPaletteTexture, createTextureAtlases, createTieRgbaTexture, PaletteTexture, TextureAtlases } from "./textures";
 import { CollisionGeometry, CollisionRenderer } from "./render-collision";
 import { IS_DEVELOPMENT } from "../BuildVersion";
-import { CollisionOctant, ShrubClass, Sky, Tfrag, TieClass } from "./bin-core";
+import { Collision, CollisionOctant, ShrubClass, Sky, Tfrag, TieClass } from "./bin-core";
 import { LevelCoreHeader } from "./bin-index";
 
 const pathBase = (gameNumber: number) => `RatchetAndClank${gameNumber}`;
@@ -62,7 +62,7 @@ class RatchetAndClank1Scene implements SceneGfx {
         grindPaths: Spline[] | null,
         directionLights: DirectionLightInstance[] | null,
         pointLights: PointLightInstance[] | null,
-        collision: CollisionOctant[] | null,
+        collision: Collision | null,
 
         tfrags: Tfrag[] | null,
         tfragTextures: PaletteTexture[] | null,

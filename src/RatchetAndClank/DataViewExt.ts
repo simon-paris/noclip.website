@@ -306,6 +306,21 @@ export class DataViewExt<T extends ArrayBufferLike = ArrayBufferLike> extends Da
         return { x, y, z, w };
     }
 
+    getUint16_Xyz(offset: number, littleEndian: boolean = this.defaultLittleEndian) {
+        const x = this.getUint16(offset + 0x0, littleEndian);
+        const y = this.getUint16(offset + 0x2, littleEndian);
+        const z = this.getUint16(offset + 0x4, littleEndian);
+        return { x, y, z };
+    }
+
+    getUint16_Xyzw(offset: number, littleEndian: boolean = this.defaultLittleEndian) {
+        const x = this.getUint16(offset + 0x0, littleEndian);
+        const y = this.getUint16(offset + 0x2, littleEndian);
+        const z = this.getUint16(offset + 0x4, littleEndian);
+        const w = this.getUint16(offset + 0x6, littleEndian);
+        return { x, y, z, w };
+    }
+
     getUint8_Xy(offset: number) {
         const x = this.getUint8(offset + 0x0);
         const y = this.getUint8(offset + 0x1);

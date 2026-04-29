@@ -95,7 +95,7 @@ export function buildLevelFromFiles(filesAsSlices: LevelFiles) {
         grindPaths,
         directionLights: directionLights.instances,
         pointLights: pointLights.instances,
-        collision: collision.meshGrid,
+        collision: collision,
 
         tfrags,
         tfragTextures,

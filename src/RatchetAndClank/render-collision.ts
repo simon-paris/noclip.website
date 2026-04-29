@@ -6,7 +6,7 @@ import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { DeviceProgram } from "../Program";
 import { assert } from "../util";
 import { RatchetShaderLib } from "./shader-lib";
-import { CollisionOctant } from "./bin-core";
+import { Collision, CollisionOctant, HeroCollisionGroups, HeroCollisionGroupsHeader } from "./bin-core";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { GfxRenderInstList } from "../gfx/render/GfxRenderInstManager";
 import { noclipSpaceFromRatchetSpace } from "./utils";
@@ -17,7 +17,7 @@ const collisionTypeMap = Object.fromEntries([
     [0b0001, vec3.fromValues(0.9, 0.1, 0.1)], // 1 take damage, bounce (hot objects, lava, goo)
     [0b0010, vec3.fromValues(0.9, 0.9, 0.2)], // 2 mag boots
     [0b0011, vec3.fromValues(0.6, 0.5, 0.3)], // 3 drown (mud)
-    [0b0100, vec3.fromValues(0.2, 0.4, 0.2)], // 4 slippy slide
+    [0b0100, vec3.fromValues(0.1, 0.4, 0.1)], // 4 slippy slide
     [0b0101, vec3.fromValues(0.9, 0.6, 0.3)], // 5 hoverbike or grindrail jump
     [0b0110, vec3.fromValues(0.4, 0.7, 0.4)], // 6 unused
     [0b0111, vec3.fromValues(0.7, 0.9, 1.0)], // 7 ice
@@ -71,7 +71,11 @@ void main() {
     vec4 t_PositionWorld = UnpackMatrix(u_CollisionTransform) * vec4(a_Position, 1.0f);
     gl_Position = (UnpackMatrix(u_ClipFromWorld) * t_PositionWorld);
 
-    v_Rgb = colors[int(a_CollisionType)];
+    if (a_CollisionType == -1.0) {
+        v_Rgb = vec3(0.5, 1.0, 0.5); // ratchet-only collision
+    } else {
+        v_Rgb = colors[int(a_CollisionType)];
+    }
     v_PositionWorld = t_PositionWorld.xyz;
 }
 `;
@@ -101,10 +105,10 @@ export class CollisionGeometry {
 
     public inputLayout: GfxInputLayout;
 
-    constructor(cache: GfxRenderCache, collisionOctants: CollisionOctant[]) {
+    constructor(cache: GfxRenderCache, collision: Collision) {
         const device = cache.device;
 
-        const assembled = assembleCollisionGeometry(collisionOctants);
+        const assembled = assembleCollisionGeometry(collision.meshGrid, collision.heroGroups);
 
         this.vertexBuffer = createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, assembled.vertexArrayBuffer.buffer);
         device.setResourceName(this.vertexBuffer, `Collision (VB)`);
@@ -159,9 +163,8 @@ export class CollisionRenderer {
     }
 }
 
-function assembleCollisionGeometry(collisionOctants: CollisionOctant[]) {
-    const positionScale = 1;
-    const octantScale = 1;
+function assembleCollisionGeometry(collisionOctants: CollisionOctant[], heroCollisionGroups: HeroCollisionGroups) {
+    const heroCollisionPositionScale = 1 / 64;
 
     const verts: {
         x: number,
@@ -177,9 +180,9 @@ function assembleCollisionGeometry(collisionOctants: CollisionOctant[]) {
             const vert = octant.verts[idx];
             const { x, y, z } = vert;
             verts.push({
-                x: positionScale * x + octantScale * octant.pos.x,
-                y: positionScale * y + octantScale * octant.pos.y,
-                z: positionScale * z + octantScale * octant.pos.z,
+                x: x + octant.pos.x,
+                y: y + octant.pos.y,
+                z: z + octant.pos.z,
                 type: type & 0xF, // only the bottom 4 bits seem important, the rest are related to footsteps or something
             });
         }
@@ -195,6 +198,28 @@ function assembleCollisionGeometry(collisionOctants: CollisionOctant[]) {
                 pushVertex(face.v3!, type);
                 pushVertex(face.v2, type);
             }
+        }
+    }
+
+    for (let i = 0; i < heroCollisionGroups.groupData.length; i++) {
+        const group = heroCollisionGroups.groupData[i];
+
+        function pushVertex(idx: number) {
+            const vert = group.verts[idx];
+            const { x, y, z } = vert;
+            verts.push({
+                x: heroCollisionPositionScale * x,
+                y: heroCollisionPositionScale * y,
+                z: heroCollisionPositionScale * z,
+                type: -1,
+            });
+        }
+
+        for (let j = 0; j < group.faces.length; j++) {
+            const face = group.faces[j];
+            pushVertex(face.v0);
+            pushVertex(face.v1);
+            pushVertex(face.v2);
         }
     }
 

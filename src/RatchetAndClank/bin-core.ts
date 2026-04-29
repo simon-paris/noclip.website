@@ -1347,13 +1347,20 @@ export function readSkyFace(view: DataViewExt): SkyFace {
     };
 }
 
+export type Collision = {
+    header: CollisionHeader,
+    meshGrid: CollisionOctant[],
+    heroGroups: HeroCollisionGroups,
+};
 
-export function readCollision(view: DataViewExt) {
+export function readCollision(view: DataViewExt): Collision {
     const header = readCollisionHeader(view);
     const meshGrid = readCollisionMeshGrid(view.subview(header.mesh));
+    const heroGroups = readHeroCollisionGroups(view.subview(header.heroGroups));
     return {
         header,
         meshGrid,
+        heroGroups,
     };
 }
 
@@ -1493,6 +1500,81 @@ export function readCollisionOctant(view: DataViewExt, maxLength16: number, worl
     };
 }
 
-export function readHeroCollisionGroup(view: DataViewExt) {
+export type HeroCollisionGroupsHeader = {
+    count: number,
+    groups: {
+        boundingSphere: { x: number, y: number, z: number, w: number },
+        triangleCount: number,
+        vertexCount: number,
+        offset: number,
+    }[],
+};
 
+export function readHeroCollisionGroupsHeader(view: DataViewExt) {
+    /*
+    struct HeroCollisionGroupsHeader {
+        uint32 count;
+        uint32 pad[3];
+        // 0x10
+        struct {
+            uint16vec4 boundingSphere;
+            uint16 triangle_count;
+            uint16 vertex_count;
+            uint32 offset;
+        } groups[count];
+    }
+    */
+
+    const count = view.getUint32(0x0);
+    const groups = view.subdivide(0x10, count, 0x10).map(view => ({
+        boundingSphere: view.getUint16_Xyzw(0x0),
+        triangleCount: view.getUint16(0x8),
+        vertexCount: view.getUint16(0xa),
+        offset: view.getUint32(0xc),
+    }));
+
+    return {
+        count,
+        groups,
+    };
+}
+
+export type HeroCollisionGroupData = {
+    verts: {
+        x: number,
+        y: number,
+        z: number
+    }[],
+    faces: {
+        v0: number,
+        v1: number,
+        v2: number,
+    }[],
+};
+
+export type HeroCollisionGroups = {
+    header: HeroCollisionGroupsHeader,
+    groupData: HeroCollisionGroupData[],
+};
+
+export function readHeroCollisionGroups(view: DataViewExt): HeroCollisionGroups {
+    const header = readHeroCollisionGroupsHeader(view);
+    const groupData = [];
+    for (const group of header.groups) {
+        const groupView = view.subview(group.offset);
+        const verts = groupView.subdivide(0, group.vertexCount, 0x8).map(view => view.getUint16_Xyz(0x0));
+        const faces = groupView.subdivide(group.vertexCount * 0x8, group.triangleCount, 0x4).map(view => ({
+            v0: view.getUint8(0x0),
+            v1: view.getUint8(0x1),
+            v2: view.getUint8(0x2),
+        }));
+        groupData.push({
+            verts,
+            faces,
+        });
+    }
+    return {
+        header,
+        groupData,
+    }
 }
