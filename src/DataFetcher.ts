@@ -119,7 +119,7 @@ class DataFetcherRequest {
             const match = await this.cache.match(this.request).catch(error => {
                 console.error("Cache error:", error);
             });
-            
+
             if (match !== undefined) {
                 const arrayBuffer = await match.arrayBuffer();
                 this.resolveArrayBuffer(arrayBuffer);
@@ -240,14 +240,14 @@ class DataFetcherMount {
         while (parts.length > 1) {
             try {
                 directory = await directory!.getDirectoryHandle(parts.shift()!);
-            } catch(e) {
+            } catch (e) {
                 return null;
             }
         }
 
         try {
             return await directory!.getFileHandle(parts.shift()!);
-        } catch(e) {
+        } catch (e) {
             return null;
         }
     }
@@ -299,7 +299,7 @@ export class DataFetcher {
         const REQUEST_CACHE_NAME = `request-cache-v1`;
         try {
             this.cache = await caches.open(REQUEST_CACHE_NAME);
-        } catch(e) {
+        } catch (e) {
             // Cache failed to open. That's OK, just don't use it.
         }
     }
@@ -316,7 +316,7 @@ export class DataFetcher {
 
         try {
             directory = await window.showDirectoryPicker();
-        } catch(e) {
+        } catch (e) {
             // AbortError, likely.
             return;
         }
