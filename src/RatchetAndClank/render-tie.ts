@@ -109,6 +109,7 @@ flat in int v_TextureIndex;
 flat in int v_Clamp;
 
 void main() {
+    if (u_EnableTextures == 0.0) { gl_FragColor = vec4(v_Rgba.rgb / 2.0, v_Rgba.a); return; }
     vec2 texRemap = u_TextureRemaps.ties[v_TextureIndex].xy;
     vec4 textureSample = ratchetSampler(texRemap.x, texRemap.y, v_Clamp, v_ST);
     gl_FragColor = commonFragmentShader(v_Rgba, textureSample);

@@ -179,7 +179,7 @@ export function createGfxTextureArrayForPaletteTextures(device: GfxDevice, name:
         let textureData = unpalettizeTexture(texture);
 
         // I'd really like to read the real mip data from the game
-        // If I did that I also wouldn't need to unpalettize the texture on the cpu.
+        // If I did that I also wouldn't need to unpalettize the textures on the cpu.
         for (let level = 0; level < numLevels; level++) {
             mipLevels[level].set(textureData, ptrs[level]);
             ptrs[level] += textureData.byteLength;

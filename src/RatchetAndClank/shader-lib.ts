@@ -118,8 +118,7 @@ vec3 adjustSaturation(vec3 color, float adjustment) {
 
 vec4 commonFragmentShader(vec4 rgba, vec4 textureSample) {
     // texture color is multiplied with vertex color immediately
-    if (u_EnableTextures == 1.0) { rgba *= textureSample; }
-    else { rgba.rgb *= 0.5; }
+    rgba *= textureSample;
 
     // fog step (ignores alpha)
     vec3 rgb = rgba.rgb;

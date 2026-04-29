@@ -89,6 +89,7 @@ flat in int v_TextureLayer;
 flat in int v_Clamp;
 
 void main() {
+    if (u_EnableTextures == 0.0) { gl_FragColor = vec4(v_Rgba.rgb / 2.0, v_Rgba.a); return; }
     vec2 texRemap = u_TextureRemaps.tfrags[v_TextureLayer].xy;
     vec4 textureSample = ratchetSampler(texRemap.x, texRemap.y, v_Clamp, v_ST);
     gl_FragColor = commonFragmentShader(v_Rgba, textureSample);
@@ -271,7 +272,22 @@ function flattenTfragVerts(triangleGroups: TfragTriangleGroup[]) {
         for (let j = 0; j < group.verts.length; j++) {
             const vert = group.verts[j];
             result.push({
-                ...vert,
+                x: vert.x,
+                y: vert.y,
+                z: vert.z,
+                nx: vert.nx,
+                ny: vert.ny,
+                nz: vert.nz,
+                r: vert.r,
+                g: vert.g,
+                b: vert.b,
+                a: vert.a,
+                s: vert.s,
+                t: vert.t,
+                light0: vert.light0,
+                light1: vert.light1,
+                light2: vert.light2,
+                light3: vert.light3,
                 textureLayer: group.material,
                 clamp: group.clamp,
             });

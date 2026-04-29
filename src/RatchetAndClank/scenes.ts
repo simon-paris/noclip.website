@@ -11,19 +11,16 @@ import * as UI from "../ui";
 import { FakeTextureHolder } from "../TextureHolder";
 import { TieGeometry, TieProgram, TieRenderer } from "./render-tie";
 import { CameraController } from "../Camera";
-import { buildLevelFromFiles, LevelFiles } from "./level-builder";
+import { LevelResources, load } from "./loader";
 import { createMegaBuffer, MegaBuffer, noclipSpaceFromRatchetSpace, lineChainToLineSegments } from "./utils";
 import { TfragGeometry, TfragRenderer } from "./render-tfrag";
 import { ShrubGeometry, ShrubRenderer } from "./render-shrub";
 import { colorNewFromRGBA, OpaqueBlack, White } from "../Color";
 import { SkyGeometry, SkyRenderer } from "./render-sky";
 import { RatchetShaderLib } from "./shader-lib";
-import { DirectionLightInstance, GameplayHeader, LevelSettings, MobyInstance, PointLightInstance, ShrubInstance, Spline, TieInstance } from "./bin-gameplay";
-import { createGfxTextureForPaletteTexture, createTextureAtlases, createTieRgbaTexture, PaletteTexture, TextureAtlases } from "./textures";
+import { createGfxTextureForPaletteTexture, createTextureAtlases, createTieRgbaTexture, TextureAtlases } from "./textures";
 import { CollisionGeometry, CollisionRenderer } from "./render-collision";
 import { IS_DEVELOPMENT } from "../BuildVersion";
-import { Collision, CollisionOctant, ShrubClass, Sky, Tfrag, TieClass } from "./bin-core";
-import { LevelCoreHeader } from "./bin-index";
 
 const pathBase = (gameNumber: number) => `RatchetAndClank${gameNumber}`;
 
@@ -51,41 +48,7 @@ class RatchetAndClank1Scene implements SceneGfx {
         showPaths: false,
     };
 
-    private files: LevelFiles | null = null;
-
-    private levelResources: {
-        levelCoreHeader: LevelCoreHeader | null,
-        gameplayHeader: GameplayHeader | null,
-
-        levelSettings: LevelSettings | null,
-        paths: Spline[] | null,
-        grindPaths: Spline[] | null,
-        directionLights: DirectionLightInstance[] | null,
-        pointLights: PointLightInstance[] | null,
-        collision: Collision | null,
-
-        tfrags: Tfrag[] | null,
-        tfragTextures: PaletteTexture[] | null,
-
-        tieTextures: PaletteTexture[] | null,
-        tieOClasses: number[] | null,
-        tieClasses: Map<number, TieClass> | null,
-        tieClassTextureIndices: Map<number, number[]> | null,
-        tieInstances: TieInstance[] | null,
-        tieInstancesByOClass: Map<number, TieInstance[]> | null,
-
-        shrubTextures: PaletteTexture[] | null,
-        shrubOClasses: number[] | null,
-        shrubClasses: Map<number, ShrubClass> | null,
-        shrubClassTextureIndices: Map<number, number[]> | null,
-        shrubInstances: ShrubInstance[] | null,
-        shrubInstancesByOClass: Map<number, ShrubInstance[]> | null,
-
-        sky: Sky | null,
-        skyTextures: PaletteTexture[] | null,
-
-        mobyInstances: MobyInstance[] | null,
-    };
+    private levelResources: LevelResources;
 
     private textures: {
         textureAtlases: TextureAtlases | null,
@@ -183,22 +146,10 @@ class RatchetAndClank1Scene implements SceneGfx {
 
         this.instanceDataBuffer = createMegaBuffer(cache.device, "Instance Data", 1024 * 1024);
 
-        Promise.all([
-            this.sceneContext.dataFetcher.fetchData(`${pathBase(this.gameNumber)}/level_${this.levelNumber}.index`),
-            this.sceneContext.dataFetcher.fetchData(`${pathBase(this.gameNumber)}/level_${this.levelNumber}.core`),
-            this.sceneContext.dataFetcher.fetchData(`${pathBase(this.gameNumber)}/level_${this.levelNumber}.gameplay`),
-            this.sceneContext.dataFetcher.fetchData(`${pathBase(this.gameNumber)}/level_${this.levelNumber}.gs`),
-        ]).then(([coreIndexBuffer, coreDataBuffer, gameplayBuffer, gsRamBuffer]) => {
-            this.files = {
-                coreIndexBuffer,
-                coreDataBuffer,
-                gameplayBuffer,
-                gsRamBuffer,
-            };
-            this.levelResources = buildLevelFromFiles(this.files);
-            if (IS_DEVELOPMENT) {
-                console.log(this);
-            }
+        load(this.levelResources, sceneContext.dataFetcher, `${pathBase(this.gameNumber)}/level_${this.levelNumber}`).then(() => {
+            if (IS_DEVELOPMENT) console.log(this);
+        }).catch((e) => {
+            console.error(`Error loading level:`, e);
         });
     }
 

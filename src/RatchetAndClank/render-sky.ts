@@ -69,6 +69,7 @@ void main() {
         if (u_EnableTextures == 0.0) discard;
         gl_FragColor = commonFragmentShader(v_Rgba, texture(SAMPLER_2D(u_Texture), v_ST));
     } else {
+        if (u_EnableTextures == 0.0) { gl_FragColor = vec4(v_Rgba.rgb, v_Rgba.a); return; }
         gl_FragColor = commonFragmentShader(v_Rgba, vec4(1.0, 1.0, 1.0, 1.0));
     }
 }
