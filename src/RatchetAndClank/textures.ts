@@ -84,27 +84,32 @@ function unpalettizeTexture(texture: PaletteTexture): Uint8Array {
     return new Uint8Array(palettedPixels.buffer, palettedPixels.byteOffset, palettedPixels.byteLength);
 }
 
-// scale up texture by 2x
-function upscale(textureData: Uint8Array): Uint8Array {
+// scale down texture by 2x using box filter
+function downscale(textureData: Uint8Array): Uint8Array {
     const originalDim = Math.sqrt(textureData.length / 4);
     if (!Number.isInteger(originalDim)) {
         throw new Error(`Texture data is not a square`);
     }
-    const dim = originalDim * 2;
-    const upscaled = new Uint8Array(dim * dim * 4);
+    const dim = originalDim / 2;
+    assert(Number.isInteger(dim));
+    assert(dim > 0);
+    const downscaled = new Uint8Array(dim * dim * 4);
     for (let y = 0; y < dim; y++) {
         for (let x = 0; x < dim; x++) {
-            const srcX = Math.floor(x / 2);
-            const srcY = Math.floor(y / 2);
-            const srcIndex = (srcY * originalDim + srcX) * 4;
+            const srcX = x * 2;
+            const srcY = y * 2;
             const dstIndex = (y * dim + x) * 4;
-            upscaled[dstIndex] = textureData[srcIndex];
-            upscaled[dstIndex + 1] = textureData[srcIndex + 1];
-            upscaled[dstIndex + 2] = textureData[srcIndex + 2];
-            upscaled[dstIndex + 3] = textureData[srcIndex + 3];
+            // Average 2x2 pixels
+            for (let c = 0; c < 4; c++) {
+                const p1 = textureData[((srcY + 0) * originalDim + (srcX + 0)) * 4 + c];
+                const p2 = textureData[((srcY + 0) * originalDim + (srcX + 1)) * 4 + c];
+                const p3 = textureData[((srcY + 1) * originalDim + (srcX + 0)) * 4 + c];
+                const p4 = textureData[((srcY + 1) * originalDim + (srcX + 1)) * 4 + c];
+                downscaled[dstIndex + c] = Math.floor((p1 + p2 + p3 + p4) / 4);
+            }
         }
     }
-    return upscaled;
+    return downscaled;
 }
 
 export function createGfxTextureForPaletteTexture(device: GfxDevice, texture: PaletteTexture): { pixelsTexture: GfxTexture } {
@@ -141,7 +146,6 @@ export function create1x1x1ErrorArrayTexture(device: GfxDevice): GfxTexture {
 
 /**
  * Pack many palette textures into a big texture array.
- * Scales up textures to match the largest in the list.
  */
 export function createGfxTextureArrayForPaletteTextures(device: GfxDevice, name: string, textures: PaletteTexture[]) {
     if (textures.length === 0) {
@@ -149,36 +153,42 @@ export function createGfxTextureArrayForPaletteTextures(device: GfxDevice, name:
     }
 
     const dim = Math.max(...textures.map(t => t.textureEntry.width));
+    const numLevels = Math.log2(dim) + 1;
     const gfxTexture = device.createTexture({
         dimension: GfxTextureDimension.n2DArray,
         pixelFormat: GfxFormat.U8_RGBA_NORM,
         width: dim,
         height: dim,
         depthOrArrayLayers: textures.length,
-        numLevels: 1,
+        numLevels: numLevels,
         usage: GfxTextureUsage.Sampled,
     });
     device.setResourceName(gfxTexture, name);
 
-    const textureData = new Uint8Array(dim * dim * 4 * textures.length);
-    let ptr = 0;
-    for (const texture of textures) {
-        let textureDim = texture.textureEntry.width;
-        if (textureDim > dim) {
-            throw new Error(`Texture is bigger than the texture array`);
-        }
-        if (textureDim !== texture.textureEntry.height) {
-            throw new Error(`Texture is not square`);
-        }
-        let nextTextureData = unpalettizeTexture(texture);
-        while (textureDim < dim) {
-            textureDim *= 2;
-            nextTextureData = upscale(nextTextureData);
-        }
-        textureData.set(nextTextureData, ptr);
-        ptr += nextTextureData.byteLength;
+    const mipLevels: Uint8Array[] = [];
+    const ptrs = new Array(numLevels).fill(0);
+    for (let level = 0; level < numLevels; level++) {
+        const mipDim = dim >> level;
+        mipLevels.push(new Uint8Array(mipDim * mipDim * 4 * textures.length));
     }
-    device.uploadTextureData(gfxTexture, 0, [textureData]);
+
+    for (const texture of textures) {
+        assert(texture.textureEntry.width === texture.textureEntry.height);
+        assert(texture.textureEntry.width === dim);
+
+        let textureData = unpalettizeTexture(texture);
+
+        // I'd really like to read the real mip data from the game
+        // If I did that I also wouldn't need to unpalettize the texture on the cpu.
+        for (let level = 0; level < numLevels; level++) {
+            mipLevels[level].set(textureData, ptrs[level]);
+            ptrs[level] += textureData.byteLength;
+            if (level < numLevels - 1) {
+                textureData = downscale(textureData);
+            }
+        }
+    }
+    device.uploadTextureData(gfxTexture, 0, mipLevels);
     return gfxTexture;
 }
 

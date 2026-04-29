@@ -110,10 +110,7 @@ flat in int v_Clamp;
 
 void main() {
     vec2 texRemap = u_TextureRemaps.ties[v_TextureIndex].xy;
-    vec2 ddx = dFdx(v_ST);
-    vec2 ddy = dFdy(v_ST);
-    float gradSq = max(dot(ddx, ddx), dot(ddy, ddy));
-    vec4 textureSample = ratchetSampler(texRemap.x, texRemap.y, v_Clamp, v_ST, gradSq);
+    vec4 textureSample = ratchetSampler(texRemap.x, texRemap.y, v_Clamp, v_ST);
     gl_FragColor = commonFragmentShader(v_Rgba, textureSample);
 }
 `;
