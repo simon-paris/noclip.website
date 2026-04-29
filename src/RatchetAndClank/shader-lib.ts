@@ -39,8 +39,8 @@ layout(std140) uniform ub_SceneParams {
     Mat4x4 u_ClipFromWorld;
     vec3 u_CameraPosWorld;
     float u_EnableTextures;
-    vec2 u_NearFarClip;
-    vec2 pad2;
+    vec2 u_NearFarClip; // x = near, y = far
+    vec2 u_LodSettings; // x = lod preset, y = lod bias
     vec4 u_BackgroundColor;
     vec4 u_SkyColor;
     FogParams u_FogParams;
@@ -153,15 +153,20 @@ Custom texture sampling function that can dynamically select textures and sampli
 - slice: the slice within the atlas
 - clampRegister: bit 1 = S clamp, bit 3 = T clamp (other bits are used for region clamp, not supported)
 - st: the texture coordinates
-- grad: the magnitude squared of the derivative of the texture coordinates, for mip selection
+- grad: the magnitude of the derivative of the texture coordinates in texels, for mip selection
 */
-vec4 ratchetSampler(float bucket, float slice, int clampRegister, vec2 st, float grad) {
-    float mipLevel = 0.5 * log2(max(grad, 0.0001));
-    float maxMipLevel = log2(bucket);
-    mipLevel = clamp(mipLevel, 0.0, maxMipLevel);
-    int lod = int(mipLevel);
-    
-    vec2 texSize = vec2(bucket);
+vec4 ratchetSampler(float bucket, float slice, int clampRegister, vec2 st) {
+    float worldDepth = linearizeDepth(1.0 - gl_FragCoord.z, u_NearFarClip.x, u_NearFarClip.y);
+    float linear01Depth = (worldDepth - u_NearFarClip.x) / (u_NearFarClip.y - u_NearFarClip.x);
+
+    // ps2 selects mips based on depth not texcoords, but the bias is configurable (in TEX1), I know where the data is in the meshes but I don't know how to decode it.
+    float bias = log2(bucket) + 1.0 - (u_LodSettings.y / 20.0);
+
+    float maxLod = log2(bucket);
+    float lodLevel = clamp(log2(linear01Depth) + bias, 0.0, maxLod);
+    int lod = int(lodLevel);
+
+    vec2 texSize = vec2(bucket) / pow(2.0, float(lod));
     vec2 texelCoord = st * texSize - 0.5;
     
     vec2 texelFloor = floor(texelCoord);
@@ -172,7 +177,7 @@ vec4 ratchetSampler(float bucket, float slice, int clampRegister, vec2 st, float
     ivec2 tc01 = tc00 + ivec2(0, 1);
     ivec2 tc11 = tc00 + ivec2(1, 1);
     
-    int iTexSize = int(bucket);
+    int iTexSize = int(texSize.x);
     bool clampS = (clampRegister & 1) != 0;
     bool clampT = (clampRegister & 4) != 0;
     
@@ -182,10 +187,10 @@ vec4 ratchetSampler(float bucket, float slice, int clampRegister, vec2 st, float
         tc01.x = clamp(tc01.x, 0, iTexSize - 1);
         tc11.x = clamp(tc11.x, 0, iTexSize - 1);
     } else {
-        tc00.x = int(mod(float(tc00.x), bucket));
-        tc10.x = int(mod(float(tc10.x), bucket));
-        tc01.x = int(mod(float(tc01.x), bucket));
-        tc11.x = int(mod(float(tc11.x), bucket));
+        tc00.x = int(mod(float(tc00.x), texSize.x));
+        tc10.x = int(mod(float(tc10.x), texSize.x));
+        tc01.x = int(mod(float(tc01.x), texSize.x));
+        tc11.x = int(mod(float(tc11.x), texSize.x));
     }
     
     if (clampT) {
@@ -194,10 +199,10 @@ vec4 ratchetSampler(float bucket, float slice, int clampRegister, vec2 st, float
         tc01.y = clamp(tc01.y, 0, iTexSize - 1);
         tc11.y = clamp(tc11.y, 0, iTexSize - 1);
     } else {
-        tc00.y = int(mod(float(tc00.y), bucket));
-        tc10.y = int(mod(float(tc10.y), bucket));
-        tc01.y = int(mod(float(tc01.y), bucket));
-        tc11.y = int(mod(float(tc11.y), bucket));
+        tc00.y = int(mod(float(tc00.y), texSize.x));
+        tc10.y = int(mod(float(tc10.y), texSize.x));
+        tc01.y = int(mod(float(tc01.y), texSize.x));
+        tc11.y = int(mod(float(tc11.y), texSize.x));
     }
     
     vec4 s00, s10, s01, s11;
@@ -229,7 +234,7 @@ vec4 ratchetSampler(float bucket, float slice, int clampRegister, vec2 st, float
     } else {
         return vec4(1.0, 0.0, 1.0, 1.0);
     }
-    
+
     vec4 s0 = mix(s00, s10, frac.x);
     vec4 s1 = mix(s01, s11, frac.x);
     vec4 res = mix(s0, s1, frac.y);

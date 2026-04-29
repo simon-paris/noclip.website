@@ -11,7 +11,7 @@ import * as UI from "../ui";
 import { FakeTextureHolder } from "../TextureHolder";
 import { TieGeometry, TieProgram, TieRenderer } from "./render-tie";
 import { CameraController } from "../Camera";
-import { buildLevelFromFiles, LevelFiles, ShrubInstanceBatch, TieInstanceBatch } from "./level-builder";
+import { buildLevelFromFiles, LevelFiles } from "./level-builder";
 import { createMegaBuffer, MegaBuffer, noclipSpaceFromRatchetSpace, lineChainToLineSegments } from "./utils";
 import { TfragGeometry, TfragRenderer } from "./render-tfrag";
 import { ShrubGeometry, ShrubRenderer } from "./render-shrub";
@@ -19,12 +19,11 @@ import { colorNewFromRGBA, OpaqueBlack, White } from "../Color";
 import { SkyGeometry, SkyRenderer } from "./render-sky";
 import { RatchetShaderLib } from "./shader-lib";
 import { DirectionLightInstance, GameplayHeader, LevelSettings, MobyInstance, PointLightInstance, ShrubInstance, Spline, TieInstance } from "./bin-gameplay";
-import { assert } from "../util";
 import { createGfxTextureForPaletteTexture, createTextureAtlases, createTieRgbaTexture, PaletteTexture, TextureAtlases } from "./textures";
 import { CollisionGeometry, CollisionRenderer } from "./render-collision";
 import { IS_DEVELOPMENT } from "../BuildVersion";
 import { CollisionOctant, ShrubClass, Sky, Tfrag, TieClass } from "./bin-core";
-import { ClassEntry, LevelCoreHeader } from "./bin-index";
+import { LevelCoreHeader } from "./bin-index";
 
 const pathBase = (gameNumber: number) => `RatchetAndClank${gameNumber}`;
 
@@ -197,6 +196,9 @@ class RatchetAndClank1Scene implements SceneGfx {
                 gsRamBuffer,
             };
             this.levelResources = buildLevelFromFiles(this.files);
+            if (IS_DEVELOPMENT) {
+                console.log(this);
+            }
         });
     }
 
@@ -337,7 +339,7 @@ class RatchetAndClank1Scene implements SceneGfx {
         viewerInput.camera.setClipPlanes(nearClip, farClip);
         offs += fillMatrix4x4(data, offs, viewerInput.camera.clipFromWorldMatrix);
         offs += fillVec3v(data, offs, cameraPosition, this.settings.enableTextures ? 1 : 0);
-        offs += fillVec4(data, offs, nearClip, farClip, 0, 0);
+        offs += fillVec4(data, offs, nearClip, farClip, this.settings.lodSetting, this.settings.lodBias);
 
         // background color (4 floats)
         const backgroundColor = levelSettings.backgroundColor;
@@ -491,8 +493,6 @@ class RatchetAndClank1Scene implements SceneGfx {
             const shrubOClasses = this.levelResources.shrubOClasses ?? [];
             for (let i = 0; i < shrubOClasses.length; i++) {
                 const oClass = shrubOClasses[i];
-                const shrubClass = this.levelResources.shrubClasses?.get(oClass);
-                if (!shrubClass) continue;
                 const instances = this.levelResources.shrubInstancesByOClass?.get(oClass);
                 if (!instances) continue;
                 const geometry = this.getOrCreateShrubGeometry(oClass);
