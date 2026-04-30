@@ -1498,7 +1498,7 @@ class GfxImplP_WebGPU implements GfxSwapChain, GfxDevice {
 
         const descriptor = computePipeline.descriptor;
         const program = descriptor.program as GfxComputeProgramP_WebGPU;
-
+        
         const layout = descriptor.pipelineLayout as GPUPipelineLayout;
         const compute = program.computeStage!;
 

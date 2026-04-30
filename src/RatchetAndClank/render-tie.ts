@@ -286,7 +286,6 @@ export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: 
     const commandLists: TieImaginaryGsCommand[][] = [];
     for (const packet of tie.packets[lod]) commandLists.push(packet.body.commandBuffer);
     const strips = commandBufferToStrips(tieOClass, commandLists);
-    strips.sort((a, b) => a.material - b.material);
 
     const vertexCount = strips.reduce((a, b) => a + (b.verts.length - 2), 0) * 3;
     const vertexBufferSize = vertexCount * TieProgram.elementsPerVertex;
@@ -294,7 +293,7 @@ export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: 
     const vertexArrayBuffer = new Float32Array(vertexBufferSize);
     let ptr = 0;
 
-    function pushTriangle(verts: { vertex: TieVertex, normalIndex: number, rgbaIndex: number }[], material: number, clamp: number) {
+    function pushTriangle(verts: { vertex: TieVertex, normalIndex: number, rgbaIndex: number }[], textureIdx: number, clamp: number) {
         assert(verts.length === 3);
         const fixedTexcoords = fixTexcoords(verts[0].vertex, verts[1].vertex, verts[2].vertex);
         for (let i = 0; i < 3; i++) {
@@ -306,7 +305,7 @@ export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: 
             vertexArrayBuffer[ptr++] = positionScale * vert.x;
             vertexArrayBuffer[ptr++] = positionScale * vert.y;
             vertexArrayBuffer[ptr++] = positionScale * vert.z;
-            vertexArrayBuffer[ptr++] = textureIndices[material];
+            vertexArrayBuffer[ptr++] = textureIndices[textureIdx];
             vertexArrayBuffer[ptr++] = clamp;
             vertexArrayBuffer[ptr++] = vertAndNormalIndex.rgbaIndex;
             vertexArrayBuffer[ptr++] = texcoordScale * fixedTexcoord.s;
@@ -325,7 +324,7 @@ export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: 
 
     for (const strip of strips) {
         for (let i = 0; i < strip.verts.length - 2; i++) {
-            pushTriangle([strip.verts[i + 0], strip.verts[i + 1], strip.verts[i + 2]], strip.material, strip.clamp);
+            pushTriangle([strip.verts[i + 0], strip.verts[i + 1], strip.verts[i + 2]], strip.material.texture, strip.material.clamp);
         }
     }
 
@@ -367,11 +366,10 @@ function fixTexcoords(...verts: { s: number, t: number }[]) {
 }
 
 function commandBufferToStrips(tieOClass: number, packets: TieImaginaryGsCommand[][]) {
-    type TieStrip = { material: number, clamp: number, isFirstStripInPacket: number, verts: { vertex: TieVertex, normalIndex: number, rgbaIndex: number }[] };
+    type TieStrip = { material: { texture: number, clamp: number }, isFirstStripInPacket: number, verts: { vertex: TieVertex, normalIndex: number, rgbaIndex: number }[] };
 
     let strip: TieStrip | undefined;
-    let lastMaterial = 0;
-    let lastClamp = 0;
+    let currentMaterial: { texture: number, clamp: number } | null = null;
 
     const strips: TieStrip[] = [];
 
@@ -381,16 +379,18 @@ function commandBufferToStrips(tieOClass: number, packets: TieImaginaryGsCommand
             const command = packet[i];
             switch (command.type) {
                 case ImaginaryGsCommandType.PRIMITIVE_RESET: {
-                    if (lastMaterial === null) {
+                    if (!currentMaterial) {
                         throw new Error(`Unexpected primitive reset before material`);
                     }
-                    strip = { material: lastMaterial, clamp: lastClamp, isFirstStripInPacket: i, verts: [] }
+                    strip = { material: currentMaterial, isFirstStripInPacket: i, verts: [] }
                     strips.push(strip);
                     break;
                 }
                 case ImaginaryGsCommandType.SET_MATERIAL: {
-                    lastMaterial = command.value.material;
-                    lastClamp = command.value.clamp;
+                    currentMaterial = {
+                        texture: command.value.material,
+                        clamp: command.value.clamp,
+                    };
                     strip = undefined;
                     break;
                 }

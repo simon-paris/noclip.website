@@ -162,7 +162,7 @@ vec4 ratchetSampler(float bucket, float slice, int clampRegister, vec2 st) {
     float bias = log2(bucket) + 1.0 - (u_LodSettings.y / 20.0);
 
     float maxLod = log2(bucket);
-    float lodLevel = clamp(log2(linear01Depth) + bias, 0.0, maxLod);
+    float lodLevel = clamp(log2(linear01Depth) + bias, 0.0, maxLod - 2.0);
     int lod = int(lodLevel);
 
     vec2 texSize = vec2(bucket) / pow(2.0, float(lod));

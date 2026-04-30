@@ -11,7 +11,7 @@ import * as UI from "../ui";
 import { FakeTextureHolder } from "../TextureHolder";
 import { TieGeometry, TieProgram, TieRenderer } from "./render-tie";
 import { CameraController } from "../Camera";
-import { LevelResources, load } from "./loader";
+import { LevelResources, load, loadFilesFromNetwork } from "./loader";
 import { createMegaBuffer, MegaBuffer, noclipSpaceFromRatchetSpace, lineChainToLineSegments } from "./utils";
 import { TfragGeometry, TfragRenderer } from "./render-tfrag";
 import { ShrubGeometry, ShrubRenderer } from "./render-shrub";
@@ -146,7 +146,8 @@ class RatchetAndClank1Scene implements SceneGfx {
 
         this.instanceDataBuffer = createMegaBuffer(cache.device, "Instance Data", 1024 * 1024);
 
-        load(this.levelResources, sceneContext.dataFetcher, `${pathBase(this.gameNumber)}/level_${this.levelNumber}`).then(() => {
+        const filePromises = loadFilesFromNetwork(sceneContext.dataFetcher, `${pathBase(this.gameNumber)}/level_${this.levelNumber}`);
+        load(this.levelResources, filePromises).then(() => {
             if (IS_DEVELOPMENT) console.log(this);
         }).catch((e) => {
             console.error(`Error loading level:`, e);

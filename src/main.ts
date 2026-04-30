@@ -636,7 +636,7 @@ class Main {
         if (inputManager.isKeyDownEventTriggered('KeyT'))
             this.ui.sceneSelect.expandAndFocus();
         for (let i = 1; i <= 9; i++) {
-            if (inputManager.isKeyDownEventTriggered('Digit' + i)) {
+            if (inputManager.isKeyDownEventTriggered('Digit'+i)) {
                 if (this.currentSceneDesc) {
                     const key = this._getSaveStateSlotKey(i);
                     const action = this._pickSaveStatesAction(inputManager);
@@ -673,7 +673,7 @@ class Main {
                 this.webXRContext.xrSession.addEventListener('end', () => {
                     this.ui.toggleWebXRCheckbox(false);
                 });
-            } catch (e) {
+            } catch(e) {
                 console.error("Failed to start XR");
                 this.ui.toggleWebXRCheckbox(false);
             }

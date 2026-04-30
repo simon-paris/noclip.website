@@ -10,6 +10,7 @@ import { PaletteTexture } from "./textures";
 import { Collision, Sky, Tfrag } from "./bin-core";
 import { LevelCoreHeader } from "./bin-index";
 import { DataFetcher } from "../DataFetcher";
+import { WadDecompressor } from "./decompress";
 
 export type LevelResources = {
     levelCoreHeader: LevelCoreHeader | null,
@@ -50,12 +51,39 @@ async function toDataViewExt(slicePromise: Promise<ArrayBufferSlice>): Promise<D
     return new DataViewExt(slice.arrayBuffer, { littleEndian: true }, slice.byteOffset, slice.byteLength);
 }
 
-export function load(out: LevelResources, dataFetcher: DataFetcher, basePath: string) {
+async function checkNotEmpty(slicePromise: Promise<DataViewExt>): Promise<DataViewExt> {
+    const slice = await slicePromise;
+    if (slice.byteLength === 0) {
+        throw new Error("Request aborted")
+    }
+    return slice;
+}
+
+async function decompressWadPromise(dataViewPromise: Promise<DataViewExt>): Promise<DataViewExt> {
+    const dataView = await dataViewPromise;
+    // I'd really like to do streaming decompression but it requires pretty big changes to dataFetcher
+    const decompressedBuffer = (new WadDecompressor(dataView)).decompress();
+    return new DataViewExt(decompressedBuffer, { littleEndian: true });
+}
+
+type BinaryFilePromises = {
+    coreDataFilePromise: Promise<DataViewExt>,
+    gameplayFilePromise: Promise<DataViewExt>,
+    coreIndexFilePromise: Promise<DataViewExt>,
+    gsRamFilePromise: Promise<DataViewExt>,
+}
+export function loadFilesFromNetwork(dataFetcher: DataFetcher, basePath: string): BinaryFilePromises {
     // load binary files
-    const coreIndexFilePromise = toDataViewExt(dataFetcher.fetchData(`${basePath}.index`));
-    const coreDataFilePromise = toDataViewExt(dataFetcher.fetchData(`${basePath}.core`));
-    const gameplayFilePromise = toDataViewExt(dataFetcher.fetchData(`${basePath}.gameplay`));
-    const gsRamFilePromise = toDataViewExt(dataFetcher.fetchData(`${basePath}.gs`));
+    return {
+        coreDataFilePromise: decompressWadPromise(checkNotEmpty(toDataViewExt(dataFetcher.fetchData(`${basePath}_core.wad`)))),
+        gameplayFilePromise: decompressWadPromise(checkNotEmpty(toDataViewExt(dataFetcher.fetchData(`${basePath}_gameplay.wad`)))),
+        coreIndexFilePromise: checkNotEmpty(toDataViewExt(dataFetcher.fetchData(`${basePath}_index.bin`))),
+        gsRamFilePromise: checkNotEmpty(toDataViewExt(dataFetcher.fetchData(`${basePath}_gs.bin`))),
+    }
+}
+
+export function load(out: LevelResources, filePromises: BinaryFilePromises) {
+    const { coreDataFilePromise, gameplayFilePromise, coreIndexFilePromise, gsRamFilePromise } = filePromises;
 
     // load metadata
     const gameplayHeaderPromise = loadGameplayHeader(out, gameplayFilePromise);

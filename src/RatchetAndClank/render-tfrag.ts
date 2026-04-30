@@ -254,14 +254,11 @@ export function assembleTfragGeometry(tfrags: Tfrag[], tfragTextures: PaletteTex
 export function assembleTfragFragment(tfragId: number, tfrag: Tfrag) {
     const verts = concatAndRemoveDoubleIndirectionFromVertices(tfragId, tfrag);
 
-    // [lod2, lod1, lod0]
-    const vertsByLod = [
+    return [
         stripsIntoTriangles(tfragId, tfrag.dataGroup5.lod0.strips, tfrag.dataGroup5.lod0.indices, tfrag.dataGroup2.textures, verts),
         stripsIntoTriangles(tfragId, tfrag.dataGroup3.lod1.strips, tfrag.dataGroup3.lod1.indices, tfrag.dataGroup2.textures, verts),
         stripsIntoTriangles(tfragId, tfrag.dataGroup1.lod2.strips, tfrag.dataGroup1.lod2.indices, tfrag.dataGroup2.textures, verts),
     ];
-
-    return vertsByLod;
 }
 
 // takes triangle lists and flattens them into one

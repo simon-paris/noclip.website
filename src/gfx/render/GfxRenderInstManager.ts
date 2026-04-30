@@ -303,8 +303,7 @@ export class GfxRenderInst {
     /**
      * Sets the number of instances to draw.
      *
-     * Instance counts are the same for both indexed and unindexed draws, however instanced draws are (currently)
-     * only supported for indexed draws.
+     * Instance counts are the same for both indexed and unindexed draws.
      *
      * @param instanceCount The number of instances to render.
      */
@@ -437,7 +436,7 @@ export class GfxRenderInst {
                         if (binding.gfxSampler !== null)
                             dst.gfxSampler = binding.gfxSampler;
                     }
-
+    
                     dst.lateBinding = undefined;
                 }
             }
