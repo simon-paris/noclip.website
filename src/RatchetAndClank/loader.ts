@@ -115,7 +115,7 @@ type LoadIndexDataResult = {
     levelCoreHeader: LevelCoreHeader,
     tieClassEntries: ClassEntry[],
     shrubClassEntries: ClassEntry[],
-    tfragTexureEntries: TextureEntry[],
+    tfragTextureEntries: TextureEntry[],
     tieTextureEntries: TextureEntry[],
     shrubTextureEntries: TextureEntry[],
 };
@@ -128,7 +128,7 @@ export async function loadIndexData(out: LevelResources, coreIndexFilePromise: P
     const tieClassEntries = coreIndexFile.subdivide(levelCoreHeader.tieClasses.offset, levelCoreHeader.tieClasses.count, SIZEOF_TIE_CLASS_ENTRY).map(readClassEntry);
     const shrubClassEntries = coreIndexFile.subdivide(levelCoreHeader.shrubClasses.offset, levelCoreHeader.shrubClasses.count, SIZEOF_SHRUB_CLASS_ENTRY).map(readClassEntry);
 
-    const tfragTexureEntries = coreIndexFile.subdivide(levelCoreHeader.tfragTextures.offset, levelCoreHeader.tfragTextures.count, SIZEOF_TEXTURE_ENTRY).map(readTextureEntry);
+    const tfragTextureEntries = coreIndexFile.subdivide(levelCoreHeader.tfragTextures.offset, levelCoreHeader.tfragTextures.count, SIZEOF_TEXTURE_ENTRY).map(readTextureEntry);
     const tieTextureEntries = coreIndexFile.subdivide(levelCoreHeader.tieTextures.offset, levelCoreHeader.tieTextures.count, SIZEOF_TEXTURE_ENTRY).map(readTextureEntry);
     const shrubTextureEntries = coreIndexFile.subdivide(levelCoreHeader.shrubTextures.offset, levelCoreHeader.shrubTextures.count, SIZEOF_TEXTURE_ENTRY).map(readTextureEntry);
 
@@ -139,7 +139,7 @@ export async function loadIndexData(out: LevelResources, coreIndexFilePromise: P
         levelCoreHeader,
         tieClassEntries,
         shrubClassEntries,
-        tfragTexureEntries,
+        tfragTextureEntries,
         tieTextureEntries,
         shrubTextureEntries,
     };
@@ -195,7 +195,7 @@ async function loadTextureData(out: LevelResources, coreDataFilePromise: Promise
     const [coreDataFile, gsRamFile, indexData] = await Promise.all([coreDataFilePromise, gsRamFilePromise, indexDataPromise]);
 
     const textureData = coreDataFile.subview(indexData.levelCoreHeader.texturesBaseOffset);
-    out.tfragTextures = indexData.tfragTexureEntries.map((entry, i) => readPalette8TextureWithPaletteInGsRam(entry, textureData, gsRamFile, "Tfrag", i));
+    out.tfragTextures = indexData.tfragTextureEntries.map((entry, i) => readPalette8TextureWithPaletteInGsRam(entry, textureData, gsRamFile, "Tfrag", i));
     out.tieTextures = indexData.tieTextureEntries.map((entry, i) => readPalette8TextureWithPaletteInGsRam(entry, textureData, gsRamFile, "Tie", i));
     out.shrubTextures = indexData.shrubTextureEntries.map((entry, i) => readPalette8TextureWithPaletteInGsRam(entry, textureData, gsRamFile, "Shrub", i));
 }

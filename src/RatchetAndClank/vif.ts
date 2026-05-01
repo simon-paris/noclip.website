@@ -55,29 +55,6 @@ export enum VifUnpackFormat {
     V4_5 = (VifUnpackVN.V4 << 2 | VifUnpackVL.VL_5),
 }
 
-function getVifUnpackVNComponentCount(vn: VifUnpackVN): number {
-    return vn + 1;
-}
-
-function getVifUnpackFormatByteSize(format: number): number {
-    const vn: VifUnpackVN = (format >>> 2) & 0x03;
-    const vl: VifUnpackVL = (format >>> 0) & 0x03;
-    const compCount = getVifUnpackVNComponentCount(vn);
-    if (vl === VifUnpackVL.VL_8) {
-        return 1 * compCount;
-    } else if (vl === VifUnpackVL.VL_16) {
-        return 2 * compCount;
-    } else if (vl === VifUnpackVL.VL_32) {
-        return 4 * compCount;
-    } else if (vl === VifUnpackVL.VL_5) {
-        // V4-5. Special case: 16 bits for the whole format.
-        assert(vn === 0x03);
-        return 2;
-    } else {
-        throw new Error("Invalid VIF unpack vnvl");
-    }
-}
-
 export function readVifCommandList(view: DataViewExt) {
     const out: VifCommand[] = [];
 
@@ -91,9 +68,8 @@ export function readVifCommandList(view: DataViewExt) {
     while (view.byteLength) {
         const command = readVifCommand(view, wl, cl);
         const size = vifCommandSizeInBytes(command.cmd, command.num, command.immediate, wl, cl);
-        if (size > view.byteLength) {
-            throw new Error(`VIF command size exceeds remaining buffer size`);
-        }
+        assert(size <= view.byteLength);
+        assert(size % 4 === 0);
         out.push(command);
 
         switch (command.cmd) {
@@ -105,8 +81,7 @@ export function readVifCommandList(view: DataViewExt) {
             }
         }
 
-        const align = size % 4 !== 0 ? 4 - (size % 4) : 0
-        view = view.subview(size + align);
+        view = view.subview(size);
     }
 
     return out;
@@ -117,8 +92,11 @@ function readVifCommand(view: DataViewExt, wl: number, cl: number) {
     const vifCmd = view.getUint32(0);
 
     const immediate = getBits(vifCmd, 0, 15);
-    const num = getBits(vifCmd, 16, 23);
-    const cmd = getBits(vifCmd, 24, 31);
+    const _num = getBits(vifCmd, 16, 23);
+    const num = _num === 0 ? 256 : _num; // num 0 means 256 (EE manual page 88)
+    const cmd = getBits(vifCmd, 24, 30);
+    const irq = getBits(vifCmd, 31, 31);
+    if (irq) debugger;
 
     const isUnpack = isUnpackCommand(cmd);
 
@@ -132,6 +110,7 @@ function readVifCommand(view: DataViewExt, wl: number, cl: number) {
         size,
 
         // main fields
+        irq,
         cmd,
         num,
         immediate,
@@ -144,15 +123,17 @@ function readVifCommand(view: DataViewExt, wl: number, cl: number) {
 
         get debug() {
             return {
-                cmd: isUnpack ? "UNPACK" : VifCmd[cmd] ?? `UNKNOWN ${hexzero(cmd, 2)}`,
+                cmd: (isUnpack ? "UNPACK" : VifCmd[cmd] ?? `UNKNOWN ${hexzero(cmd, 2)}`) + (irq ? " (IRQ)" : ""),
                 vnvl: isUnpack ? VifUnpackFormat[cmd & 0x0F] : null,
             }
         },
     };
 }
 
-// returns the size of the command in bytes, including the command itself, without padding
+// returns the size of the command in bytes
+// (EE manual page 87)
 export function vifCommandSizeInBytes(cmd: number, num: number, immediate: number, wl: number, cl: number) {
+    let packetLength = 0;
     switch (cmd) {
         case VifCmd.NOP:
         case VifCmd.STCYCL:
@@ -168,73 +149,70 @@ export function vifCommandSizeInBytes(cmd: number, num: number, immediate: numbe
         case VifCmd.MSCAL:
         case VifCmd.MSCNT:
         case VifCmd.MSCALF:
-            return 0x4;
+            packetLength = 1;
+            break;
         case VifCmd.STMASK:
-            // sets MASK register to the next 32-bit word
-            return 0x4 + 0x4;
+            packetLength = 1 + 1;
+            break;
         case VifCmd.STROW:
         case VifCmd.STCOL:
-            // sets R0-R3 row registers to the next 4 32-bit words
-            return 0x4 + (0x4 * 4);
+            packetLength = 1 + 4;
+            break;
         case VifCmd.MPG:
-            // loads NUM*8 bytes into VU memory, if NUM is 0, then 2048 bytes are loaded
-            return 0x4 + ((num * 8) || 2048);
+            packetLength = 1 + num * 2;
+            break;
         case VifCmd.DIRECT:
         case VifCmd.DIRECTHL:
-            // Transfers IMMEDIATE 128-bit qwords to the GIF through PATH2, if IMMEDIATE is 0, 65,536 128-bit qwords are transferred
-            return 0x4 + ((immediate || 65536) * 16);
+            const _immediate = immediate || 65536; // EE manual page 122
+            packetLength = 1 + _immediate * 4;
+            break;
         default: {
             assert(isUnpackCommand(cmd));
 
-            num = num || 0x100;
-            wl = wl || 0x100;
-
-            const vnvl = cmd & 0x0F;
-            const gsize = getVifUnpackFormatByteSize(vnvl);
+            const vn: VifUnpackVN = (cmd & 0b1100) >> 2
+            const vl: VifUnpackVL = cmd & 0b0011;
 
             if (wl <= cl) {
-                return 0x4 + num * gsize;
+                /**
+                 * EE manual page 123:
+                 * "//" means divide and round up
+                 * 1+(((32>>vl) x (vn+1)) x num//32)
+                 */
+                packetLength = 1 + Math.ceil((((32 >> vl) * (vn + 1)) * num) / 32);
             } else {
                 /**
-                 * From EE user manual page 94
                  * ```
-                 * CL x (num/WL)+limit(num%WL,CL)
                  * int limit(int a,int max) { return( a>max ? max: a); }
+                 * n = CL x (num/WL)+limit(num%WL,CL)
+                 * 1+(((32>>vl) x (vn+1)) x n//32)
                  * ```
                  */
                 // not tested, but this should work
                 // function limit(a: number, max: number) { return a > max ? max : a; }
-                // return 0x4 + (cl * Math.trunc(num / wl) + limit(num % wl, cl)) * gsize;
+                // const n = cl * Math.trunc(num / wl) + limit(num % wl, cl);
+                // packetLength = 1 + Math.ceil((((32 >> vl) * (vn + 1)) * num) / 32);
                 throw new Error("Filling write unpacks not tested");
             }
         }
     }
+    return 0x4 * packetLength;
 }
 
 export function readVifUnpackData(vifCommand: VifCommand) {
-    if (!isUnpackCommand(vifCommand.cmd)) {
-        throw new Error(`Not an UNPACK command`);
-    }
+    assert(isUnpackCommand(vifCommand.cmd));
     return vifCommand.view.subview(0x4);
 }
 
 export function readVifStrowData(vifCommand: VifCommand) {
-    if (vifCommand.cmd !== VifCmd.STROW) {
-        throw new Error(`Not a STROW command`);
-    }
-    // STROW packets are followed by 128 bits of data
+    assert(vifCommand.cmd === VifCmd.STROW);
     return vifCommand.view.subview(0x4, 0x4 * 4).getTypedArrayView(Int32Array);
 }
 
 export function readVifStcyclData(vifCommand: VifCommand) {
-    if (vifCommand.cmd !== VifCmd.STCYCL) {
-        throw new Error(`Not a STCYCL command`);
-    }
-    // sets the CYCLE register to IMMEDIATE. CYCLE.CL is bits 0-7, CYCLE.WL is bits 8-15
-    const imm = vifCommand.immediate;
+    assert(vifCommand.cmd === VifCmd.STCYCL);
     return {
-        cl: getBits(imm, 0, 7),
-        wl: getBits(imm, 8, 15),
+        cl: getBits(vifCommand.immediate, 0, 7),
+        wl: getBits(vifCommand.immediate, 8, 15),
     };
 }
 
@@ -287,6 +265,7 @@ export function vifUnpacks(commands: VifCommand[]) {
     };
 }
 
+const UNPACK_MASK = 0b0110_0000;
 export function isUnpackCommand(cmd: number): boolean {
-    return cmd >= 0x60 && cmd <= 0x7f;
+    return (cmd & UNPACK_MASK) === UNPACK_MASK;
 }
