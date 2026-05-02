@@ -3,7 +3,7 @@ import { GsPrimitiveType } from "../Common/PS2/GS";
 import { DataViewExt } from "./DataViewExt";
 import { assert } from "../util";
 import { getBits, ImaginaryGsCommand, ImaginaryGsCommandBuffer, truncateTrailing0xFF } from "./utils";
-import { readVifCommandList, readVifStrowData, VifUnpackFormat, vifUnpacks } from "./vif";
+import { readVifCommandList, VifUnpackFormat, VifUnpackReader } from "./vif";
 
 export type GsRamTableEntry = {
     psm: number,
@@ -607,7 +607,7 @@ export function readTfrag(view: DataViewExt, header: TfragHeader) {
     let dataGroup1: Tfrag["dataGroup1"];
     {
         const vifCommands = readVifCommandList(vifBuffer1);
-        const unpackReader = vifUnpacks(vifCommands);
+        const unpackReader = new VifUnpackReader(vifCommands);
         const lod2Indices = unpackReader.next().getTypedArrayView(Uint8Array);
         const lod2Strips = unpackReader.next().subdivide(0, 0xFFFF, SIZEOF_TFRAG_STRIP).map(readTfragStrip);
         dataGroup1 = {
@@ -626,10 +626,10 @@ export function readTfrag(view: DataViewExt, header: TfragHeader) {
     let vuHeader: TfragVuHeader;
     {
         const vifCommands = readVifCommandList(vifBuffer2);
-        const unpackReader = vifUnpacks(vifCommands);
+        const unpackReader = new VifUnpackReader(vifCommands);
 
         assert(vifCommands.length >= 6);
-        const basePosition = readVifStrowData(vifCommands[5]);
+        const basePosition = vifCommands[5].readStrowData();
 
         vuHeader = readTfragVuHeader(unpackReader.next());
         const textures = unpackReader.next().subdivide(0, 0xFFFF, SIZEOF_TFRAG_AD_GIFS).map(readTfragAdGifs);
@@ -661,7 +661,7 @@ export function readTfrag(view: DataViewExt, header: TfragHeader) {
     let dataGroup3: Tfrag["dataGroup3"];
     {
         const vifCommands = readVifCommandList(vifBuffer3);
-        const unpackReader = vifUnpacks(vifCommands);
+        const unpackReader = new VifUnpackReader(vifCommands);
         const lod1Strips = unpackReader.next().subdivide(0, 0xFFFF, SIZEOF_TFRAG_STRIP).map(readTfragStrip)
         const lod1Indices = unpackReader.next().getTypedArrayView(Uint8Array);
         dataGroup3 = {
@@ -678,7 +678,7 @@ export function readTfrag(view: DataViewExt, header: TfragHeader) {
     let dataGroup4: Tfrag["dataGroup4"];
     {
         const vifCommands = readVifCommandList(vifBuffer4);
-        const unpackReader = vifUnpacks(vifCommands);
+        const unpackReader = new VifUnpackReader(vifCommands);
 
         if (vuHeader.positionsLod01Count > 0) {
             assert(unpackReader.peekNextVnvl() === VifUnpackFormat.V4_8);
@@ -721,7 +721,7 @@ export function readTfrag(view: DataViewExt, header: TfragHeader) {
     let dataGroup5: Tfrag["dataGroup5"];
     {
         const vifCommands = readVifCommandList(vifBuffer5);
-        const unpackReader = vifUnpacks(vifCommands);
+        const unpackReader = new VifUnpackReader(vifCommands);
 
         let vertexPositionsPart3: { x: number, y: number, z: number }[] | null = null;
         if (vuHeader.positionsLod0Count > 0) {
@@ -882,14 +882,9 @@ export function readTfragVertexInfo(view: DataViewExt) {
     https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/tfrag_low.h#L141
     */
 
-    // divide negative texcoords by 2 for reasons that I cannot possibly imagine
-    function fixTexcoord(value: number) {
-        return value < 0 ? value / 2 : value;
-    }
-
     return {
-        s: fixTexcoord(view.getInt16(0x0)),
-        t: fixTexcoord(view.getInt16(0x2)),
+        s: view.getInt16(0x0),
+        t: view.getInt16(0x2),
         parent: view.getInt16(0x4),
         vertex: view.getInt16(0x6),
     };
@@ -1053,7 +1048,7 @@ const shrubCommandSize = {
 
 export function readShrubPacket(view: DataViewExt): ShrubImaginaryGsCommand[] {
     const vifCommands = readVifCommandList(view);
-    const unpackReader = vifUnpacks(vifCommands);
+    const unpackReader = new VifUnpackReader(vifCommands);
 
     // unpack 1 is a header followed by primitives and adgifs
     const unpack1 = unpackReader.next();

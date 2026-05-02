@@ -306,16 +306,14 @@ export function sortTransparent(groups: TfragTriangleGroup[], tfragTextures: Pal
 }
 
 /**
- * Tfrags have 3 LODs, each LOD has it's own set of indices but they share vertices.
- * The vertices of each lod is concatted together, high lods can reference vertices used in lower lods.
+ * Each tfrag mesh comes with 9 buffers:
+ *  3x vertex positions, which are concatted together. Lod 2 uses buffer 1, lod 1 uses 1 and 2, and lod 0 uses all 3.
+ *  3x vertex info, which are concatted together the same way. Vertex info contains pointers into vertex positions, lights, and rgbas. It also has texcoords.
+ *  3x index buffers, which point into vertex infos. One for each lod.
  * 
- * The index buffer actually points into the VertexInfo array, and VertexInfo points into the vertex array, and each VertexInfo also
- * optionally points to a parent vertex from a lower lod.
+ * We will remove all this craziness and just produce one vertex buffer per lod.
  * 
- * This function concatenates the 3 info/vertex arrays, and flattens the parent positions into the vertex array.
- * So after this, the index buffers point directly into the vertex array.
- * 
- * Also, this function moves all the vertex positions to world space.
+ * We will also apply scaling, the base position offset, normal decoding, and fix texcoords.
  */
 function concatAndRemoveDoubleIndirectionFromVertices(tfragId: number, tfrag: Tfrag): TfragVertex[] {
     const basePosition = { x: tfrag.dataGroup2.basePosition[0], y: tfrag.dataGroup2.basePosition[1], z: tfrag.dataGroup2.basePosition[2] };
@@ -333,6 +331,11 @@ function concatAndRemoveDoubleIndirectionFromVertices(tfragId: number, tfrag: Tf
         tfrag.dataGroup4.vertexPositionsPart2,
         tfrag.dataGroup5.vertexPositionsPart3,
     );
+
+    // divide negative texcoords by 2 for reasons that I cannot possibly imagine
+    function fixTexcoord(value: number) {
+        return value < 0 ? value / 2 : value;
+    }
 
     const result = new Array<TfragVertex>();
     for (let i = 0; i < tfragInfo.length; i++) {
@@ -353,8 +356,8 @@ function concatAndRemoveDoubleIndirectionFromVertices(tfragId: number, tfrag: Tf
             g: colorScale * rgba.g,
             b: colorScale * rgba.b,
             a: colorScale * rgba.a,
-            s: texcoordScale * info.s,
-            t: texcoordScale * info.t,
+            s: texcoordScale * fixTexcoord(info.s),
+            t: texcoordScale * fixTexcoord(info.t),
             light0: light.directionalLights[0],
             light1: light.directionalLights[1],
             light2: light.directionalLights[2],
