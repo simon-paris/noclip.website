@@ -1,6 +1,6 @@
-import { Color } from "../Color";
+import { mat4 } from "gl-matrix";
 import { DataViewExt } from "./DataViewExt";
-import { readRGB5A1 } from "./utils";
+import { matrixToNoclipSpace } from "./utils";
 
 export type GameplayHeader = ReturnType<typeof readGameplayHeader>;
 export function readGameplayHeader(view: DataViewExt) {
@@ -137,7 +137,8 @@ export type TieInstance = {
     oClass: number,
     drawDistance: number,
     occlusionIndex: number,
-    matrix: Float32Array,
+    matrix: mat4,
+    _matrixInNoclipSpace: mat4,
     ambientRgbas: Uint16Array,
     directionalLights: number[],
     uid: number,
@@ -149,7 +150,6 @@ export function readTieInstance(view: DataViewExt, instanceIndex: number): TieIn
     */
 
     const matrix = view.getMat4Slice(0x10).slice();
-    matrix[15] = 1;
 
     return {
         instanceIndex,
@@ -157,6 +157,7 @@ export function readTieInstance(view: DataViewExt, instanceIndex: number): TieIn
         drawDistance: view.getInt32(0x4),
         occlusionIndex: view.getInt32(0xc),
         matrix,
+        _matrixInNoclipSpace: matrixToNoclipSpace(matrix),
         ambientRgbas: view.subview(0x50, 0x80).getTypedArrayView(Uint16Array), // array of 64 A1BGR5 colors
         directionalLights: view.getNibbleArray(0xd0, 2),
         uid: view.getInt32(0xd4),
@@ -208,7 +209,8 @@ export function readMobyInstance(view: DataViewExt): MobyInstance {
 export type ShrubInstance = {
     oClass: number,
     drawDistance: number,
-    matrix: Float32Array,
+    matrix: mat4,
+    _matrixInNoclipSpace: mat4,
     color: { r: number, g: number, b: number },
     directionalLights: number[],
 }
@@ -219,12 +221,12 @@ export function readShrubInstance(view: DataViewExt): ShrubInstance {
     */
 
     const matrix = view.getMat4Slice(0x10).slice();
-    matrix[15] = 1;
 
     return {
         oClass: view.getInt32(0x0),
         drawDistance: view.getFloat32(0x4),
         matrix,
+        _matrixInNoclipSpace: matrixToNoclipSpace(matrix),
         color: view.getInt32_Rgb(0x50),
         directionalLights: view.getNibbleArray(0x60, 2),
     }

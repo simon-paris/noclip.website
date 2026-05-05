@@ -53,9 +53,9 @@ layout(location = ${TfragProgram.a_TextureParams}) in vec2 a_TextureParams;
 layout(location = ${TfragProgram.a_ST}) in vec2 a_ST;
 layout(location = ${TfragProgram.a_DirLightIndices}) in vec4 a_DirLightIndices;
 
-out vec3 v_Normal;
 out vec4 v_Rgba;
 out vec2 v_ST;
+out float v_FogFactor;
 flat out int v_TextureLayer;
 flat out int v_Clamp;
 
@@ -72,7 +72,7 @@ void main() {
     v_Rgba = commonVertexLighting(a_Rgba, normal, lights);
 
     v_ST = a_ST.xy;
-    v_Normal = normal;
+    v_FogFactor = fogFactor(t_PositionWorld.xyz);
     v_TextureLayer = int(a_TextureParams.x);
     v_Clamp = int(a_TextureParams.y);
 }
@@ -82,9 +82,9 @@ void main() {
 ${RatchetShaderLib.CommonFragmentShader}
 ${RatchetShaderLib.Sampler}
 
-in vec3 v_Normal;
 in vec4 v_Rgba;
 in vec2 v_ST;
+in float v_FogFactor;
 flat in int v_TextureLayer;
 flat in int v_Clamp;
 
@@ -92,7 +92,7 @@ void main() {
     if (u_EnableTextures == 0.0) { gl_FragColor = vec4(v_Rgba.rgb / 2.0, v_Rgba.a); return; }
     vec2 texRemap = u_TextureRemaps.tfrags[v_TextureLayer].xy;
     vec4 textureSample = ratchetSampler(texRemap.x, texRemap.y, v_Clamp, v_ST);
-    gl_FragColor = commonFragmentShader(v_Rgba, textureSample);
+    gl_FragColor = commonFragmentShader(v_Rgba, textureSample, v_FogFactor);
 }
 `;
 
@@ -148,6 +148,20 @@ export class TfragGeometry {
     }
 }
 
+const bindingLayouts = [
+    {
+        numSamplers: 5,
+        numUniformBuffers: 2,
+        samplerEntries: [
+            { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+            { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+            { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+            { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+            { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+        ],
+    }
+];
+
 export class TfragRenderer {
     private tfragProgram: GfxProgram;
 
@@ -166,19 +180,7 @@ export class TfragRenderer {
         if (tfragGeometry.lods[lodLevel].vertexCount === 0) return;
 
         const renderInst = this.renderHelper.renderInstManager.newRenderInst();
-        renderInst.setBindingLayouts([
-            {
-                numSamplers: 5,
-                numUniformBuffers: 2,
-                samplerEntries: [
-                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                ],
-            }
-        ]);
+        renderInst.setBindingLayouts(bindingLayouts);
         renderInst.setGfxProgram(this.tfragProgram);
 
         const tfragParams = renderInst.allocateUniformBufferF32(TfragProgram.ub_TfragParams, 16);

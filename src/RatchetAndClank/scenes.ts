@@ -21,6 +21,7 @@ import { RatchetShaderLib } from "./shader-lib";
 import { createGfxTextureForPaletteTexture, createTextureAtlases, createTieRgbaTexture, TextureAtlases } from "./textures";
 import { CollisionGeometry, CollisionRenderer } from "./render-collision";
 import { IS_DEVELOPMENT } from "../BuildVersion";
+import { GfxDynamicBufferCache } from "../gfx/render/GfxRenderCache";
 
 const pathBase = (gameNumber: number) => `RatchetAndClank${gameNumber}`;
 
@@ -73,6 +74,7 @@ class RatchetAndClank1Scene implements SceneGfx {
     };
 
     private instanceDataBuffer: MegaBuffer;
+    private instanceDataBufferCache: GfxDynamicBufferCache;
 
     constructor(private sceneContext: SceneContext, public gameNumber: number, public levelNumber: number) {
         this.renderHelper = new GfxRenderHelper(sceneContext.device, sceneContext);
@@ -145,6 +147,7 @@ class RatchetAndClank1Scene implements SceneGfx {
         };
 
         this.instanceDataBuffer = createMegaBuffer(cache.device, "Instance Data", 1024 * 1024);
+        this.instanceDataBufferCache = new GfxDynamicBufferCache(cache.device);
 
         const filePromises = loadFilesFromNetwork(sceneContext.dataFetcher, `${pathBase(this.gameNumber)}/level_${this.levelNumber}`);
         load(this.levelResources, filePromises).then(() => {
@@ -219,7 +222,7 @@ class RatchetAndClank1Scene implements SceneGfx {
         const { sky } = this.levelResources;
         if (!sky) return null;
 
-        const skyGeometry = new SkyGeometry(this.renderHelper.renderCache, sky.shells[i]);
+        const skyGeometry = new SkyGeometry(this.renderHelper.renderCache, i, sky.shells[i]);
         this.geometries.skyShells.set(i, skyGeometry);
         return skyGeometry;
     }
@@ -274,7 +277,6 @@ class RatchetAndClank1Scene implements SceneGfx {
     private fillSceneParams(template: GfxRenderInst, viewerInput: ViewerRenderInput, cameraPosition: vec3): void {
         const levelSettings = this.levelResources.levelSettings ?? {
             backgroundColor: OpaqueBlack,
-            skyColor: OpaqueBlack,
             fogColor: OpaqueBlack,
             fogNearDistance: 0,
             fogFarDistance: 1,
@@ -285,21 +287,24 @@ class RatchetAndClank1Scene implements SceneGfx {
         const data = template.allocateUniformBufferF32(TieProgram.ub_SceneParams, RatchetShaderLib.SceneParamsSizeInFloats);
         let offs = 0;
 
-        // camera transform and position (24 floats)
+        // camera transform (16 floats)
+        offs += fillMatrix4x4(data, offs, viewerInput.camera.clipFromWorldMatrix);
+
+        // camera data (12 floats)
+        offs += fillVec3v(data, offs, cameraPosition, 0);
+        const cameraDirection = vec3.fromValues(viewerInput.camera.viewMatrix[2], viewerInput.camera.viewMatrix[6], viewerInput.camera.viewMatrix[10]);
+        offs += fillVec3v(data, offs, cameraDirection, 0);
         const nearClip = 0.05;
         const farClip = 1024;
         viewerInput.camera.setClipPlanes(nearClip, farClip);
-        offs += fillMatrix4x4(data, offs, viewerInput.camera.clipFromWorldMatrix);
-        offs += fillVec3v(data, offs, cameraPosition, this.settings.enableTextures ? 1 : 0);
-        offs += fillVec4(data, offs, nearClip, farClip, this.settings.lodSetting, this.settings.lodBias);
+        offs += fillVec4(data, offs, nearClip, farClip, viewerInput.camera.isOrthographic ? 1 : 0, 0);
+
+        // lod and texture settings (4 floats)
+        offs += fillVec4(data, offs, this.settings.lodSetting, this.settings.lodBias, this.settings.enableTextures ? 1 : 0, 0);
 
         // background color (4 floats)
         const backgroundColor = levelSettings.backgroundColor;
         offs += fillVec4(data, offs, backgroundColor.r / 0xFF, backgroundColor.g / 0xFF, backgroundColor.b / 0xFF, 1);
-
-        // sky color (4 floats)
-        const skyColor = this.levelResources.sky?.header.skyColor ?? OpaqueBlack;
-        offs += fillVec4(data, offs, skyColor.r / 0xFF, skyColor.g / 0xFF, skyColor.b / 0xFF, skyColor.a / 0xFF);
 
         // fog params (8 floats)
         if (this.settings.enableFog) {
@@ -322,9 +327,9 @@ class RatchetAndClank1Scene implements SceneGfx {
             if (i < directionalLights.length) {
                 const light = directionalLights[i];
                 offs += fillVec4(data, offs, -light.directionA.x, -light.directionA.z, light.directionA.y, 0);
-                offs += fillVec4(data, offs, light.colorA.r, light.colorA.g, light.colorA.b, light.colorA.a);
+                offs += fillVec4(data, offs, light.colorA.r, light.colorA.g, light.colorA.b, -light.colorA.a);
                 offs += fillVec4(data, offs, -light.directionB.x, -light.directionB.z, light.directionB.y, 0);
-                offs += fillVec4(data, offs, light.colorB.r, light.colorB.g, light.colorB.b, light.colorB.a);
+                offs += fillVec4(data, offs, light.colorB.r, light.colorB.g, light.colorB.b, -light.colorB.a);
             } else {
                 offs += fillVec4(data, offs, 0, 0, 0, 0);
                 offs += fillVec4(data, offs, 0, 0, 0, 0);
@@ -350,6 +355,11 @@ class RatchetAndClank1Scene implements SceneGfx {
     public render(device: GfxDevice, viewerInput: ViewerRenderInput): void {
         const cameraPosition = vec3.create();
         mat4.getTranslation(cameraPosition, viewerInput.camera.worldMatrix);
+        const isOrtho = viewerInput.camera.isOrthographic;
+
+        let lodSetting = this.settings.lodSetting;
+        if (isOrtho && lodSetting === -1) lodSetting = 0; // always treat dynamic lod as high lod in ortho view
+        const lodBias = this.settings.lodBias;
 
         // setup
         const template = this.renderHelper.pushTemplateRenderInst();
@@ -385,7 +395,7 @@ class RatchetAndClank1Scene implements SceneGfx {
                 const skyShellGeometry = this.getOrCreateSkyGeometry(i);
                 if (!skyShellGeometry) continue;
                 if (!skyTextures) continue;
-                this.renderers.sky.renderSky(this.renderInstList, cameraPosition, viewerInput.time, skyShellGeometry, skyTextures, this.samplerSky);
+                this.renderers.sky.renderSky(this.renderInstList, cameraPosition, viewerInput.time, skyShellGeometry, skyTextures, this.samplerSky, isOrtho);
             }
         }
 
@@ -401,7 +411,7 @@ class RatchetAndClank1Scene implements SceneGfx {
         if (this.settings.enableTfrag && atlasTextures) {
             const tfragGeometry = this.getOrCreateTfragGeometry();
             if (tfragGeometry) {
-                this.renderers.tfrag.renderTfrag(this.renderInstList, tfragGeometry, this.settings.lodSetting, atlasTextures);
+                this.renderers.tfrag.renderTfrag(this.renderInstList, tfragGeometry, lodSetting, atlasTextures);
             }
         }
 
@@ -418,7 +428,7 @@ class RatchetAndClank1Scene implements SceneGfx {
                 if (!instances) continue;
                 const geometriesByLod = this.getOrCreateTieGeometry(oClass);
                 if (!geometriesByLod) continue;
-                this.renderers.tie.renderTie(this.renderInstList, geometriesByLod, tieClass, instances, tieTextureMappings, cameraPosition, this.settings.lodSetting, this.settings.lodBias, this.instanceDataBuffer);
+                this.renderers.tie.renderTie(this.renderInstList, geometriesByLod, tieClass, instances, tieTextureMappings, cameraPosition, lodSetting, lodBias, this.instanceDataBuffer);
             }
         }
 
@@ -449,7 +459,7 @@ class RatchetAndClank1Scene implements SceneGfx {
                 if (!instances) continue;
                 const geometry = this.getOrCreateShrubGeometry(oClass);
                 if (!geometry) continue;
-                this.renderers.shrub.renderShrub(this.renderInstList, geometry, instances, atlasTextures, cameraPosition, this.settings.lodSetting, this.settings.lodBias, this.instanceDataBuffer);
+                this.renderers.shrub.renderShrub(this.renderInstList, geometry, instances, atlasTextures, cameraPosition, lodSetting, lodBias, this.instanceDataBuffer);
             }
         }
 

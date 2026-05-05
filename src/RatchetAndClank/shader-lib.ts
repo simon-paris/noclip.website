@@ -1,16 +1,31 @@
+import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary.js";
+
 export const RatchetShaderLib = {
     SceneParamsSizeInFloats: [
         16, // camera transform
-        4, // camera position
-        4, // near/far clip
+        12, // camera data
+        4, // lod and texture settings
         4, // background color
         4, // sky color
-        4 + 4, // fog params
-        (4 + 4 + 4 + 4) * 16, // directional lights
-        3 * 256 * 4, // texture remaps (3 arrays of 256 vec4s)
+        8, // fog params
+        16 * 16, // directional lights
+        4 * 256 * 3, // texture remaps (3 arrays of 256 vec4s)
     ].reduce((a, b) => a + b, 0),
     SceneParams: `
 
+// size 12
+struct CameraData {
+    vec3 position;
+    float pad1;
+    vec3 direction;
+    float pad2;
+    float near;
+    float far;
+    float isOrtho;
+    float pad3;
+};
+
+// size 8
 struct FogParams {
     vec4 color;
     float nearDist;
@@ -19,6 +34,7 @@ struct FogParams {
     float farIntensity;
 };
 
+// size 16
 struct DirectionLight {
     vec3 directionA;
     float pad1;
@@ -28,6 +44,7 @@ struct DirectionLight {
     vec4 colorB;
 };
 
+// size 4*256*3
 struct TextureRemaps {
     // x = size bucket, y = index within bucket, z/w unused padding
     vec4 tfrags[256];
@@ -37,12 +54,12 @@ struct TextureRemaps {
 
 layout(std140) uniform ub_SceneParams {
     Mat4x4 u_ClipFromWorld;
-    vec3 u_CameraPosWorld;
+    CameraData u_CameraData;
+    float u_LodPreset;
+    float u_LodBias;
     float u_EnableTextures;
-    vec2 u_NearFarClip; // x = near, y = far
-    vec2 u_LodSettings; // x = lod preset, y = lod bias
+    float pad1;
     vec4 u_BackgroundColor;
-    vec4 u_SkyColor;
     FogParams u_FogParams;
     DirectionLight u_DirectionLights[16];
     TextureRemaps u_TextureRemaps;
@@ -60,25 +77,17 @@ bool isNullLight(int position, int dirLightIndex) {
 vec4 applyDirectionalLight(vec3 normal, int dirLightIndex) {
     DirectionLight dirlight = u_DirectionLights[dirLightIndex];
 
-    const vec4 NEGATIVE_ALPHA = vec4(1.0, 1.0, 1.0, -1.0);
-
     vec4 light = vec4(0.0);
     float nDotL_A = dot(normal, dirlight.directionA);
-    if (nDotL_A > 0.0) light += nDotL_A * dirlight.colorA * NEGATIVE_ALPHA;
+    if (nDotL_A > 0.0) light += nDotL_A * dirlight.colorA;
     float nDotL_B = dot(normal, dirlight.directionB);
-    if (nDotL_B > 0.0) light += nDotL_B * dirlight.colorB * NEGATIVE_ALPHA;
+    if (nDotL_B > 0.0) light += nDotL_B * dirlight.colorB;
     return light;
 }
 
 vec4 commonVertexLighting(vec4 rgba, vec3 normal, vec4 dirLightIndices) {
     vec4 light = rgba;
 
-    // directional
-    int lightCount = 0;
-    for(int i = 0; i < 4; i++) {
-        int dirLightIndex = int(dirLightIndices[i]);
-        if (isNullLight(i, dirLightIndex)) lightCount++;
-    }
     for(int i = 0; i < 4; i++) {
         int dirLightIndex = int(dirLightIndices[i]);
         if (isNullLight(i, dirLightIndex)) continue;
@@ -88,41 +97,40 @@ vec4 commonVertexLighting(vec4 rgba, vec3 normal, vec4 dirLightIndices) {
     if (rgba.a >= 1.0 && light.a < 1.0) {
         light.a = rgba.a;
     }
-    
+
     return light;
+}
+
+float fogFactor(vec3 vertexPosWorld) {
+    if (u_CameraData.isOrtho == 1.0) return 0.0;
+    float distWorld = length(vertexPosWorld - u_CameraData.position);
+    float distFogRange01 = 1.0 - clamp((u_FogParams.farDist - distWorld) / (u_FogParams.farDist - u_FogParams.nearDist), 0.0, 1.0);
+    return u_FogParams.nearIntensity + distFogRange01 * (u_FogParams.farIntensity - u_FogParams.nearIntensity);
 }
 
     `,
     CommonFragmentShader: `
+${GfxShaderLibrary.MonochromeNTSCLinear}
 
 const float SATURATION_ADJUST = 1.15;
 
-float linearizeDepth(float depth, float near, float far) {
-    float z = depth * 2.0 - 1.0;
-    return (2.0 * near * far) / (far + near - z * (far - near));
+float linear01Depth() {
+    float depth = gl_FragCoord.z;
+    float near = u_CameraData.near;
+    float far = u_CameraData.far;
+
+    float z = (1.0 - gl_FragCoord.z) * 2.0 - 1.0;
+    float depthWorld = (2.0 * near * far) / (far + near - z * (far - near));
+    float depth01 = (depthWorld - near) / (far - near);
+    return depth01;
 }
 
-float fogFactor() {
-    float worldDepth = linearizeDepth(1.0 - gl_FragCoord.z, u_NearFarClip.x, u_NearFarClip.y);
-    float fogFactor = 1.0 - clamp((u_FogParams.farDist - worldDepth) / (u_FogParams.farDist - u_FogParams.nearDist), 0.0, 1.0);
-    fogFactor = u_FogParams.nearIntensity + fogFactor * (u_FogParams.farIntensity - u_FogParams.nearIntensity);
-    return fogFactor;
-}
-
-vec3 adjustSaturation(vec3 color, float adjustment) {
-    const vec3 luminanceWeights = vec3(0.2125, 0.7154, 0.0721);
-    float luminance = dot(color, luminanceWeights);
-    vec3 grayscale = vec3(luminance);
-    return mix(grayscale, color, adjustment);
-}
-
-vec4 commonFragmentShader(vec4 rgba, vec4 textureSample) {
+vec4 commonFragmentShader(vec4 rgba, vec4 textureSample, float fogFactor) {
     // texture color is multiplied with vertex color immediately
     rgba *= textureSample;
 
     // fog step (ignores alpha)
     vec3 rgb = rgba.rgb;
-    float fogFactor = fogFactor();
     vec3 fogColor = u_FogParams.color.rgb;
     rgb = mix(rgb, fogColor, fogFactor);
 
@@ -139,7 +147,7 @@ vec4 commonFragmentShader(vec4 rgba, vec4 textureSample) {
     // }
 
     // with saturation filter (not authentic but looks washed out without it)
-    rgba.rgb = adjustSaturation(rgba.rgb, 1.15);
+    rgba.rgb = mix(vec3(MonochromeNTSCLinear(rgba.rgb)), rgba.rgb, SATURATION_ADJUST);
 
     return rgba;
 }
@@ -152,18 +160,17 @@ Custom texture sampling function that can dynamically select textures and sampli
 - slice: the slice within the atlas
 - clampRegister: bit 1 = S clamp, bit 3 = T clamp (other bits are used for region clamp, not supported)
 - st: the texture coordinates
-- grad: the magnitude of the derivative of the texture coordinates in texels, for mip selection
 */
 vec4 ratchetSampler(float bucket, float slice, int clampRegister, vec2 st) {
-    float worldDepth = linearizeDepth(1.0 - gl_FragCoord.z, u_NearFarClip.x, u_NearFarClip.y);
-    float linear01Depth = (worldDepth - u_NearFarClip.x) / (u_NearFarClip.y - u_NearFarClip.x);
+    int lod = 0;
 
-    // ps2 selects mips based on depth not texcoords, but the bias is configurable (in TEX1), I know where the data is in the meshes but I don't know how to decode it.
-    float bias = log2(bucket) + 1.0 - (u_LodSettings.y / 20.0);
-
-    float maxLod = log2(bucket);
-    float lodLevel = clamp(log2(linear01Depth) + bias, 0.0, maxLod - 2.0);
-    int lod = int(lodLevel);
+    if (u_CameraData.isOrtho == 0.0) {
+        // ps2 selects mips based on depth not texcoords, but the bias is configurable (in TEX1), I know where the data is in the meshes but I don't know how to decode it.
+        float bias = log2(bucket) + 1.0 - (u_LodBias / 20.0);
+        float maxLod = log2(bucket);
+        float lodLevel = clamp(log2(linear01Depth()) + bias, 0.0, maxLod - 2.0);
+        lod = int(lodLevel);
+    }
 
     vec2 texSize = vec2(bucket) / pow(2.0, float(lod));
     vec2 texelCoord = st * texSize - 0.5;

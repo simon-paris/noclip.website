@@ -68,10 +68,9 @@ layout(location = ${TieProgram.a_InstanceExtraData}) in vec4 a_InstanceExtraData
 
 out vec2 v_ST;
 out vec4 v_Rgba;
-out vec3 v_Normal;
+out float v_FogFactor;
 flat out int v_TextureIndex;
 flat out int v_Clamp;
-
 
 ${RatchetShaderLib.LightingFunctions}
 
@@ -80,18 +79,19 @@ void main() {
     vec3 morphedPosition = a_Position + a_LodMorphOffset * lodMorphFactor;
     Mat4x4 _instanceTransform = Mat4x4(a_InstanceTransform0, a_InstanceTransform1, a_InstanceTransform2, a_InstanceTransform3);
     mat4 instanceTransform = UnpackMatrix(_instanceTransform);
-    vec4 t_PositionWorld = instanceTransform * vec4(morphedPosition, 1.0f);
+    vec4 positionWorld = instanceTransform * vec4(morphedPosition, 1.0f);
 
-    gl_Position = UnpackMatrix(u_ClipFromWorld) * t_PositionWorld;
+    gl_Position = UnpackMatrix(u_ClipFromWorld) * positionWorld;
     v_ST = a_ST;
 
     ivec2 ambientRgbaTexcoord = ivec2(int(a_ExtraData.z), int(a_InstanceExtraData.x));
     vec4 rgba = texelFetch(TEXTURE(u_AmbientRgbaTexture), ambientRgbaTexcoord, 0);
     rgba.rgb *= 2.0; // not sure about this
     vec4 lights = a_InstanceDirectionLights;
+    vec3 normal = normalize(inverse(transpose(mat3(instanceTransform))) * a_Normal);
     
-    v_Normal = normalize(inverse(transpose(mat3(instanceTransform))) * a_Normal);
-    v_Rgba = commonVertexLighting(rgba, v_Normal, lights);
+    v_Rgba = commonVertexLighting(rgba, normal, lights);
+    v_FogFactor = fogFactor(positionWorld.xyz);
     v_TextureIndex = int(a_ExtraData.x);
     v_Clamp = int(a_ExtraData.y);
 }
@@ -104,7 +104,7 @@ ${RatchetShaderLib.Sampler}
 
 in vec2 v_ST;
 in vec4 v_Rgba;
-in vec3 v_Normal;
+in float v_FogFactor;
 flat in int v_TextureIndex;
 flat in int v_Clamp;
 
@@ -112,7 +112,7 @@ void main() {
     if (u_EnableTextures == 0.0) { gl_FragColor = vec4(v_Rgba.rgb / 2.0, v_Rgba.a); return; }
     vec2 texRemap = u_TextureRemaps.ties[v_TextureIndex].xy;
     vec4 textureSample = ratchetSampler(texRemap.x, texRemap.y, v_Clamp, v_ST);
-    gl_FragColor = commonFragmentShader(v_Rgba, textureSample);
+    gl_FragColor = commonFragmentShader(v_Rgba, textureSample, v_FogFactor);
 }
 `;
 
@@ -163,6 +163,23 @@ export class TieGeometry {
     }
 }
 
+const scratchVec3 = vec3.create();
+
+const bindingLayouts = [
+    {
+        numSamplers: 6,
+        numUniformBuffers: 2,
+        samplerEntries: [
+            { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+            { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+            { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+            { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+            { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+            { dimension: GfxTextureDimension.n2D, formatKind: GfxSamplerFormatKind.Float, },
+        ],
+    }
+];
+
 export class TieRenderer {
     private tieProgram: GfxProgram;
 
@@ -171,16 +188,15 @@ export class TieRenderer {
     }
 
     renderTie(renderInstList: GfxRenderInstList, tieGeometriesByLod: (TieGeometry | null)[], tieClass: TieClass, tieInstanceBatch: TieInstance[], textureMappings: GfxSamplerBinding[], cameraPosition: vec3, settingLodPreset: number, settingLodBias: number, instanceDataBuffer: MegaBuffer): void {
-        const scratchVec3 = vec3.create();
 
-        type TieDrawInstance = { objectMatrix: mat4, directionLights: number[], rgbasRow: number, lodMorphFactor: number, i: number };
+
+        type TieDrawInstance = { objectMatrix: mat4, directionLights: number[], rgbasRow: number, lodMorphFactor: number };
         const tieInstancesToDrawByLod: TieDrawInstance[][] = [[], [], []];
         for (let i = 0; i < tieInstanceBatch.length; i++) {
             const tieInstance = tieInstanceBatch[i];
 
             // tie instance transform
-            const objectMatrix = mat4.create();
-            mat4.multiply(objectMatrix, noclipSpaceFromRatchetSpace, tieInstance.matrix);
+            const objectMatrix = tieInstance._matrixInNoclipSpace;
             let position = scratchVec3;
             mat4.getTranslation(position, objectMatrix);
 
@@ -224,7 +240,6 @@ export class TieRenderer {
                 directionLights: tieInstance.directionalLights,
                 lodMorphFactor,
                 rgbasRow: tieInstance.instanceIndex,
-                i,
             });
         }
 
@@ -238,20 +253,7 @@ export class TieRenderer {
 
             const renderInst = this.renderHelper.renderInstManager.newRenderInst();
             renderInst.setGfxProgram(this.tieProgram);
-            renderInst.setBindingLayouts([
-                {
-                    numSamplers: 6,
-                    numUniformBuffers: 2,
-                    samplerEntries: [
-                        { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                        { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                        { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                        { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                        { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                        { dimension: GfxTextureDimension.n2D, formatKind: GfxSamplerFormatKind.Float, },
-                    ],
-                }
-            ]);
+            renderInst.setBindingLayouts(bindingLayouts);
 
             const instanceDataStartBytes = instanceDataBuffer.ptr * 4;
             for (let i = 0; i < tieInstancesToDraw.length; i++) {

@@ -18,7 +18,7 @@ export class SkyProgram extends DeviceProgram {
     public static a_Rgba = 2;
     public static a_Alpha = 3;
 
-    public static elementsPerVertex = 10; // position(3) + st(2) + rgba(4) + alpha(1) = 10
+    public static elementsPerVertex = 9; // position(3) + st(2) + rgba(4) = 9
 
     public static ub_SceneParams = 0;
     public static ub_SkyParams = 1;
@@ -39,38 +39,38 @@ layout(location = 0) uniform sampler2D u_Texture;
 layout(location = ${SkyProgram.a_Position}) in vec3 a_Position;
 layout(location = ${SkyProgram.a_ST}) in vec2 a_ST;
 layout(location = ${SkyProgram.a_Rgba}) in vec4 a_Rgba;
-layout(location = ${SkyProgram.a_Alpha}) in float a_Alpha;
 
+out vec3 v_WorldPos;
 out vec2 v_ST;
 out vec4 v_Rgba;
 
 void main() {
     vec4 t_PositionWorld = UnpackMatrix(u_SkyTransform) * vec4(a_Position.xyz, 1.0f);
-    gl_Position = (UnpackMatrix(u_ClipFromWorld) * t_PositionWorld).xyww; // infinite depth
+    gl_Position = (UnpackMatrix(u_ClipFromWorld) * t_PositionWorld);
 
-    float isTextured = u_ExtraData.x;
-    if (isTextured == 1.0) {
-        v_ST = a_ST;
-        v_Rgba = vec4(1.0, 1.0, 1.0, a_Alpha);
-    } else {
-        v_Rgba = vec4(a_Rgba.rgb, a_Alpha * a_Rgba.a);
-    }
+    v_WorldPos = t_PositionWorld.xyz;
+    v_ST = a_ST;
+    v_Rgba = a_Rgba;
 }
 `;
 
     public override frag = `
 ${RatchetShaderLib.CommonFragmentShader}
+in vec3 v_WorldPos;
 in vec2 v_ST;
 in vec4 v_Rgba;
 
 void main() {
+    // discard the hemisphere behind the camera (needed for ortho view since no backface culling)
+    if (dot(u_CameraData.direction, v_WorldPos - u_CameraData.position) > 0.0) discard;
+
     float isTextured = u_ExtraData.x;
     if (isTextured == 1.0) {
         if (u_EnableTextures == 0.0) discard;
-        gl_FragColor = commonFragmentShader(v_Rgba, texture(SAMPLER_2D(u_Texture), v_ST));
+        gl_FragColor = commonFragmentShader(v_Rgba, texture(SAMPLER_2D(u_Texture), v_ST), 0.0);
     } else {
-        if (u_EnableTextures == 0.0) { gl_FragColor = vec4(v_Rgba.rgb, v_Rgba.a); return; }
-        gl_FragColor = commonFragmentShader(v_Rgba, vec4(1.0, 1.0, 1.0, 1.0));
+        if (u_EnableTextures == 0.0) { gl_FragColor = v_Rgba; return; }
+        gl_FragColor = commonFragmentShader(v_Rgba, vec4(1.0, 1.0, 1.0, 1.0), 0.0);
     }
 }
 `;
@@ -87,7 +87,7 @@ export class SkyGeometry {
 
     public inputLayout: GfxInputLayout;
 
-    constructor(cache: GfxRenderCache, skyShell: SkyShell) {
+    constructor(cache: GfxRenderCache, public index: number, skyShell: SkyShell) {
         const device = cache.device;
 
         const assembled = assembleSkyShellGeometry(skyShell);
@@ -106,7 +106,6 @@ export class SkyGeometry {
                 { location: SkyProgram.a_Position, format: GfxFormat.F32_RGB, bufferByteOffset: 0, bufferIndex: 0, },
                 { location: SkyProgram.a_ST, format: GfxFormat.F32_RG, bufferByteOffset: 3 * 4, bufferIndex: 0, },
                 { location: SkyProgram.a_Rgba, format: GfxFormat.F32_RGBA, bufferByteOffset: 5 * 4, bufferIndex: 0, },
-                { location: SkyProgram.a_Alpha, format: GfxFormat.F32_R, bufferByteOffset: 9 * 4, bufferIndex: 0, },
             ],
             vertexBufferDescriptors: [
                 { byteStride: SkyProgram.elementsPerVertex * 0x4, frequency: GfxVertexBufferFrequency.PerVertex, },
@@ -121,6 +120,31 @@ export class SkyGeometry {
     }
 }
 
+const scratchMat4 = mat4.create();
+
+const bindingLayouts = [
+    { numSamplers: 1, numUniformBuffers: 2 },
+];
+
+const megaStateFlags = {
+    cullMode: GfxCullMode.None,
+    depthWrite: false,
+    depthCompare: GfxCompareMode.Always,
+    attachmentsState: [{
+        channelWriteMask: GfxChannelWriteMask.AllChannels,
+        rgbBlendState: {
+            blendMode: GfxBlendMode.Add,
+            blendSrcFactor: GfxBlendFactor.SrcAlpha,
+            blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
+        },
+        alphaBlendState: {
+            blendMode: GfxBlendMode.Add,
+            blendSrcFactor: GfxBlendFactor.One,
+            blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
+        },
+    }],
+};
+
 export class SkyRenderer {
     private skyProgram: GfxProgram;
 
@@ -128,9 +152,13 @@ export class SkyRenderer {
         this.skyProgram = renderHelper.renderCache.createProgram(new SkyProgram());
     }
 
-    renderSky(renderInstList: GfxRenderInstList, cameraPosition: vec3, time: number, skyShellGeometry: SkyGeometry, skyShellTextures: GfxTexture[], skySampler: GfxSampler): void {
-        const objectMatrix = mat4.create();
+    renderSky(renderInstList: GfxRenderInstList, cameraPosition: vec3, time: number, skyShellGeometry: SkyGeometry, skyShellTextures: GfxTexture[], skySampler: GfxSampler, isOrtho: boolean): void {
+        const objectMatrix = mat4.identity(scratchMat4);
         mat4.translate(objectMatrix, objectMatrix, cameraPosition);
+        if (isOrtho) {
+            const scale = 20;
+            mat4.scale(objectMatrix, objectMatrix, [scale, scale, scale]);
+        }
         mat4.multiply(objectMatrix, objectMatrix, noclipSpaceFromRatchetSpace);
 
         // can't find data for sky shell rotation speed
@@ -140,27 +168,8 @@ export class SkyRenderer {
 
         const template1 = this.renderHelper.pushTemplateRenderInst();
         template1.setGfxProgram(this.skyProgram);
-        template1.setBindingLayouts([
-            { numSamplers: 1, numUniformBuffers: 2 },
-        ]);
-        template1.setMegaStateFlags({
-            cullMode: GfxCullMode.None,
-            depthWrite: false,
-            depthCompare: GfxCompareMode.Always,
-            attachmentsState: [{
-                channelWriteMask: GfxChannelWriteMask.AllChannels,
-                rgbBlendState: {
-                    blendMode: GfxBlendMode.Add,
-                    blendSrcFactor: GfxBlendFactor.SrcAlpha,
-                    blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
-                },
-                alphaBlendState: {
-                    blendMode: GfxBlendMode.Add,
-                    blendSrcFactor: GfxBlendFactor.One,
-                    blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
-                },
-            }],
-        });
+        template1.setBindingLayouts(bindingLayouts);
+        template1.setMegaStateFlags(megaStateFlags);
 
         for (const draw of skyShellGeometry.draws) {
             const renderInst = this.renderHelper.renderInstManager.newRenderInst();
@@ -201,8 +210,7 @@ function assembleSkyShellGeometry(skyShell: SkyShell) {
         r: number,
         g: number,
         b: number,
-        a1: number,
-        a2: number,
+        a: number,
     }[] = [];
     const draws: { material: number, flags: { textured: boolean }, indices: number[] }[] = [];
 
@@ -220,11 +228,10 @@ function assembleSkyShellGeometry(skyShell: SkyShell) {
                     z: vert.z,
                     s: st.s,
                     t: st.t,
-                    r: 0,
-                    g: 0,
-                    b: 0,
-                    a1: 1,
-                    a2: vert.alpha,
+                    r: 0xFF,
+                    g: 0xFF,
+                    b: 0xFF,
+                    a: vert.alpha,
                 });
             } else {
                 verts.push({
@@ -236,8 +243,7 @@ function assembleSkyShellGeometry(skyShell: SkyShell) {
                     r: rgba.r,
                     g: rgba.g,
                     b: rgba.b,
-                    a1: rgba.a,
-                    a2: vert.alpha,
+                    a: (rgba.a / 0x80) * (vert.alpha / 0x80) * 0x80,
                 });
             }
         }
@@ -268,8 +274,7 @@ function assembleSkyShellGeometry(skyShell: SkyShell) {
         vertexArrayBuffer[ptr++] = (vert.r / 0xFF);
         vertexArrayBuffer[ptr++] = (vert.g / 0xFF);
         vertexArrayBuffer[ptr++] = (vert.b / 0xFF);
-        vertexArrayBuffer[ptr++] = (vert.a1 / 0xFF * 2);
-        vertexArrayBuffer[ptr++] = (vert.a2 / 0xFF * 2);
+        vertexArrayBuffer[ptr++] = (vert.a / 0xFF * 2);
     }
 
     const indexArrayBuffer = new Uint16Array(draws.length * 3);

@@ -10,6 +10,12 @@ const _noclipSpaceFromRatchetSpace = mat4.create();
 mat4.rotateX(_noclipSpaceFromRatchetSpace, mat4.clone(_noclipSpaceFromRatchetSpace), -Math.PI / 2);
 export const noclipSpaceFromRatchetSpace = _noclipSpaceFromRatchetSpace as ReadonlyMat4;
 
+export function matrixToNoclipSpace(matrix: ReadonlyMat4): mat4 {
+    const out = mat4.clone(matrix);
+    out[15] = 1;
+    return mat4.mul(out, noclipSpaceFromRatchetSpace, out);
+}
+
 // make map of oClass to instances of that oClass
 export function makeInstanceOClassMap<T extends { oClass: number }>(instances: T[]) {
     const map = new Map<number, T[]>();

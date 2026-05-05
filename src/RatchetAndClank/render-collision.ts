@@ -131,6 +131,11 @@ export class CollisionGeometry {
     }
 }
 
+const scratchMat4 = mat4.create();
+
+const bindingLayouts = [
+    { numSamplers: 0, numUniformBuffers: 2 },
+];
 
 export class CollisionRenderer {
     private collisionProgram: GfxProgram;
@@ -140,14 +145,12 @@ export class CollisionRenderer {
     }
 
     renderCollision(renderInstList: GfxRenderInstList, cameraPosition: vec3, collisionGeometry: CollisionGeometry): void {
-        const objectMatrix = mat4.create();
+        const objectMatrix = mat4.identity(scratchMat4);
         mat4.multiply(objectMatrix, objectMatrix, noclipSpaceFromRatchetSpace);
 
         const renderInst = this.renderHelper.renderInstManager.newRenderInst();
         renderInst.setGfxProgram(this.collisionProgram);
-        renderInst.setBindingLayouts([
-            { numSamplers: 0, numUniformBuffers: 2 },
-        ]);
+        renderInst.setBindingLayouts(bindingLayouts);
 
         const collisionParams = renderInst.allocateUniformBufferF32(CollisionProgram.ub_CollisionParams, 16);
         let offs = 0;

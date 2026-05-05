@@ -2,7 +2,7 @@ import { GsPrimitiveType } from "../Common/PS2/GS";
 import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
 import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice, GfxFormat, GfxInputLayout, GfxProgram, GfxSamplerBinding, GfxSamplerFormatKind, GfxTextureDimension, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
-import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
+import { GfxDynamicBufferCache, GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { DeviceProgram } from "../Program";
 import { assert } from "../util";
 import { RatchetShaderLib } from "./shader-lib";
@@ -65,28 +65,29 @@ layout(location = ${ShrubProgram.a_InstanceAmbientRgba}) in vec4 a_InstanceAmbie
 layout(location = ${ShrubProgram.a_InstanceDirectionLights}) in vec4 a_InstanceDirectionLights;
 layout(location = ${ShrubProgram.a_InstanceLodAlpha}) in float a_InstanceLodAlpha;
 
+out vec4 v_Rgba;
+out vec2 v_ST;
+out float v_FogFactor;
 flat out int v_TextureIndex;
 flat out int v_Clamp;
-out vec2 v_ST;
-out vec4 v_Rgba;
-out vec3 v_Normal;
 
 ${RatchetShaderLib.LightingFunctions}
 
 void main() {
     Mat4x4 _instanceTransform = Mat4x4(a_InstanceTransform0, a_InstanceTransform1, a_InstanceTransform2, a_InstanceTransform3);
     mat4 instanceTransform = UnpackMatrix(_instanceTransform);
-    vec4 t_PositionWorld = instanceTransform * vec4(a_Position.xyz, 1.0f);
-    gl_Position = UnpackMatrix(u_ClipFromWorld) * t_PositionWorld;
+    vec4 positionWorld = instanceTransform * vec4(a_Position.xyz, 1.0f);
+    gl_Position = UnpackMatrix(u_ClipFromWorld) * positionWorld;
     vec3 normal = normalize(inverse(transpose(mat3(instanceTransform))) * a_Normal);
 
     vec4 rgba = a_InstanceAmbientRgba.rgba;
     vec4 lights = a_InstanceDirectionLights;
 
-    v_ST = a_ST.xy;
     v_Rgba = commonVertexLighting(rgba, normal, lights);
     v_Rgba.a *= a_InstanceLodAlpha;
-    v_Normal = normal;
+
+    v_ST = a_ST.xy;
+    v_FogFactor = fogFactor(positionWorld.xyz);
     v_TextureIndex = int(a_TextureParams.x);
     v_Clamp = int(a_TextureParams.y);
 }
@@ -94,11 +95,12 @@ void main() {
 
     public override frag = `
 
+in vec4 v_Rgba;
+in vec2 v_ST;
+in vec3 v_Normal;
+in float v_FogFactor;
 flat in int v_TextureIndex;
 flat in int v_Clamp;
-in vec2 v_ST;
-in vec4 v_Rgba;
-in vec3 v_Normal;
 
 ${RatchetShaderLib.CommonFragmentShader}
 ${RatchetShaderLib.Sampler}
@@ -107,7 +109,7 @@ void main() {
     if (u_EnableTextures == 0.0) { gl_FragColor = vec4(v_Rgba.rgb / 2.0, v_Rgba.a); return; }
     vec2 texRemap = u_TextureRemaps.shrubs[v_TextureIndex].xy;
     vec4 textureSample = ratchetSampler(texRemap.x, texRemap.y, v_Clamp, v_ST);
-    gl_FragColor = commonFragmentShader(v_Rgba, textureSample);
+    gl_FragColor = commonFragmentShader(v_Rgba, textureSample, v_FogFactor);
 }
 
 `;
@@ -159,6 +161,22 @@ export class ShrubGeometry {
     }
 }
 
+const scratchVec3 = vec3.create();
+
+const bindingLayouts = [
+    {
+        numSamplers: 5,
+        numUniformBuffers: 2,
+        samplerEntries: [
+            { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+            { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+            { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+            { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+            { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+        ],
+    }
+];
+
 export class ShrubRenderer {
     private shrubProgram: GfxProgram;
 
@@ -167,15 +185,14 @@ export class ShrubRenderer {
     }
 
     renderShrub(renderInstList: GfxRenderInstList, shrubGeometry: ShrubGeometry, shrubInstances: ShrubInstance[], textureMappings: GfxSamplerBinding[], cameraPosition: vec3, settingLodPreset: number, settingLodBias: number, instanceDataBuffer: MegaBuffer): void {
-        type ShrubDrawInstance = { objectMatrix: mat4, directionalLights: number[], rgb: { r: number, g: number, b: number }, lodAlpha: number, i: number };
+        type ShrubDrawInstance = { objectMatrix: mat4, directionalLights: number[], rgb: { r: number, g: number, b: number }, lodAlpha: number };
         const shrubInstancesToDraw: ShrubDrawInstance[] = [];
         for (let i = 0; i < shrubInstances.length; i++) {
             const shrubInstance = shrubInstances[i];
 
             // shrub instance transform
-            const objectMatrix = mat4.create();
-            mat4.multiply(objectMatrix, noclipSpaceFromRatchetSpace, shrubInstance.matrix);
-            const position = vec3.create();
+            const objectMatrix = shrubInstance._matrixInNoclipSpace;
+            const position = scratchVec3;
             mat4.getTranslation(position, objectMatrix);
             const distanceToCamera = vec3.distance(position, cameraPosition);
 
@@ -203,7 +220,6 @@ export class ShrubRenderer {
                 directionalLights: shrubInstance.directionalLights,
                 rgb: shrubInstance.color,
                 lodAlpha,
-                i,
             })
         }
 
@@ -211,19 +227,7 @@ export class ShrubRenderer {
 
         const renderInst = this.renderHelper.renderInstManager.newRenderInst();
         renderInst.setGfxProgram(this.shrubProgram);
-        renderInst.setBindingLayouts([
-            {
-                numSamplers: 5,
-                numUniformBuffers: 2,
-                samplerEntries: [
-                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                    { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-                ],
-            }
-        ]);
+        renderInst.setBindingLayouts(bindingLayouts);
 
         // per instance data
         const instanceDataStartBytes = instanceDataBuffer.ptr * 4;
