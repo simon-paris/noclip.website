@@ -21,7 +21,7 @@ export interface LevelResources {
     grindPaths: Spline[] | null,
     directionLights: DirectionLightInstance[] | null,
     pointLights: PointLightInstance[] | null,
-    collision: Collision | null,
+    collisionGetter: (() => Collision) | null,
 
     tfrags: Tfrag[] | null,
     tfragTextures: PaletteTexture[] | null,
@@ -223,7 +223,8 @@ export async function loadSkyData(out: LevelResources, coreDataFilePromise: Prom
 export async function loadCollisionData(out: LevelResources, coreDataFilePromise: Promise<DataViewExt>, indexDataPromise: Promise<LoadIndexDataResult>) {
     const [coreDataFile, indexData] = await Promise.all([coreDataFilePromise, indexDataPromise]);
 
-    const collision = readCollision(coreDataFile.subview(indexData.levelCoreHeader.collision));
-    out.collision = collision;
+    out.collisionGetter = () => {
+        return readCollision(coreDataFile.subview(indexData.levelCoreHeader.collision));
+    };
 }
 

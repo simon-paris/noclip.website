@@ -99,32 +99,15 @@ void main() {
 }
 
 export class TfragGeometry {
-    // array of 3 vertex buffers, one per lod
-    public lods: {
-        vertexBuffer: GfxBuffer,
-        vertexCount: number,
-    }[];
-
-    public assembled: { lods: { vertexArrayBuffer: Float32Array, vertexCount: number }[] }
-
     public inputLayout: GfxInputLayout;
 
-    constructor(cache: GfxRenderCache, private tfrags: Tfrag[], private tfragTextures: PaletteTexture[]) {
-        const device = cache.device;
+    // array of 3 vertex buffers, one per lod
+    private lods: ({
+        vertexBuffer: GfxBuffer,
+        vertexCount: number,
+    } | null)[] = [null, null, null];
 
-        const assembled = this.assemble(tfrags, tfragTextures);
-        this.assembled = assembled;
-
-        this.lods = assembled.lods.map((lod, i) => {
-            const vertexBuffer = createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, lod.vertexArrayBuffer.buffer);
-            device.setResourceName(vertexBuffer, `Tfrag LOD ${i} (VB)`);
-
-            return {
-                vertexBuffer,
-                vertexCount: lod.vertexCount,
-            };
-        });
-
+    constructor(private cache: GfxRenderCache, private tfrags: Tfrag[], private tfragTextures: PaletteTexture[]) {
         this.inputLayout = cache.createInputLayout({
             vertexAttributeDescriptors: [
                 { location: TfragProgram.a_Position, format: GfxFormat.F32_RGB, bufferByteOffset: 0, bufferIndex: 0, },
@@ -141,36 +124,54 @@ export class TfragGeometry {
         });
     }
 
-    private assemble(tfrags: Tfrag[], tfragTextures: PaletteTexture[]) {
+    public getOrCreateVertexBuffer(lod: number) {
+        if (!this.lods[lod]) {
+            const device = this.cache.device;
+            const vertexData = this.assemble(lod);
+            const vertexBuffer = createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, vertexData.vertexArrayBuffer.buffer);
+            device.setResourceName(vertexBuffer, `Tfrag LOD ${lod} (VB)`);
+            this.lods[lod] = {
+                vertexBuffer,
+                vertexCount: vertexData.vertexCount,
+            };
+        }
+
+        const lodData = this.lods[lod];
+        assert(lodData !== null);
+        return lodData;
+    }
+
+    private assemble(lod: number) {
+        const tfrags = this.tfrags;
+        const tfragTextures = this.tfragTextures;
+
         const positionScale = 1 / 1024;
         const texcoordScale = 1 / 4096;
         const colorScale = 1 / 0x80;
 
-        let vertexCounts = [0, 0, 0];
+        let vertexCount = 0;
 
         for (let i = 0; i < tfrags.length; i++) {
             const tfrag = tfrags[i];
-            const tfragStrips = [tfrag.dataGroup1.lod2.strips, tfrag.dataGroup3.lod1.strips, tfrag.dataGroup5.lod0.strips];
-            for (let lodLevel = 0; lodLevel < 3; lodLevel++) {
-                const strips = tfragStrips[lodLevel];
-                let stripPtr = 0;
-                stripLoop: while (true) {
-                    const strip = strips[stripPtr];
-                    assert(strip !== undefined);
-                    switch (strip.endOfPacketFlag) {
-                        case 0: break; // normal strip
-                        case 0x80: break; // end of packet but not end of this tfrag
-                        case 0xFF: break stripLoop; // end
-                        default: throw new Error(`Unknown strip flag`);
-                    }
-                    vertexCounts[lodLevel] += 3 * (strip.vertexCount - 2);
-                    stripPtr++;
+            const tfragStrips = [tfrag.dataGroup5.lod0.strips, tfrag.dataGroup3.lod1.strips, tfrag.dataGroup1.lod2.strips];
+            const strips = tfragStrips[lod];
+            let stripPtr = 0;
+            stripLoop: while (true) {
+                const strip = strips[stripPtr];
+                assert(strip !== undefined);
+                switch (strip.endOfPacketFlag) {
+                    case 0: break; // normal strip
+                    case 0x80: break; // end of packet but not end of this tfrag
+                    case 0xFF: break stripLoop; // end
+                    default: throw new Error(`Unknown strip flag`);
                 }
+                vertexCount += 3 * (strip.vertexCount - 2);
+                stripPtr++;
             }
         }
 
-        const vertexArrayBuffers = vertexCounts.map(c => new Float32Array(c * TfragProgram.elementsPerVertex));
-        const vertexPtrs = [0, 0, 0];
+        const vertexArrayBuffer = new Float32Array(vertexCount * TfragProgram.elementsPerVertex);
+        let vertexPtr = 0;
 
         for (let i = 0; i < tfrags.length; i++) {
             const tfrag = tfrags[i];
@@ -186,93 +187,87 @@ export class TfragGeometry {
                 tfrag.dataGroup4.vertexPositionsPart2,
                 tfrag.dataGroup5.vertexPositionsPart3,
             );
-            const tfragStrips = [tfrag.dataGroup1.lod2.strips, tfrag.dataGroup3.lod1.strips, tfrag.dataGroup5.lod0.strips];
-            const tfragIndices = [tfrag.dataGroup1.lod2.indices, tfrag.dataGroup3.lod1.indices, tfrag.dataGroup5.lod0.indices];
+            const tfragStrips = [tfrag.dataGroup5.lod0.strips, tfrag.dataGroup3.lod1.strips, tfrag.dataGroup1.lod2.strips];
+            const tfragIndices = [tfrag.dataGroup5.lod0.indices, tfrag.dataGroup3.lod1.indices, tfrag.dataGroup1.lod2.indices];
             const tfragTextures = tfrag.dataGroup2.textures;
 
-            for (let lod = 0; lod < 3; lod++) {
-                const strips = tfragStrips[lod];
-                let stripPtr = 0;
-                const indices = tfragIndices[lod];
-                let stripIndicesPtr = 0;
+            const strips = tfragStrips[lod];
+            let stripPtr = 0;
+            const indices = tfragIndices[lod];
+            let stripIndicesPtr = 0;
 
-                let activeMaterial = 0;
-                let activeClamp = 0;
+            let activeMaterial = 0;
+            let activeClamp = 0;
 
-                stripLoop: while (true) {
-                    const strip = strips[stripPtr];
-                    assert(strip !== undefined);
+            stripLoop: while (true) {
+                const strip = strips[stripPtr];
+                assert(strip !== undefined);
 
-                    switch (strip.endOfPacketFlag) {
-                        case 0: break; // normal strip
-                        case 0x80: break; // end of packet but not end of this tfrag
-                        case 0xFF: break stripLoop; // end
-                        default: throw new Error(`Unknown strip flag`);
-                    }
-
-                    let vertexCount = strip.vertexCount;
-                    if (strip.hasAdGifFlag) {
-                        if (strip.adGifOffset === -1) {
-                            // do nothing
-                        } else if (strip.adGifOffset >= 0) {
-                            const localAdGifIndex = strip.adGifOffset / 0x5;
-                            assert(tfragTextures[localAdGifIndex] !== undefined);
-                            activeMaterial = tfragTextures[localAdGifIndex].tex0.low;
-                            activeClamp = tfragTextures[localAdGifIndex].clamp.low + (tfragTextures[localAdGifIndex].clamp.high << 2);
-                        } else {
-                            throw new Error(`invalid adGifOffset`);
-                        }
-                    }
-
-                    for (let i = 0; i < vertexCount - 2; i++) {
-                        const triangleIndices = [indices[stripIndicesPtr], indices[stripIndicesPtr + 1], indices[stripIndicesPtr + 2]];
-                        for (let tri = 0; tri < 3; tri++) {
-                            const vertexIndex = triangleIndices[tri];
-                            const vertInfo = tfragInfo[vertexIndex];
-                            const vertPos = tfragVerts[vertInfo.vertex / 2];
-                            const rgba = tfrag.rgbas[vertInfo.vertex / 2];
-                            const light = tfrag.lights[vertInfo.vertex / 2];
-                            const normal = this.lightToNormal(light);
-
-                            vertexArrayBuffers[lod][vertexPtrs[lod]++] = positionScale * (basePosition.x + vertPos.x);
-                            vertexArrayBuffers[lod][vertexPtrs[lod]++] = positionScale * (basePosition.y + vertPos.y);
-                            vertexArrayBuffers[lod][vertexPtrs[lod]++] = positionScale * (basePosition.z + vertPos.z);
-                            vertexArrayBuffers[lod][vertexPtrs[lod]++] = normal.x;
-                            vertexArrayBuffers[lod][vertexPtrs[lod]++] = normal.y;
-                            vertexArrayBuffers[lod][vertexPtrs[lod]++] = normal.z;
-                            vertexArrayBuffers[lod][vertexPtrs[lod]++] = colorScale * rgba.r;
-                            vertexArrayBuffers[lod][vertexPtrs[lod]++] = colorScale * rgba.g;
-                            vertexArrayBuffers[lod][vertexPtrs[lod]++] = colorScale * rgba.b;
-                            vertexArrayBuffers[lod][vertexPtrs[lod]++] = colorScale * rgba.a;
-                            vertexArrayBuffers[lod][vertexPtrs[lod]++] = activeMaterial;
-                            vertexArrayBuffers[lod][vertexPtrs[lod]++] = activeClamp;
-                            vertexArrayBuffers[lod][vertexPtrs[lod]++] = texcoordScale * this.fixTexcoord(vertInfo.s);
-                            vertexArrayBuffers[lod][vertexPtrs[lod]++] = texcoordScale * this.fixTexcoord(vertInfo.t);
-                            vertexArrayBuffers[lod][vertexPtrs[lod]++] = light.directionalLights[0];
-                            vertexArrayBuffers[lod][vertexPtrs[lod]++] = light.directionalLights[1];
-                            vertexArrayBuffers[lod][vertexPtrs[lod]++] = light.directionalLights[2];
-                            vertexArrayBuffers[lod][vertexPtrs[lod]++] = light.directionalLights[3];
-                        }
-                        stripIndicesPtr++;
-                    }
-
-                    stripIndicesPtr += 2;
-                    stripPtr++;
+                switch (strip.endOfPacketFlag) {
+                    case 0: break; // normal strip
+                    case 0x80: break; // end of packet but not end of this tfrag
+                    case 0xFF: break stripLoop; // end
+                    default: throw new Error(`Unknown strip flag`);
                 }
+
+                let vertexCount = strip.vertexCount;
+                if (strip.hasAdGifFlag) {
+                    if (strip.adGifOffset === -1) {
+                        // do nothing
+                    } else if (strip.adGifOffset >= 0) {
+                        const localAdGifIndex = strip.adGifOffset / 0x5;
+                        assert(tfragTextures[localAdGifIndex] !== undefined);
+                        activeMaterial = tfragTextures[localAdGifIndex].tex0.low;
+                        activeClamp = tfragTextures[localAdGifIndex].clamp.low + (tfragTextures[localAdGifIndex].clamp.high << 2);
+                    } else {
+                        throw new Error(`invalid adGifOffset`);
+                    }
+                }
+
+                for (let i = 0; i < vertexCount - 2; i++) {
+                    const triangleIndices = [indices[stripIndicesPtr], indices[stripIndicesPtr + 1], indices[stripIndicesPtr + 2]];
+                    for (let tri = 0; tri < 3; tri++) {
+                        const vertexIndex = triangleIndices[tri];
+                        const vertInfo = tfragInfo[vertexIndex];
+                        const vertPos = tfragVerts[vertInfo.vertex / 2];
+                        const rgba = tfrag.rgbas[vertInfo.vertex / 2];
+                        const light = tfrag.lights[vertInfo.vertex / 2];
+                        const normal = this.lightToNormal(light);
+
+                        vertexArrayBuffer[vertexPtr++] = positionScale * (basePosition.x + vertPos.x);
+                        vertexArrayBuffer[vertexPtr++] = positionScale * (basePosition.y + vertPos.y);
+                        vertexArrayBuffer[vertexPtr++] = positionScale * (basePosition.z + vertPos.z);
+                        vertexArrayBuffer[vertexPtr++] = normal.x;
+                        vertexArrayBuffer[vertexPtr++] = normal.y;
+                        vertexArrayBuffer[vertexPtr++] = normal.z;
+                        vertexArrayBuffer[vertexPtr++] = colorScale * rgba.r;
+                        vertexArrayBuffer[vertexPtr++] = colorScale * rgba.g;
+                        vertexArrayBuffer[vertexPtr++] = colorScale * rgba.b;
+                        vertexArrayBuffer[vertexPtr++] = colorScale * rgba.a;
+                        vertexArrayBuffer[vertexPtr++] = activeMaterial;
+                        vertexArrayBuffer[vertexPtr++] = activeClamp;
+                        vertexArrayBuffer[vertexPtr++] = texcoordScale * this.fixTexcoord(vertInfo.s);
+                        vertexArrayBuffer[vertexPtr++] = texcoordScale * this.fixTexcoord(vertInfo.t);
+                        vertexArrayBuffer[vertexPtr++] = light.directionalLights[0];
+                        vertexArrayBuffer[vertexPtr++] = light.directionalLights[1];
+                        vertexArrayBuffer[vertexPtr++] = light.directionalLights[2];
+                        vertexArrayBuffer[vertexPtr++] = light.directionalLights[3];
+                    }
+                    stripIndicesPtr++;
+                }
+
+                stripIndicesPtr += 2;
+                stripPtr++;
             }
+
         }
 
-        for (let i = 0; i < 3; i++) {
-            assert(vertexPtrs[i] === vertexCounts[i] * TfragProgram.elementsPerVertex);
-            assert(vertexPtrs[i] === vertexArrayBuffers[i].length);
-        }
+        assert(vertexPtr === vertexCount * TfragProgram.elementsPerVertex);
+        assert(vertexPtr === vertexArrayBuffer.length);
 
         return {
-            lods: [ // reverse order
-                { vertexArrayBuffer: vertexArrayBuffers[2], vertexCount: vertexPtrs[2] },
-                { vertexArrayBuffer: vertexArrayBuffers[1], vertexCount: vertexPtrs[1] },
-                { vertexArrayBuffer: vertexArrayBuffers[0], vertexCount: vertexPtrs[0] },
-            ]
+            vertexArrayBuffer,
+            vertexCount,
         };
     }
 
@@ -301,7 +296,9 @@ export class TfragGeometry {
 
     public destroy(device: GfxDevice): void {
         for (const lod of this.lods) {
-            device.destroyBuffer(lod.vertexBuffer);
+            if (lod) {
+                device.destroyBuffer(lod.vertexBuffer);
+            }
         }
     }
 }
@@ -335,7 +332,7 @@ export class TfragRenderer {
             lodLevel = 0;
         }
 
-        if (tfragGeometry.lods[lodLevel].vertexCount === 0) return;
+        const vertexData = tfragGeometry.getOrCreateVertexBuffer(lodLevel);
 
         const renderInst = this.renderHelper.renderInstManager.newRenderInst();
         renderInst.setBindingLayouts(bindingLayouts);
@@ -348,12 +345,12 @@ export class TfragRenderer {
         renderInst.setVertexInput(
             tfragGeometry.inputLayout,
             [
-                { buffer: tfragGeometry.lods[lodLevel].vertexBuffer, byteOffset: 0 },
+                { buffer: vertexData.vertexBuffer, byteOffset: 0 },
             ],
             null,
         );
         renderInst.setSamplerBindingsFromTextureMappings(textureMappings);
-        renderInst.setDrawCount(tfragGeometry.lods[lodLevel].vertexCount, 0);
+        renderInst.setDrawCount(vertexData.vertexCount, 0);
         renderInstList.submitRenderInst(renderInst);
     }
 }

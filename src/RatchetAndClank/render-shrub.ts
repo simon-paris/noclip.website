@@ -117,20 +117,12 @@ void main() {
 }
 
 export class ShrubGeometry {
-    public vertexBuffer: GfxBuffer;
-    public vertexCount: number;
-
     public inputLayout: GfxInputLayout;
 
-    constructor(cache: GfxRenderCache, shrub: ShrubClass, textureIndices: number[]) {
-        const device = cache.device;
+    private vertexBuffer: GfxBuffer;
+    private vertexCount: number;
 
-        const assembled = this.assemble(shrub, textureIndices);
-        this.vertexBuffer = createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, assembled.vertexArrayBuffer.buffer);
-        this.vertexCount = assembled.vertexCount;
-
-        device.setResourceName(this.vertexBuffer, `Shrub Class ${shrub.header.oClass} (VB)`);
-
+    constructor(private cache: GfxRenderCache, private shrub: ShrubClass, private textureIndices: number[]) {
         this.inputLayout = cache.createInputLayout({
             vertexAttributeDescriptors: [
                 // per vertex
@@ -154,6 +146,20 @@ export class ShrubGeometry {
 
             indexBufferFormat: null,
         });
+    }
+
+    public getOrCreateVertexBuffer() {
+        if (!this.vertexBuffer) {
+            const vertexData = this.assemble(this.shrub, this.textureIndices);
+            const device = this.cache.device;
+            this.vertexBuffer = createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, vertexData.vertexArrayBuffer.buffer);
+            device.setResourceName(this.vertexBuffer, `Shrub Class ${this.shrub.header.oClass} (VB)`);
+            this.vertexCount = vertexData.vertexCount;
+        }
+        return {
+            vertexBuffer: this.vertexBuffer,
+            vertexCount: this.vertexCount,
+        };
     }
 
     private assemble(shrub: ShrubClass, textureIndices: number[]) {
@@ -279,7 +285,9 @@ export class ShrubGeometry {
     }
 
     public destroy(device: GfxDevice): void {
-        device.destroyBuffer(this.vertexBuffer);
+        if (this.vertexBuffer) {
+            device.destroyBuffer(this.vertexBuffer);
+        }
     }
 }
 
@@ -362,16 +370,18 @@ export class ShrubRenderer {
             instanceDataBuffer.f32View[instanceDataBuffer.ptr++] = inst.lodAlpha;
         }
 
+        const vertexData = shrubGeometry.getOrCreateVertexBuffer();
+
         renderInst.setVertexInput(
             shrubGeometry.inputLayout,
             [
-                { buffer: shrubGeometry.vertexBuffer, byteOffset: 0 },
+                { buffer: vertexData.vertexBuffer, byteOffset: 0 },
                 { buffer: instanceDataBuffer.gfxBuffer, byteOffset: instanceDataStartBytes },
             ],
             null,
         );
         renderInst.setSamplerBindingsFromTextureMappings(textureMappings);
-        renderInst.setDrawCount(shrubGeometry.vertexCount, 0);
+        renderInst.setDrawCount(vertexData.vertexCount, 0);
         renderInst.setInstanceCount(shrubInstancesToDraw.length);
         renderInstList.submitRenderInst(renderInst);
     }

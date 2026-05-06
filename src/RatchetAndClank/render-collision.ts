@@ -100,20 +100,12 @@ void main() {
 }
 
 export class CollisionGeometry {
-    public vertexBuffer: GfxBuffer;
-    public vertexCount: number;
-
     public inputLayout: GfxInputLayout;
 
-    constructor(cache: GfxRenderCache, collision: Collision) {
-        const device = cache.device;
+    private vertexBuffer: GfxBuffer;
+    private vertexCount: number;
 
-        const assembled = this.assemble(collision.meshGrid, collision.heroGroups);
-
-        this.vertexBuffer = createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, assembled.vertexArrayBuffer.buffer);
-        device.setResourceName(this.vertexBuffer, `Collision (VB)`);
-        this.vertexCount = assembled.vertexCount;
-
+    constructor(private cache: GfxRenderCache, private collision: Collision) {
         this.inputLayout = cache.createInputLayout({
             vertexAttributeDescriptors: [
                 { location: CollisionProgram.a_Position, format: GfxFormat.F32_RGB, bufferByteOffset: 0, bufferIndex: 0, },
@@ -124,6 +116,20 @@ export class CollisionGeometry {
             ],
             indexBufferFormat: null,
         });
+    }
+
+    public getOrCreateVertexBuffer() {
+        if (!this.vertexBuffer) {
+            const assembled = this.assemble(this.collision.meshGrid, this.collision.heroGroups);
+            const device = this.cache.device;
+            this.vertexBuffer = createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, assembled.vertexArrayBuffer.buffer);
+            device.setResourceName(this.vertexBuffer, `Collision (VB)`);
+            this.vertexCount = assembled.vertexCount;
+        }
+        return {
+            vertexBuffer: this.vertexBuffer,
+            vertexCount: this.vertexCount,
+        };
     }
 
     private assemble(collisionOctants: CollisionOctant[], heroCollisionGroups: HeroCollisionGroups) {
@@ -215,12 +221,14 @@ export class CollisionRenderer {
         let offs = 0;
         offs += fillMatrix4x4(collisionParams, offs, objectMatrix);
 
+        const vertexData = collisionGeometry.getOrCreateVertexBuffer();
+
         renderInst.setVertexInput(
             collisionGeometry.inputLayout,
-            [{ buffer: collisionGeometry.vertexBuffer, byteOffset: 0 }],
+            [{ buffer: vertexData.vertexBuffer, byteOffset: 0 }],
             null,
         );
-        renderInst.setDrawCount(collisionGeometry.vertexCount, 0);
+        renderInst.setDrawCount(vertexData.vertexCount, 0);
         renderInstList.submitRenderInst(renderInst);
     }
 }

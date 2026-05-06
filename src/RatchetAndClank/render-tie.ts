@@ -119,21 +119,12 @@ void main() {
 }
 
 export class TieGeometry {
-    public vertexBuffer: GfxBuffer;
     public inputLayout: GfxInputLayout;
 
-    public vertexCount: number;
+    private vertexBuffer: GfxBuffer;
+    private vertexCount: number;
 
-    constructor(cache: GfxRenderCache, tieOClass: number, tie: TieClass, lodLevel: number, textureIndices: number[]) {
-        const device = cache.device;
-
-        const vertexData = this.assemble(tieOClass, tie, lodLevel, textureIndices);
-
-        this.vertexBuffer = createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, vertexData.vertexArrayBuffer.buffer);
-        device.setResourceName(this.vertexBuffer, `Tie Class ${tieOClass} (VB)`);
-
-        this.vertexCount = vertexData.vertexCount;
-
+    constructor(private cache: GfxRenderCache, private tieOClass: number, private tie: TieClass, private lodLevel: number, private textureIndices: number[]) {
         this.inputLayout = cache.createInputLayout({
             vertexAttributeDescriptors: [
                 // per vertex
@@ -158,7 +149,25 @@ export class TieGeometry {
         });
     }
 
-    private assemble(tieOClass: number, tie: TieClass, lod: number, textureIndices: number[]) {
+    public getOrCreateVertexBuffer() {
+        if (!this.vertexBuffer) {
+            const device = this.cache.device;
+            const vertexData = this.assemble();
+            this.vertexBuffer = createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, vertexData.vertexArrayBuffer.buffer);
+            device.setResourceName(this.vertexBuffer, `Tie Class ${this.tieOClass} (VB)`);
+            this.vertexCount = vertexData.vertexCount;
+        }
+        return {
+            vertexBuffer: this.vertexBuffer,
+            vertexCount: this.vertexCount,
+        };
+    }
+
+    private assemble() {
+        const tie = this.tie;
+        const lod = this.lodLevel;
+        const textureIndices = this.textureIndices;
+
         const positionScale = tie.scale * (1 / 1024);
         const texcoordScale = 1 / 4096;
         const normalScale = 1 / 0x7FFF;
@@ -303,7 +312,9 @@ export class TieGeometry {
     }
 
     public destroy(device: GfxDevice): void {
-        device.destroyBuffer(this.vertexBuffer);
+        if (this.vertexBuffer) {
+            device.destroyBuffer(this.vertexBuffer);
+        }
     }
 }
 
@@ -394,6 +405,7 @@ export class TieRenderer {
 
             const tieGeometry = tieGeometriesByLod[lodLevel];
             if (!tieGeometry) continue;
+            const vertexData = tieGeometry.getOrCreateVertexBuffer();
 
             const renderInst = this.renderHelper.renderInstManager.newRenderInst();
             renderInst.setGfxProgram(this.tieProgram);
@@ -410,7 +422,7 @@ export class TieRenderer {
             renderInst.setVertexInput(
                 tieGeometry.inputLayout,
                 [
-                    { buffer: tieGeometry.vertexBuffer, byteOffset: 0 },
+                    { buffer: vertexData.vertexBuffer, byteOffset: 0 },
                     { buffer: instanceDataBuffer.gfxBuffer, byteOffset: instanceDataStartBytes },
                 ],
                 null,
@@ -418,7 +430,7 @@ export class TieRenderer {
 
             renderInst.setSamplerBindingsFromTextureMappings(textureMappings);
             renderInst.setInstanceCount(tieInstancesToDraw.length);
-            renderInst.setDrawCount(tieGeometry.vertexCount, 0);
+            renderInst.setDrawCount(vertexData.vertexCount, 0);
             renderInstList.submitRenderInst(renderInst);
         }
     }

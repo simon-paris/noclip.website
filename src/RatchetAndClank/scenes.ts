@@ -88,7 +88,7 @@ class RatchetAndClank1Scene implements SceneGfx {
             grindPaths: null,
             directionLights: null,
             pointLights: null,
-            collision: null,
+            collisionGetter: null,
             tfrags: null,
             tfragTextures: null,
             tieTextures: null,
@@ -208,10 +208,10 @@ class RatchetAndClank1Scene implements SceneGfx {
         const existing = this.geometries.collision;
         if (existing) return existing;
 
-        const { collision } = this.levelResources;
-        if (!collision) return null;
+        const { collisionGetter } = this.levelResources;
+        if (!collisionGetter) return null;
 
-        this.geometries.collision = new CollisionGeometry(this.renderHelper.renderCache, collision);
+        this.geometries.collision = new CollisionGeometry(this.renderHelper.renderCache, collisionGetter());
         return this.geometries.collision;
     }
 

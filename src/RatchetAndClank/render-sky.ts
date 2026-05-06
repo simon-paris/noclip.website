@@ -3,7 +3,6 @@ import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
 import { GfxBlendFactor, GfxBlendMode, GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxChannelWriteMask, GfxCompareMode, GfxCullMode, GfxDevice, GfxFormat, GfxInputLayout, GfxProgram, GfxSampler, GfxTexture, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { DeviceProgram } from "../Program";
-import { assert } from "../util";
 import { RatchetShaderLib } from "./shader-lib";
 import { SkyShell } from "./bin-core";
 import { mat4, vec3 } from "gl-matrix";
@@ -80,29 +79,13 @@ void main() {
 type SkyDraw = { material: number, flags: { textured: boolean }, indexCount: number, startIndex: number };
 
 export class SkyGeometry {
-    public vertexBuffer: GfxBuffer;
-    public indexBuffer: GfxBuffer;
-    public draws: { material: number, flags: { textured: boolean }, indexCount: number, startIndex: number }[] = [];
-    public hasTexture: boolean = false;
-
-    public assembled: { vertexArrayBuffer: Float32Array, indexArrayBuffer: Uint16Array, draws: SkyDraw[] };
-
     public inputLayout: GfxInputLayout;
 
-    constructor(cache: GfxRenderCache, public index: number, skyShell: SkyShell) {
-        const device = cache.device;
+    private vertexBuffer: GfxBuffer;
+    private indexBuffer: GfxBuffer;
+    private draws: { material: number, flags: { textured: boolean }, indexCount: number, startIndex: number }[] = [];
 
-        const assembled = this.assemble(skyShell);
-        this.assembled = assembled;
-
-        this.vertexBuffer = createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, assembled.vertexArrayBuffer.buffer);
-        device.setResourceName(this.vertexBuffer, `Sky (VB)`);
-        this.indexBuffer = createBufferFromData(device, GfxBufferUsage.Index, GfxBufferFrequencyHint.Static, assembled.indexArrayBuffer.buffer);
-        device.setResourceName(this.indexBuffer, `Sky (IB)`);
-
-        this.draws = assembled.draws;
-        this.hasTexture = skyShell.header.flags.textured;
-
+    constructor(private cache: GfxRenderCache, public index: number, private skyShell: SkyShell) {
         this.inputLayout = cache.createInputLayout({
             vertexAttributeDescriptors: [
                 { location: SkyProgram.a_Position, format: GfxFormat.F32_RGB, bufferByteOffset: 0, bufferIndex: 0, },
@@ -116,7 +99,26 @@ export class SkyGeometry {
         });
     }
 
-    private assemble(skyShell: SkyShell) {
+    public getOrCreateVertexBuffer() {
+        if (!this.vertexBuffer) {
+            const vertexData = this.assemble();
+            const device = this.cache.device;
+            this.vertexBuffer = createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, vertexData.vertexArrayBuffer.buffer);
+            device.setResourceName(this.vertexBuffer, `Sky (VB)`);
+            this.indexBuffer = createBufferFromData(device, GfxBufferUsage.Index, GfxBufferFrequencyHint.Static, vertexData.indexArrayBuffer.buffer);
+            device.setResourceName(this.indexBuffer, `Sky (IB)`);
+            this.draws = vertexData.draws;
+        }
+        return {
+            vertexBuffer: this.vertexBuffer,
+            indexBuffer: this.indexBuffer,
+            draws: this.draws,
+        }
+    }
+
+    private assemble() {
+        const skyShell = this.skyShell;
+
         const positionScale = 1 / 1024;
         const texcoordScale = 1 / 4096;
 
@@ -202,8 +204,12 @@ export class SkyGeometry {
     }
 
     public destroy(device: GfxDevice): void {
-        device.destroyBuffer(this.vertexBuffer);
-        device.destroyBuffer(this.indexBuffer);
+        if (this.vertexBuffer) {
+            device.destroyBuffer(this.vertexBuffer);
+        }
+        if (this.indexBuffer) {
+            device.destroyBuffer(this.indexBuffer);
+        }
     }
 }
 
@@ -258,7 +264,10 @@ export class SkyRenderer {
         template1.setBindingLayouts(bindingLayouts);
         template1.setMegaStateFlags(megaStateFlags);
 
-        for (const draw of skyShellGeometry.draws) {
+        const vertexData = skyShellGeometry.getOrCreateVertexBuffer();
+        const { draws, vertexBuffer, indexBuffer } = vertexData;
+
+        for (const draw of draws) {
             const renderInst = this.renderHelper.renderInstManager.newRenderInst();
 
             const skyParams = renderInst.allocateUniformBufferF32(SkyProgram.ub_SkyParams, 20);
@@ -268,10 +277,10 @@ export class SkyRenderer {
 
             renderInst.setVertexInput(
                 skyShellGeometry.inputLayout,
-                [{ buffer: skyShellGeometry.vertexBuffer, byteOffset: 0 }],
-                { buffer: skyShellGeometry.indexBuffer, byteOffset: 0 },
+                [{ buffer: vertexBuffer, byteOffset: 0 }],
+                { buffer: indexBuffer, byteOffset: 0 },
             );
-            if (skyShellGeometry.hasTexture) {
+            if (draw.flags.textured) {
                 renderInst.setSamplerBindingsFromTextureMappings([
                     { gfxTexture: skyShellTextures[draw.material], gfxSampler: skySampler }
                 ]);
