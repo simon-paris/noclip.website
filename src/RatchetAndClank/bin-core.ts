@@ -5,7 +5,7 @@ import { assert } from "../util";
 import { getBits, ImaginaryGsCommand, ImaginaryGsCommandBuffer, truncateTrailing0xFF } from "./utils";
 import { readVifCommandList, VifUnpackFormat, VifUnpackReader } from "./vif";
 
-export type GsRamTableEntry = {
+export interface GsRamTableEntry {
     psm: number,
     width: number,
     height: number,
@@ -26,7 +26,7 @@ export function readGsRamTableEntry(view: DataViewExt) {
     }
 }
 
-export type TieClass = {
+export interface TieClass {
     normalsData: { x: number, y: number, z: number }[],
     nearDist: number,
     midDist: number,
@@ -36,7 +36,7 @@ export type TieClass = {
     packets: TiePacket[][], // [lod][packet]
     adGifs: TieGifAds[],
 };
-export type TiePacket = {
+export interface TiePacket {
     header: TiePacketHeader,
     body: TiePacketBody,
 };
@@ -90,7 +90,7 @@ export function readTieClass(view: DataViewExt, oClass: number): TieClass {
     };
 }
 
-export type TiePacketHeader = {
+export interface TiePacketHeader {
     data: number,
     shaderCount: number,
     bfcDistance: number,
@@ -128,7 +128,7 @@ export function readTiePacketHeader(view: DataViewExt): TiePacketHeader {
     };
 }
 
-export type TieVertexWithNormalAndRgba = { vertex: TieVertex, normalIndex: number, rgbaIndex: number };
+export interface TieVertexWithNormalAndRgba { vertex: TieVertex, normalIndex: number, rgbaIndex: number };
 export type TieImaginaryGsCommand = ImaginaryGsCommand<TieStrip, { material: number, clamp: number }, TieVertexWithNormalAndRgba>;
 
 const tieCommandSizes = {
@@ -275,7 +275,7 @@ export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketH
     }
 }
 
-export type TieVuHeader = {
+export interface TieVuHeader {
     stripCount: number,
     regularVerticesSizePlusFourOverTwo: number,
     morphingVerticesSizePlusFourOverTwo: number,
@@ -317,7 +317,7 @@ export function readTieVuHeader(view: DataViewExt) {
     };
 }
 
-export type TieStrip = {
+export interface TieStrip {
     vertexCount: number,
     gifTagOffset: number,
     windingOrder: number,
@@ -335,7 +335,7 @@ export function readTieStrip(view: DataViewExt) {
     };
 }
 
-export type TieVertex = {
+export interface TieVertex {
     gsPacketWriteOffset: number,
     gsPacketWriteOffset2: number,
     x: number,
@@ -391,7 +391,7 @@ export function readTieMorphingVertex(view: DataViewExt): TieVertex {
     };
 }
 
-export type GifAd = {
+export interface GifAd {
     low: number,
     high: number,
     address: number,
@@ -413,7 +413,7 @@ export function readGifAdData(view: DataViewExt): GifAd {
     };
 }
 
-export type TieGifAds = {
+export interface TieGifAds {
     tex0: GifAd,
     tex1: GifAd,
     miptbp1: GifAd,
@@ -492,7 +492,7 @@ export function readTfragHeader(view: DataViewExt) {
     }
 }
 
-export type TfragLight = {
+export interface TfragLight {
     unknown0: number,
     azimuth: number,
     elevation: number,
@@ -520,12 +520,12 @@ export function readTfragLight(view: DataViewExt): TfragLight {
     }
 }
 
-export type TfragLod = {
+export interface TfragLod {
     indices: Uint8Array,
     strips: TfragStrip[],
 };
 
-export type Tfrag = {
+export interface Tfrag {
     header: TfragHeader,
     rgbas: { r: number, g: number, b: number, a: number }[],
     lights: TfragLight[],
@@ -818,7 +818,7 @@ function validateTfrag(indices: Uint8Array, strips: TfragStrip[], vertexInfo: Tf
     }
 }
 
-export type TfragVuHeader = {
+export interface TfragVuHeader {
     positionsCommonCount: number,
     positionsLod01Count: number,
     positionsLod0Count: number,
@@ -854,7 +854,7 @@ export function readTfragVuHeader(view: DataViewExt) {
     }
 }
 
-export type TfragAdGifs = {
+export interface TfragAdGifs {
     tex0: GifAd,
     tex1: GifAd,
     clamp: GifAd,
@@ -891,7 +891,7 @@ export function readTfragVertexInfo(view: DataViewExt) {
     };
 }
 
-export type TfragStrip = {
+export interface TfragStrip {
     vertexCount: number,
     hasAdGifFlag: number,
     endOfPacketFlag: number,
@@ -968,7 +968,7 @@ export function readShrubVertexPart2(view: DataViewExt) {
     };
 }
 
-export type ShrubPacketHeader = {
+export interface ShrubPacketHeader {
     textureCount: number,
     gifTagCount: number,
     vertexCount: number,
@@ -1007,7 +1007,7 @@ export function readShrubGifTag12(view: DataViewExt) {
     }
 }
 
-export type ShrubTexturePrimitive = {
+export interface ShrubTexturePrimitive {
     tex1: GifAd,
     gsPacketOffset: number,
     clamp: GifAd,
@@ -1028,7 +1028,7 @@ export function readShrubTexturePrimitive(view: DataViewExt) {
     }
 }
 
-export type ShrubVertex = {
+export interface ShrubVertex {
     x: number;
     y: number;
     z: number;
@@ -1093,7 +1093,7 @@ export function readShrubPacket(view: DataViewExt): ShrubImaginaryGsCommand[] {
     return imaginaryGsBuffer.finish();
 }
 
-export type ShrubClass = {
+export interface ShrubClass {
     header: ReturnType<typeof readShrubClassHeader>,
     body: {
         packets: ShrubImaginaryGsCommand[][],
@@ -1116,7 +1116,7 @@ export function readShrubClass(view: DataViewExt) {
     }
 }
 
-export type Sky = {
+export interface Sky {
     header: SkyHeader,
     textureEntries: SkyTextureEntry[],
     shells: SkyShell[],
@@ -1132,7 +1132,7 @@ export function readSky(skyView: DataViewExt): Sky {
     }
 }
 
-export type SkyShell = {
+export interface SkyShell {
     header: SkyShellHeader,
     clusters: {
         vertices: SkyVertex[],
@@ -1181,7 +1181,7 @@ export function readSkyShell(skyView: DataViewExt, skyShellView: DataViewExt): S
     return skyShells;
 }
 
-export type SkyHeader = {
+export interface SkyHeader {
     skyColor: { r: number, g: number, b: number, a: number },
     clearScreen: number,
     shellCount: number,
@@ -1216,7 +1216,7 @@ export function readSkyHeader(view: DataViewExt): SkyHeader {
     };
 }
 
-export type SkyTextureEntry = {
+export interface SkyTextureEntry {
     palette: number,
     dataOffset: number,
     width: number,
@@ -1235,7 +1235,7 @@ export function readSkyTextureEntry(view: DataViewExt): SkyTextureEntry {
     };
 }
 
-export type SkyShellHeader = {
+export interface SkyShellHeader {
     clusterCount: number,
     flags: {
         textured: boolean,
@@ -1259,7 +1259,7 @@ export function readSkyShellHeader(view: DataViewExt): SkyShellHeader {
     };
 }
 
-export type SkyClusterHeader = {
+export interface SkyClusterHeader {
     boundingSphere: { x: number, y: number, z: number, w: number },
     data: number,
     vertexCount: number,
@@ -1286,7 +1286,7 @@ export function readSkyClusterHeader(view: DataViewExt): SkyClusterHeader {
     };
 }
 
-export type SkyVertex = {
+export interface SkyVertex {
     x: number;
     y: number;
     z: number;
@@ -1306,14 +1306,14 @@ export function readSkyVertex(view: DataViewExt): SkyVertex {
 }
 
 // uint8[4]
-export type SkyRgba = {
+export interface SkyRgba {
     r: number;
     g: number;
     b: number;
     a: number;
 }
 
-export type SkyTexcoord = {
+export interface SkyTexcoord {
     s: number;
     t: number;
 }
@@ -1328,7 +1328,7 @@ export function readSkyTexcoord(view: DataViewExt): SkyTexcoord {
     };
 }
 
-export type SkyFace = {
+export interface SkyFace {
     indices: number[],
     texture: number,
 }
@@ -1343,7 +1343,7 @@ export function readSkyFace(view: DataViewExt): SkyFace {
     };
 }
 
-export type Collision = {
+export interface Collision {
     header: CollisionHeader,
     meshGrid: CollisionOctant[],
     heroGroups: HeroCollisionGroups,
@@ -1360,7 +1360,7 @@ export function readCollision(view: DataViewExt): Collision {
     };
 }
 
-export type CollisionHeader = {
+export interface CollisionHeader {
     mesh: number,
     heroGroups: number,
 };
@@ -1429,7 +1429,7 @@ export function readCollisionMeshGrid(view: DataViewExt) {
     return octants;
 }
 
-export type CollisionOctant = {
+export interface CollisionOctant {
     pos: {
         x: number,
         y: number,
@@ -1496,7 +1496,7 @@ export function readCollisionOctant(view: DataViewExt, maxLength16: number, worl
     };
 }
 
-export type HeroCollisionGroupsHeader = {
+export interface HeroCollisionGroupsHeader {
     count: number,
     groups: {
         boundingSphere: { x: number, y: number, z: number, w: number },
@@ -1535,7 +1535,7 @@ export function readHeroCollisionGroupsHeader(view: DataViewExt) {
     };
 }
 
-export type HeroCollisionGroupData = {
+export interface HeroCollisionGroupData {
     verts: {
         x: number,
         y: number,
@@ -1548,7 +1548,7 @@ export type HeroCollisionGroupData = {
     }[],
 };
 
-export type HeroCollisionGroups = {
+export interface HeroCollisionGroups {
     header: HeroCollisionGroupsHeader,
     groupData: HeroCollisionGroupData[],
 };

@@ -85,7 +85,7 @@ export function readGameplayHeader(view: DataViewExt) {
     }
 }
 
-export type LevelSettings = {
+export interface LevelSettings {
     backgroundColor: { r: number, g: number, b: number },
     fogColor: { r: number, g: number, b: number },
     fogNearDistance: number,
@@ -132,7 +132,7 @@ export function readClassPositionBlock(view: DataViewExt) {
     return oClasses;
 }
 
-export type TieInstance = {
+export interface TieInstance {
     instanceIndex: number,
     oClass: number,
     drawDistance: number,
@@ -164,7 +164,7 @@ export function readTieInstance(view: DataViewExt, instanceIndex: number): TieIn
     }
 }
 
-export type MobyInstance = {
+export interface MobyInstance {
     size: number,
     oClass: number,
     scale: number,
@@ -206,7 +206,7 @@ export function readMobyInstance(view: DataViewExt): MobyInstance {
     }
 }
 
-export type ShrubInstance = {
+export interface ShrubInstance {
     oClass: number,
     drawDistance: number,
     matrix: mat4,
@@ -256,7 +256,7 @@ export function readInstanceBlock<T>(view: DataViewExt, instanceSize: number, re
     }
 }
 
-export type DirectionLightInstance = {
+export interface DirectionLightInstance {
     colorA: { r: number, g: number, b: number, a: number },
     directionA: { x: number, y: number, z: number, w: number },
     colorB: { r: number, g: number, b: number, a: number },
@@ -275,7 +275,7 @@ export function readDirectionLightInstance(view: DataViewExt): DirectionLightIns
     }
 }
 
-export type PointLightInstance = {
+export interface PointLightInstance {
     position: Float32Array,
     radius: number,
     color: { r: number, g: number, b: number },
@@ -292,7 +292,7 @@ export function readPointLightInstance(view: DataViewExt): PointLightInstance {
     }
 }
 
-export type PathBlockHeader = {
+export interface PathBlockHeader {
     splineCount: number,
     dataOffset: number,
     dataSize: number,
@@ -354,7 +354,7 @@ export function readGrindPathBlock(view: DataViewExt) {
     return header.pointers.map(offset => readSpline(view.subview(header.dataOffset + offset)));
 }
 
-export type Spline = {
+export interface Spline {
     count: number,
     points: { x: number, y: number, z: number, w: number }[],
 }

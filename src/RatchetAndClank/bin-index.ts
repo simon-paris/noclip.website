@@ -45,7 +45,7 @@ export function readLevelCoreHeader(view: DataViewExt) {
 }
 
 // for ties, mobys, and shrubs
-export type ClassEntry = {
+export interface ClassEntry {
     offsetInCoreData: number,
     oClass: number,
     textures: number[],
@@ -66,7 +66,7 @@ export function readClassEntry(view: DataViewExt): ClassEntry {
     };
 }
 
-export type TextureEntry = {
+export interface TextureEntry {
     dataOffset: number,
     width: number,
     height: number,

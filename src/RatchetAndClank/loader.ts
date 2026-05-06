@@ -12,7 +12,7 @@ import { LevelCoreHeader } from "./bin-index";
 import { DataFetcher } from "../DataFetcher";
 import { WadDecompressor } from "./decompress";
 
-export type LevelResources = {
+export interface LevelResources {
     levelCoreHeader: LevelCoreHeader | null,
     gameplayHeader: GameplayHeader | null,
 

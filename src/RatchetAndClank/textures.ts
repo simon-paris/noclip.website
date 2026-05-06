@@ -6,7 +6,7 @@ import { TieInstance } from "./bin-gameplay";
 import { assert } from "../util";
 import { TextureEntry } from "./bin-index";
 
-export type PaletteTexture = {
+export interface PaletteTexture {
     name: string,
     textureEntry: { width: number, height: number },
     pixels: Uint8Array,
@@ -251,7 +251,7 @@ function assignTexturesToSizeBucket(buckets: TexturesBySize, textures: PaletteTe
     return remap;
 }
 
-export type TextureAtlases = {
+export interface TextureAtlases {
     gfxTextures: { [size in 16 | 32 | 64 | 128 | 256]: GfxTexture },
     tfragTextureRemap: { sizeBucket: number, index: number }[],
     tieTextureRemap: { sizeBucket: number, index: number }[],

@@ -1,7 +1,7 @@
 import { assert } from "../util";
 import { DataViewExt } from "./DataViewExt";
 
-export type TableOfContents = {
+export interface TableOfContents {
     version: number,
     size: number,
     levelSectors: { startSector: number, sizeInSectors: number }[],
@@ -28,7 +28,7 @@ export async function readTableOfContents(view: DataViewExt): Promise<TableOfCon
     };
 }
 
-export type LevelDescriptor = {
+export interface LevelDescriptor {
     id: number,
     headerSize: number,
     data: { startSector: number, sizeInSectors: number },
@@ -76,7 +76,7 @@ export async function readLevelDescriptor(view: DataViewExt) {
     return tocItem;
 }
 
-export type LevelDataHeader = {
+export interface LevelDataHeader {
     overlay: { offset: number, size: number },
     soundBank: { offset: number, size: number },
     coreIndex: { offset: number, size: number },
