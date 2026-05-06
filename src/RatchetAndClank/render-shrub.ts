@@ -97,7 +97,6 @@ void main() {
 
 in vec4 v_Rgba;
 in vec2 v_ST;
-in vec3 v_Normal;
 in float v_FogFactor;
 flat in int v_TextureIndex;
 flat in int v_Clamp;

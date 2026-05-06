@@ -110,17 +110,6 @@ ${GfxShaderLibrary.MonochromeNTSCLinear}
 
 const float SATURATION_ADJUST = 1.15;
 
-float linear01Depth() {
-    float depth = gl_FragCoord.z;
-    float near = u_CameraData.extras.x;
-    float far = u_CameraData.extras.y;
-
-    float z = (1.0 - gl_FragCoord.z) * 2.0 - 1.0;
-    float depthWorld = (2.0 * near * far) / (far + near - z * (far - near));
-    float depth01 = (depthWorld - near) / (far - near);
-    return depth01;
-}
-
 vec4 commonFragmentShader(vec4 rgba, vec4 textureSample, float fogFactor) {
     // texture color is multiplied with vertex color immediately
     rgba *= textureSample;
@@ -134,13 +123,8 @@ vec4 commonFragmentShader(vec4 rgba, vec4 textureSample, float fogFactor) {
     rgba = vec4(rgb, rgba.a);
 
     // alpha test
+    // this should be configured per object but I can't find the data
     if (rgba.a < 0.01) discard;
-
-    // blend over-alpha with color
-    // if (rgba.a > 1.0) {
-    //     rgba.rgb *= 1.0 + (rgba.a - 1.0);
-    //     rgba.a = 1.0;
-    // }
 
     // with saturation filter (not authentic but looks washed out without it)
     rgba.rgb = mix(vec3(MonochromeNTSCLinear(rgba.rgb)), rgba.rgb, SATURATION_ADJUST);
@@ -161,11 +145,16 @@ vec4 ratchetSampler(float bucket, float slice, int clampRegister, vec2 st) {
     int lod = 0;
 
     if (u_CameraData.extras.z == 0.0) { // skip mip selection for ortho
-        // ps2 selects mips based on depth not texcoords, but the bias is configurable (in TEX1), I know where the data is in the meshes but I don't know how to decode it.
-        float bias = log2(bucket) + 1.0 - (u_LodSettings.y / 20.0);
-        float maxLod = log2(bucket);
-        float lodLevel = clamp(log2(linear01Depth()) + bias, 0.0, maxLod - 2.0);
-        lod = int(lodLevel);
+        // GS manual page 62
+        // ps2 selects mips based on depth not texcoords
+        // L and K are guesses
+        // the mesh classes have mip biases that aren't implemented yet
+        float K = log2(bucket) - 10.0 - (u_LodSettings.y / 40.0);
+        float L = 0.0;
+        float LOD = (log2(1.0 / gl_FragCoord.w) * pow(2.0, L)) + K;
+
+        float maxLod = log2(bucket) - 2.0;
+        lod = int(clamp(LOD, 0.0, maxLod));
     }
 
     vec2 texSize = vec2(bucket) / pow(2.0, float(lod));
