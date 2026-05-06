@@ -2,12 +2,12 @@ import { GsPrimitiveType } from "../Common/PS2/GS";
 import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
 import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice, GfxFormat, GfxInputLayout, GfxProgram, GfxSamplerBinding, GfxSamplerFormatKind, GfxTextureDimension, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
-import { GfxDynamicBufferCache, GfxRenderCache } from "../gfx/render/GfxRenderCache";
+import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { DeviceProgram } from "../Program";
 import { assert } from "../util";
 import { RatchetShaderLib } from "./shader-lib";
 import { ShrubClass, ShrubImaginaryGsCommand, ShrubVertex } from "./bin-core";
-import { ImaginaryGsCommandType, MegaBuffer, noclipSpaceFromRatchetSpace } from "./utils";
+import { ImaginaryGsCommandType, MegaBuffer } from "./utils";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { GfxRenderInstList } from "../gfx/render/GfxRenderInstManager";
 import { mat4, vec3 } from "gl-matrix";
@@ -125,9 +125,9 @@ export class ShrubGeometry {
     constructor(cache: GfxRenderCache, shrub: ShrubClass, textureIndices: number[]) {
         const device = cache.device;
 
-        const assembled = assembleShrubClassGeometry(shrub, textureIndices);
-        this.vertexBuffer = createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, assembled.vertexData.buffer);
-        this.vertexCount = assembled.vertexData.length / ShrubProgram.elementsPerVertex;
+        const assembled = this.assemble(shrub, textureIndices);
+        this.vertexBuffer = createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, assembled.vertexArrayBuffer.buffer);
+        this.vertexCount = assembled.vertexCount;
 
         device.setResourceName(this.vertexBuffer, `Shrub Class ${shrub.header.oClass} (VB)`);
 
@@ -154,6 +154,128 @@ export class ShrubGeometry {
 
             indexBufferFormat: null,
         });
+    }
+
+    private assemble(shrub: ShrubClass, textureIndices: number[]) {
+        const scale = shrub.header.scale * (1 / 1024);
+        const normalScale = 1 / 0x7fff;
+        const texcoordScale = 1 / 4096;
+
+        let vertexCount = 0;
+        let currentPrimitiveType: GsPrimitiveType | null = null;
+
+        for (let packetIndex = 0; packetIndex < shrub.body.packets.length; packetIndex++) {
+            const commandBuffer = shrub.body.packets[packetIndex];
+            let vertsSinceLastReset = 0;
+            function endPrimitives() {
+                switch (currentPrimitiveType) {
+                    case GsPrimitiveType.TRIANGLE_STRIP:
+                        vertexCount += Math.max(0, vertsSinceLastReset - 2) * 3;
+                        break;
+                    case GsPrimitiveType.TRIANGLE:
+                        vertexCount += vertsSinceLastReset;
+                        break;
+                }
+            }
+            for (let i = 0; i < commandBuffer.length; i++) {
+                const command = commandBuffer[i];
+                switch (command.type) {
+                    case ImaginaryGsCommandType.PRIMITIVE_RESET: {
+                        endPrimitives();
+                        currentPrimitiveType = command.value.type;
+                        vertsSinceLastReset = 0;
+                        break;
+                    }
+                    case ImaginaryGsCommandType.VERTEX: {
+                        vertsSinceLastReset++;
+                        break;
+                    }
+                }
+            }
+            endPrimitives();
+        }
+
+        currentPrimitiveType = null;
+        const vertexArrayBuffer = new Float32Array(vertexCount * ShrubProgram.elementsPerVertex);
+        let vertexPtr = 0;
+        let currentMaterial: { texture: number, clamp: number } | undefined;
+        let tri = [null, null, null] as [ShrubVertex | null, ShrubVertex | null, ShrubVertex | null];
+
+        for (let packetIndex = 0; packetIndex < shrub.body.packets.length; packetIndex++) {
+            const commandBuffer = shrub.body.packets[packetIndex];
+
+            for (let i = 0; i < commandBuffer.length; i++) {
+                const command = commandBuffer[i];
+
+                switch (command.type) {
+                    case ImaginaryGsCommandType.PRIMITIVE_RESET: {
+                        assert(currentMaterial !== undefined);
+                        currentPrimitiveType = command.value.type;
+                        tri[0] = null;
+                        tri[1] = null;
+                        tri[2] = null;
+                        break;
+                    }
+                    case ImaginaryGsCommandType.SET_MATERIAL: {
+                        currentMaterial = {
+                            texture: command.value.adGif.tex0.low,
+                            clamp: command.value.adGif.clamp.low + (command.value.adGif.clamp.high << 2),
+                        };
+                        break;
+                    }
+                    case ImaginaryGsCommandType.VERTEX: {
+                        const vert = command.value;
+                        let kick = false;
+
+                        assert(currentPrimitiveType !== null);
+                        if (currentPrimitiveType === GsPrimitiveType.TRIANGLE_STRIP) {
+                            tri[0] = tri[1];
+                            tri[1] = tri[2];
+                            tri[2] = vert;
+                            if (tri[0] !== null) kick = true;
+                        } else if (currentPrimitiveType === GsPrimitiveType.TRIANGLE) {
+                            if (tri[0] === null) tri[0] = vert;
+                            else if (tri[1] === null) tri[1] = vert;
+                            else if (tri[2] === null) tri[2] = vert;
+                            if (tri[2] !== null) kick = true;
+                        }
+
+                        if (kick) {
+                            assert(currentMaterial !== undefined);
+
+                            for (let j = 0; j < 3; j++) {
+                                const vertex = tri[j];
+                                assert(vertex !== null);
+                                const normal = shrub.body.normals[vertex.n];
+
+                                vertexArrayBuffer[vertexPtr++] = scale * vertex.x;
+                                vertexArrayBuffer[vertexPtr++] = scale * vertex.y;
+                                vertexArrayBuffer[vertexPtr++] = scale * vertex.z;
+                                vertexArrayBuffer[vertexPtr++] = normalScale * normal.x;
+                                vertexArrayBuffer[vertexPtr++] = normalScale * normal.y;
+                                vertexArrayBuffer[vertexPtr++] = normalScale * normal.z;
+                                vertexArrayBuffer[vertexPtr++] = textureIndices[currentMaterial.texture];
+                                vertexArrayBuffer[vertexPtr++] = currentMaterial.clamp;
+                                vertexArrayBuffer[vertexPtr++] = texcoordScale * vertex.s;
+                                vertexArrayBuffer[vertexPtr++] = texcoordScale * vertex.t;
+                            }
+                        }
+
+                        if (currentPrimitiveType === GsPrimitiveType.TRIANGLE) {
+                            tri[0] = null;
+                            tri[1] = null;
+                            tri[2] = null;
+                        }
+                    }
+                }
+            }
+        }
+
+        assert(vertexPtr === vertexCount * ShrubProgram.elementsPerVertex);
+        assert(vertexPtr === vertexArrayBuffer.length);
+
+        return { vertexArrayBuffer, vertexCount };
+
     }
 
     public destroy(device: GfxDevice): void {
@@ -254,93 +376,3 @@ export class ShrubRenderer {
         renderInstList.submitRenderInst(renderInst);
     }
 }
-
-export function assembleShrubClassGeometry(shrub: ShrubClass, textureIndices: number[]) {
-    const scale = shrub.header.scale * (1 / 1024);
-    const normalScale = 1 / 0x7fff;
-    const texcoordScale = 1 / 4096;
-
-    // clean up command lists
-    const packets = shrub.body.packets.map(commandBufferToTriangles).flat(1);
-
-    const triangleCount = packets.reduce((a, b) => a + b.vertices.length, 0) / 3; // shrubs are triangle lists not strips
-    const expectedSize = triangleCount * 3 * ShrubProgram.elementsPerVertex;
-    const vertexArrayBuffer = new Float32Array(expectedSize);
-
-    let ptr = 0;
-    for (const { vertices, material } of packets) {
-        for (const vertex of vertices) {
-            const normal = shrub.body.normals[vertex.n];
-            vertexArrayBuffer[ptr++] = scale * vertex.x;
-            vertexArrayBuffer[ptr++] = scale * vertex.y;
-            vertexArrayBuffer[ptr++] = scale * vertex.z;
-            vertexArrayBuffer[ptr++] = normalScale * normal.x;
-            vertexArrayBuffer[ptr++] = normalScale * normal.y;
-            vertexArrayBuffer[ptr++] = normalScale * normal.z;
-            vertexArrayBuffer[ptr++] = textureIndices[material.texture];
-            vertexArrayBuffer[ptr++] = material.clamp;
-            vertexArrayBuffer[ptr++] = texcoordScale * vertex.s;
-            vertexArrayBuffer[ptr++] = texcoordScale * vertex.t;
-        }
-    }
-
-    assert(ptr == vertexArrayBuffer.length);
-
-    return { vertexData: vertexArrayBuffer };
-}
-
-function commandBufferToTriangles(commandBuffer: ShrubImaginaryGsCommand[]) {
-    let currentPrimitiveType: GsPrimitiveType | null = null;
-    let currentMaterial: { texture: number, clamp: number } | null = null;
-
-    const groups: { material: { texture: number, clamp: number }, strip: ShrubVertex[], triangleList: ShrubVertex[] }[] = [];
-
-    for (const command of commandBuffer) {
-        switch (command.type) {
-            case ImaginaryGsCommandType.PRIMITIVE_RESET: {
-                currentPrimitiveType = command.value.type;
-                if (currentMaterial === null) {
-                    throw new Error("Got a primitive reset command before we had a material set");
-                }
-                groups.push({ material: currentMaterial, strip: [], triangleList: [] });
-                break;
-            }
-            case ImaginaryGsCommandType.SET_MATERIAL: {
-                currentMaterial = {
-                    texture: command.value.adGif.tex0.low,
-                    clamp: command.value.adGif.clamp.low + (command.value.adGif.clamp.high << 2),
-                };
-                break;
-            }
-            case ImaginaryGsCommandType.VERTEX: {
-                if (currentPrimitiveType === GsPrimitiveType.TRIANGLE_STRIP) {
-                    groups[groups.length - 1].strip.push(command.value);
-                } else if (currentPrimitiveType === GsPrimitiveType.TRIANGLE) {
-                    groups[groups.length - 1].triangleList.push(command.value);
-                } else {
-                    throw new Error("Unsupported primitive type");
-                }
-                break;
-            }
-        }
-    }
-
-    return groups.map(group => {
-        if (group.strip.length && group.triangleList.length) {
-            throw new Error("Can't have both strip and triangle list data in the same primitive");
-        }
-        if (group.strip.length) {
-            group.triangleList = stripToTris(group.strip);
-            group.strip.length = 0;
-        }
-        return { material: group.material, vertices: group.triangleList };
-    });
-}
-
-function stripToTris(strip: ShrubVertex[]) {
-    const tris: ShrubVertex[] = [];
-    for (let i = 0; i < strip.length - 2; i++) {
-        tris.push(strip[i + 0], strip[i + 1], strip[i + 2]);
-    }
-    return tris;
-};

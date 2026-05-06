@@ -5,8 +5,8 @@ import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { DeviceProgram } from "../Program";
 import { assert } from "../util";
 import { RatchetShaderLib } from "./shader-lib";
-import { TieClass, TieImaginaryGsCommand, TieVertex } from "./bin-core";
-import { ImaginaryGsCommandType, MegaBuffer, noclipSpaceFromRatchetSpace } from "./utils";
+import { TieClass, TieImaginaryGsCommand, TieVertex, TieVertexWithNormalAndRgba } from "./bin-core";
+import { ImaginaryGsCommandType, MegaBuffer } from "./utils";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { GfxRenderInstList } from "../gfx/render/GfxRenderInstManager";
 import { mat4, vec3 } from "gl-matrix";
@@ -127,7 +127,7 @@ export class TieGeometry {
     constructor(cache: GfxRenderCache, tieOClass: number, tie: TieClass, lodLevel: number, textureIndices: number[]) {
         const device = cache.device;
 
-        const vertexData = assembleTieClassGeometry(tieOClass, tie, lodLevel, textureIndices);
+        const vertexData = this.assemble(tieOClass, tie, lodLevel, textureIndices);
 
         this.vertexBuffer = createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, vertexData.vertexArrayBuffer.buffer);
         device.setResourceName(this.vertexBuffer, `Tie Class ${tieOClass} (VB)`);
@@ -156,6 +156,150 @@ export class TieGeometry {
             ],
             indexBufferFormat: null,
         });
+    }
+
+    private assemble(tieOClass: number, tie: TieClass, lod: number, textureIndices: number[]) {
+        const positionScale = tie.scale * (1 / 1024);
+        const texcoordScale = 1 / 4096;
+        const normalScale = 1 / 0x7FFF;
+
+        let vertexCount = 0;
+
+        for (let packetIndex = 0; packetIndex < tie.packets[lod].length; packetIndex++) {
+            const packet = tie.packets[lod][packetIndex];
+            for (let i = 0; i < packet.body.commandBuffer.length; i++) {
+                const command = packet.body.commandBuffer[i];
+                switch (command.type) {
+                    case ImaginaryGsCommandType.PRIMITIVE_RESET: {
+                        const strip = command.value;
+                        vertexCount += 3 * (strip.vertexCount - 2);
+                        break;
+                    }
+                }
+            }
+        }
+
+        const vertexArrayBuffer = new Float32Array(vertexCount * TieProgram.elementsPerVertex);
+        let vertexPtr = 0;
+        let currentMaterial: { texture: number, clamp: number } | undefined;
+
+        let expectedVertsInStrip = 0;
+        let tri = [null, null, null] as [TieVertexWithNormalAndRgba | null, TieVertexWithNormalAndRgba | null, TieVertexWithNormalAndRgba | null];
+
+        for (let packetIndex = 0; packetIndex < tie.packets[lod].length; packetIndex++) {
+            const packet = tie.packets[lod][packetIndex];
+
+            for (let i = 0; i < packet.body.commandBuffer.length; i++) {
+                const command = packet.body.commandBuffer[i];
+
+                switch (command.type) {
+                    case ImaginaryGsCommandType.PRIMITIVE_RESET: {
+                        if (!currentMaterial) {
+                            throw new Error(`Unexpected primitive reset before material`);
+                        }
+                        const strip = command.value;
+                        assert(expectedVertsInStrip === 0);
+                        expectedVertsInStrip = strip.vertexCount;
+                        tri[0] = null;
+                        tri[1] = null;
+                        tri[2] = null;
+                        break;
+                    }
+                    case ImaginaryGsCommandType.SET_MATERIAL: {
+                        currentMaterial = {
+                            texture: command.value.material,
+                            clamp: command.value.clamp,
+                        };
+                        assert(expectedVertsInStrip === 0);
+                        break;
+                    }
+                    case ImaginaryGsCommandType.VERTEX: {
+                        const vert = command.value;
+                        assert(expectedVertsInStrip > 0);
+                        expectedVertsInStrip--;
+
+                        tri[0] = tri[1];
+                        tri[1] = tri[2];
+                        tri[2] = vert;
+
+                        if (tri[0]) {
+                            assert(tri[1] !== null);
+                            assert(tri[2] !== null);
+                            assert(currentMaterial !== undefined);
+
+                            const fixedTexcoords = this.fixTexcoords(tri[0].vertex, tri[1].vertex, tri[2].vertex);
+
+                            for (let i = 0; i < 3; i++) {
+                                const v = tri[i];
+                                assert(v !== null);
+                                const { vertex, normalIndex, rgbaIndex } = v;
+                                const fixedTexcoord = fixedTexcoords[i];
+                                const normal = tie.normalsData[normalIndex];
+
+                                vertexArrayBuffer[vertexPtr++] = positionScale * vertex.x;
+                                vertexArrayBuffer[vertexPtr++] = positionScale * vertex.y;
+                                vertexArrayBuffer[vertexPtr++] = positionScale * vertex.z;
+                                vertexArrayBuffer[vertexPtr++] = textureIndices[currentMaterial.texture];
+                                vertexArrayBuffer[vertexPtr++] = currentMaterial.clamp;
+                                vertexArrayBuffer[vertexPtr++] = rgbaIndex;
+                                vertexArrayBuffer[vertexPtr++] = texcoordScale * fixedTexcoord.s;
+                                vertexArrayBuffer[vertexPtr++] = texcoordScale * fixedTexcoord.t;
+                                assert(vertex.q === 4096);
+                                vertexArrayBuffer[vertexPtr++] = normalScale * normal.x;
+                                vertexArrayBuffer[vertexPtr++] = normalScale * normal.y;
+                                vertexArrayBuffer[vertexPtr++] = normalScale * normal.z;
+                                vertexArrayBuffer[vertexPtr++] = positionScale * vertex.lodMorphOffsetX;
+                                vertexArrayBuffer[vertexPtr++] = positionScale * vertex.lodMorphOffsetY;
+                                vertexArrayBuffer[vertexPtr++] = positionScale * vertex.lodMorphOffsetZ;
+                            }
+                        }
+                    }
+                }
+            }
+
+            assert(expectedVertsInStrip === 0);
+        }
+
+        assert(vertexPtr === vertexCount * TieProgram.elementsPerVertex);
+        assert(vertexPtr === vertexArrayBuffer.length);
+
+        return { vertexArrayBuffer, vertexCount };
+    }
+
+    private fixTexcoords(v0: { s: number, t: number }, v1: { s: number, t: number }, v2: { s: number, t: number }) {
+        // if adjacent verts have very different texcoords, they're intended to overflow and wrap around
+        // returns a copy only if a change was required.
+
+        let changed = false;
+
+        const minS = Math.min(v0.s, v1.s, v2.s);
+        const maxS = Math.max(v0.s, v1.s, v2.s);
+        const minT = Math.min(v0.t, v1.t, v2.t);
+        const maxT = Math.max(v0.t, v1.t, v2.t);
+
+        if (maxS - minS > 8 * 4096) {
+            for (const vert of [v0, v1, v2]) {
+                if (vert.s < 8 * 4096) vert.s += 16 * 4096;
+                changed = true;
+            }
+        }
+
+        if (maxT - minT > 8 * 4096) {
+            for (const vert of [v0, v1, v2]) {
+                if (vert.t < 8 * 4096) vert.t += 16 * 4096;
+                changed = true;
+            }
+        }
+
+        if (changed) {
+            return [
+                { s: v0.s, t: v0.t },
+                { s: v1.s, t: v1.t },
+                { s: v2.s, t: v2.t },
+            ];
+        } else {
+            return [v0, v1, v2];
+        }
     }
 
     public destroy(device: GfxDevice): void {
@@ -278,134 +422,4 @@ export class TieRenderer {
             renderInstList.submitRenderInst(renderInst);
         }
     }
-}
-
-export function assembleTieClassGeometry(tieOClass: number, tie: TieClass, lod: number, textureIndices: number[]) {
-    const positionScale = tie.scale * (1 / 1024);
-    const texcoordScale = 1 / 4096;
-    const normalScale = 1 / 0x7FFF;
-
-    const commandLists: TieImaginaryGsCommand[][] = [];
-    for (const packet of tie.packets[lod]) commandLists.push(packet.body.commandBuffer);
-    const strips = commandBufferToStrips(tieOClass, commandLists);
-
-    const vertexCount = strips.reduce((a, b) => a + (b.verts.length - 2), 0) * 3;
-    const vertexBufferSize = vertexCount * TieProgram.elementsPerVertex;
-
-    const vertexArrayBuffer = new Float32Array(vertexBufferSize);
-    let ptr = 0;
-
-    function pushTriangle(verts: { vertex: TieVertex, normalIndex: number, rgbaIndex: number }[], textureIdx: number, clamp: number) {
-        assert(verts.length === 3);
-        const fixedTexcoords = fixTexcoords(verts[0].vertex, verts[1].vertex, verts[2].vertex);
-        for (let i = 0; i < 3; i++) {
-            const vertAndNormalIndex = verts[i];
-            const vert = vertAndNormalIndex.vertex;
-            const fixedTexcoord = fixedTexcoords[i];
-            const normal = tie.normalsData[vertAndNormalIndex.normalIndex];
-
-            vertexArrayBuffer[ptr++] = positionScale * vert.x;
-            vertexArrayBuffer[ptr++] = positionScale * vert.y;
-            vertexArrayBuffer[ptr++] = positionScale * vert.z;
-            vertexArrayBuffer[ptr++] = textureIndices[textureIdx];
-            vertexArrayBuffer[ptr++] = clamp;
-            vertexArrayBuffer[ptr++] = vertAndNormalIndex.rgbaIndex;
-            vertexArrayBuffer[ptr++] = texcoordScale * fixedTexcoord.s;
-            vertexArrayBuffer[ptr++] = texcoordScale * fixedTexcoord.t;
-            assert(vert.q === 4096);
-
-            vertexArrayBuffer[ptr++] = normalScale * normal.x;
-            vertexArrayBuffer[ptr++] = normalScale * normal.y;
-            vertexArrayBuffer[ptr++] = normalScale * normal.z;
-
-            vertexArrayBuffer[ptr++] = positionScale * vert.lodMorphOffsetX;
-            vertexArrayBuffer[ptr++] = positionScale * vert.lodMorphOffsetY;
-            vertexArrayBuffer[ptr++] = positionScale * vert.lodMorphOffsetZ;
-        }
-    }
-
-    for (const strip of strips) {
-        for (let i = 0; i < strip.verts.length - 2; i++) {
-            pushTriangle([strip.verts[i + 0], strip.verts[i + 1], strip.verts[i + 2]], strip.material.texture, strip.material.clamp);
-        }
-    }
-
-    assert(ptr == vertexArrayBuffer.length);
-
-    return { vertexArrayBuffer, vertexCount };
-}
-
-// if adjacent verts have very different texcoords, they're intended to overflow and wrap around
-// this returns a copy because the vert may be used in multiple triangles
-function fixTexcoords(...verts: { s: number, t: number }[]) {
-    assert(verts.length === 3);
-
-    verts = verts.map(v => ({ s: v.s, t: v.t }));
-
-    let min = 0, max = 0;
-    for (const vert of verts) {
-        if (vert.s < min) min = vert.s;
-        if (vert.s > max) max = vert.s;
-    }
-    if (max - min > 8 * 4096) {
-        for (const vert of verts) {
-            if (vert.s < 8 * 4096) vert.s += 16 * 4096;
-        }
-    }
-
-    min = 0, max = 0;
-    for (const vert of verts) {
-        if (vert.t < min) min = vert.t;
-        if (vert.t > max) max = vert.t;
-    }
-    if (max - min > 8 * 4096) {
-        for (const vert of verts) {
-            if (vert.t < 8 * 4096) vert.t += 16 * 4096;
-        }
-    }
-
-    return verts;
-}
-
-function commandBufferToStrips(tieOClass: number, packets: TieImaginaryGsCommand[][]) {
-    type TieStrip = { material: { texture: number, clamp: number }, isFirstStripInPacket: number, verts: { vertex: TieVertex, normalIndex: number, rgbaIndex: number }[] };
-
-    let strip: TieStrip | undefined;
-    let currentMaterial: { texture: number, clamp: number } | null = null;
-
-    const strips: TieStrip[] = [];
-
-    for (let packetIndex = 0; packetIndex < packets.length; packetIndex++) {
-        const packet = packets[packetIndex];
-        for (let i = 0; i < packet.length; i++) {
-            const command = packet[i];
-            switch (command.type) {
-                case ImaginaryGsCommandType.PRIMITIVE_RESET: {
-                    if (!currentMaterial) {
-                        throw new Error(`Unexpected primitive reset before material`);
-                    }
-                    strip = { material: currentMaterial, isFirstStripInPacket: i, verts: [] }
-                    strips.push(strip);
-                    break;
-                }
-                case ImaginaryGsCommandType.SET_MATERIAL: {
-                    currentMaterial = {
-                        texture: command.value.material,
-                        clamp: command.value.clamp,
-                    };
-                    strip = undefined;
-                    break;
-                }
-                case ImaginaryGsCommandType.VERTEX: {
-                    const vert = command.value;
-                    if (!strip) {
-                        throw new Error(`Unexpected vertex before primitive reset`);
-                    }
-                    strip.verts.push(vert);
-                }
-            }
-        }
-    }
-
-    return strips;
 }

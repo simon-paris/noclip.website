@@ -108,7 +108,7 @@ export class CollisionGeometry {
     constructor(cache: GfxRenderCache, collision: Collision) {
         const device = cache.device;
 
-        const assembled = assembleCollisionGeometry(collision.meshGrid, collision.heroGroups);
+        const assembled = this.assemble(collision.meshGrid, collision.heroGroups);
 
         this.vertexBuffer = createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, assembled.vertexArrayBuffer.buffer);
         device.setResourceName(this.vertexBuffer, `Collision (VB)`);
@@ -124,6 +124,65 @@ export class CollisionGeometry {
             ],
             indexBufferFormat: null,
         });
+    }
+
+    private assemble(collisionOctants: CollisionOctant[], heroCollisionGroups: HeroCollisionGroups) {
+        const heroCollisionPositionScale = 1 / 64;
+
+        let vertexCount = 0;
+
+        for (let i = 0; i < collisionOctants.length; i++) {
+            const octant = collisionOctants[i];
+            for (let j = 0; j < octant.faces.length; j++) {
+                vertexCount += octant.faces[j].quad ? 6 : 3;
+            }
+        }
+        for (let i = 0; i < heroCollisionGroups.groupData.length; i++) {
+            const group = heroCollisionGroups.groupData[i];
+            vertexCount += group.faces.length * 3;
+        }
+
+        const vertexArrayBuffer = new Float32Array(vertexCount * CollisionProgram.elementsPerVertex);
+        let vertexPtr = 0;
+
+        for (let i = 0; i < collisionOctants.length; i++) {
+            const octant = collisionOctants[i];
+            for (let j = 0; j < octant.faces.length; j++) {
+                const face = octant.faces[j];
+                const type = face.type;
+                const verts = [face.v0, face.v1, face.v2];
+                if (face.quad) verts.push(face.v0, face.v3!, face.v2);
+
+                for (let k = 0; k < verts.length; k++) {
+                    const vert = octant.verts[verts[k]];
+                    const { x, y, z } = vert;
+                    vertexArrayBuffer[vertexPtr++] = x + octant.pos.x;
+                    vertexArrayBuffer[vertexPtr++] = y + octant.pos.y;
+                    vertexArrayBuffer[vertexPtr++] = z + octant.pos.z;
+                    vertexArrayBuffer[vertexPtr++] = type & 0xF; // only the bottom 4 bits seem important, the rest are related to footsteps or something
+                }
+            }
+        }
+
+        for (let i = 0; i < heroCollisionGroups.groupData.length; i++) {
+            const group = heroCollisionGroups.groupData[i];
+            for (let j = 0; j < group.faces.length; j++) {
+                const face = group.faces[j];
+                const verts = [face.v0, face.v1, face.v2];
+                for (let k = 0; k < verts.length; k++) {
+                    const vert = group.verts[verts[k]];
+                    const { x, y, z } = vert;
+                    vertexArrayBuffer[vertexPtr++] = heroCollisionPositionScale * x;
+                    vertexArrayBuffer[vertexPtr++] = heroCollisionPositionScale * y;
+                    vertexArrayBuffer[vertexPtr++] = heroCollisionPositionScale * z;
+                    vertexArrayBuffer[vertexPtr++] = -1;
+                }
+            }
+        }
+
+        assert(vertexPtr === vertexArrayBuffer.length);
+
+        return { vertexArrayBuffer, vertexCount };
     }
 
     public destroy(device: GfxDevice): void {
@@ -164,79 +223,4 @@ export class CollisionRenderer {
         renderInst.setDrawCount(collisionGeometry.vertexCount, 0);
         renderInstList.submitRenderInst(renderInst);
     }
-}
-
-function assembleCollisionGeometry(collisionOctants: CollisionOctant[], heroCollisionGroups: HeroCollisionGroups) {
-    const heroCollisionPositionScale = 1 / 64;
-
-    const verts: {
-        x: number,
-        y: number,
-        z: number,
-        type: number,
-    }[] = [];
-
-    for (let i = 0; i < collisionOctants.length; i++) {
-        const octant = collisionOctants[i];
-
-        function pushVertex(idx: number, type: number) {
-            const vert = octant.verts[idx];
-            const { x, y, z } = vert;
-            verts.push({
-                x: x + octant.pos.x,
-                y: y + octant.pos.y,
-                z: z + octant.pos.z,
-                type: type & 0xF, // only the bottom 4 bits seem important, the rest are related to footsteps or something
-            });
-        }
-
-        for (let j = 0; j < octant.faces.length; j++) {
-            const face = octant.faces[j];
-            const type = face.type;
-            pushVertex(face.v0, type);
-            pushVertex(face.v1, type);
-            pushVertex(face.v2, type);
-            if (face.quad) {
-                pushVertex(face.v0, type);
-                pushVertex(face.v3!, type);
-                pushVertex(face.v2, type);
-            }
-        }
-    }
-
-    for (let i = 0; i < heroCollisionGroups.groupData.length; i++) {
-        const group = heroCollisionGroups.groupData[i];
-
-        function pushVertex(idx: number) {
-            const vert = group.verts[idx];
-            const { x, y, z } = vert;
-            verts.push({
-                x: heroCollisionPositionScale * x,
-                y: heroCollisionPositionScale * y,
-                z: heroCollisionPositionScale * z,
-                type: -1,
-            });
-        }
-
-        for (let j = 0; j < group.faces.length; j++) {
-            const face = group.faces[j];
-            pushVertex(face.v0);
-            pushVertex(face.v1);
-            pushVertex(face.v2);
-        }
-    }
-
-    const vertexArrayBuffer = new Float32Array(verts.length * CollisionProgram.elementsPerVertex);
-    let ptr = 0;
-    for (let i = 0; i < verts.length; i++) {
-        const vert = verts[i];
-        vertexArrayBuffer[ptr++] = vert.x;
-        vertexArrayBuffer[ptr++] = vert.y;
-        vertexArrayBuffer[ptr++] = vert.z;
-        vertexArrayBuffer[ptr++] = vert.type;
-    }
-
-    assert(ptr === vertexArrayBuffer.length);
-
-    return { vertexArrayBuffer, vertexCount: verts.length };
 }

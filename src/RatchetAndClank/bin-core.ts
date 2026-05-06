@@ -128,7 +128,8 @@ export function readTiePacketHeader(view: DataViewExt): TiePacketHeader {
     };
 }
 
-export type TieImaginaryGsCommand = ImaginaryGsCommand<TieStrip, { material: number, clamp: number }, { vertex: TieVertex, normalIndex: number, rgbaIndex: number }>;
+export type TieVertexWithNormalAndRgba = { vertex: TieVertex, normalIndex: number, rgbaIndex: number };
+export type TieImaginaryGsCommand = ImaginaryGsCommand<TieStrip, { material: number, clamp: number }, TieVertexWithNormalAndRgba>;
 
 const tieCommandSizes = {
     primitiveReset: 1,
@@ -213,7 +214,7 @@ export function readTiePacketBody(view: DataViewExt, tiePacketHeader: TiePacketH
     // there's one more array of bytes after this but not sure what it is or what its length is (usually 50-60 bytes)
     alignTo(0x10);
 
-    const imaginaryGsBuffer = new ImaginaryGsCommandBuffer<TieStrip, { material: number, clamp: number }, { vertex: TieVertex, normalIndex: number, rgbaIndex: number }>();
+    const imaginaryGsBuffer = new ImaginaryGsCommandBuffer<TieStrip, { material: number, clamp: number }, TieVertexWithNormalAndRgba>();
 
     // first command always sets the material to the first material
     const firstMaterialId = adGifSrcOffsets[0] / SIZEOF_TIE_AD_GIFS;

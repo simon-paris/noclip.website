@@ -288,15 +288,15 @@ class RatchetAndClank1Scene implements SceneGfx {
         let offs = 0;
 
         // camera transform (16 floats)
+        const nearClip = 0.05;
+        const farClip = 1024;
+        viewerInput.camera.setClipPlanes(nearClip, farClip);
         offs += fillMatrix4x4(data, offs, viewerInput.camera.clipFromWorldMatrix);
 
         // camera data (12 floats)
         offs += fillVec3v(data, offs, cameraPosition, 0);
         const cameraDirection = vec3.fromValues(viewerInput.camera.viewMatrix[2], viewerInput.camera.viewMatrix[6], viewerInput.camera.viewMatrix[10]);
         offs += fillVec3v(data, offs, cameraDirection, 0);
-        const nearClip = 0.05;
-        const farClip = 1024;
-        viewerInput.camera.setClipPlanes(nearClip, farClip);
         offs += fillVec4(data, offs, nearClip, farClip, viewerInput.camera.isOrthographic ? 1 : 0, 0);
 
         // lod and texture settings (4 floats)
@@ -338,7 +338,7 @@ class RatchetAndClank1Scene implements SceneGfx {
             }
         }
 
-        // texture remaps (3 * 256 * 4 floats)
+        // texture remaps (4 * 256 * 3 floats)
         const { textureAtlases } = this.textures;
         const remapArrays = textureAtlases ? [textureAtlases.tfragTextureRemap, textureAtlases.tieTextureRemap, textureAtlases.shrubTextureRemap] : [[], [], []];
         for (const remapArray of remapArrays) {

@@ -77,20 +77,22 @@ void main() {
 
 }
 
+type SkyDraw = { material: number, flags: { textured: boolean }, indexCount: number, startIndex: number };
+
 export class SkyGeometry {
     public vertexBuffer: GfxBuffer;
     public indexBuffer: GfxBuffer;
     public draws: { material: number, flags: { textured: boolean }, indexCount: number, startIndex: number }[] = [];
     public hasTexture: boolean = false;
 
-    public assembled: ReturnType<typeof assembleSkyShellGeometry>;
+    public assembled: { vertexArrayBuffer: Float32Array, indexArrayBuffer: Uint16Array, draws: SkyDraw[] };
 
     public inputLayout: GfxInputLayout;
 
     constructor(cache: GfxRenderCache, public index: number, skyShell: SkyShell) {
         const device = cache.device;
 
-        const assembled = assembleSkyShellGeometry(skyShell);
+        const assembled = this.assemble(skyShell);
         this.assembled = assembled;
 
         this.vertexBuffer = createBufferFromData(device, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static, assembled.vertexArrayBuffer.buffer);
@@ -112,6 +114,91 @@ export class SkyGeometry {
             ],
             indexBufferFormat: GfxFormat.U16_R,
         });
+    }
+
+    private assemble(skyShell: SkyShell) {
+        const positionScale = 1 / 1024;
+        const texcoordScale = 1 / 4096;
+
+        let clusterBaseVerts: number[] = [];
+        let vertexCount = 0;
+        let triangleCount = 0;
+
+        const clusters = skyShell.clusters;
+        for (let clusterIndex = 0; clusterIndex < clusters.length; clusterIndex++) {
+            const cluster = clusters[clusterIndex];
+            clusterBaseVerts.push(vertexCount);
+            vertexCount += cluster.vertices.length;
+            triangleCount += cluster.triangles.length;
+        }
+
+        const vertexArrayBuffer = new Float32Array(vertexCount * SkyProgram.elementsPerVertex);
+        let vertexPtr = 0;
+        const indexArrayBuffer = new Uint16Array(triangleCount * 3);
+        let indexPtr = 0;
+        const draws: SkyDraw[] = [];
+
+        for (let clusterIndex = 0; clusterIndex < clusters.length; clusterIndex++) {
+            const cluster = clusters[clusterIndex];
+            const baseVert = clusterBaseVerts[clusterIndex];
+
+            for (let vertIndex = 0; vertIndex < cluster.vertices.length; vertIndex++) {
+                const vert = cluster.vertices[vertIndex];
+                const st = cluster.texcoords[vertIndex];
+                const rgba = cluster.rgbas[vertIndex];
+                if (skyShell.header.flags.textured) {
+                    vertexArrayBuffer[vertexPtr++] = positionScale * vert.x;
+                    vertexArrayBuffer[vertexPtr++] = positionScale * vert.y;
+                    vertexArrayBuffer[vertexPtr++] = positionScale * vert.z;
+                    vertexArrayBuffer[vertexPtr++] = texcoordScale * st.s;
+                    vertexArrayBuffer[vertexPtr++] = texcoordScale * st.t;
+                    vertexArrayBuffer[vertexPtr++] = 1;
+                    vertexArrayBuffer[vertexPtr++] = 1;
+                    vertexArrayBuffer[vertexPtr++] = 1;
+                    vertexArrayBuffer[vertexPtr++] = vert.alpha / 0x80;
+                } else {
+                    vertexArrayBuffer[vertexPtr++] = positionScale * vert.x;
+                    vertexArrayBuffer[vertexPtr++] = positionScale * vert.y;
+                    vertexArrayBuffer[vertexPtr++] = positionScale * vert.z;
+                    vertexArrayBuffer[vertexPtr++] = 0;
+                    vertexArrayBuffer[vertexPtr++] = 0;
+                    vertexArrayBuffer[vertexPtr++] = rgba.r / 0xFF;
+                    vertexArrayBuffer[vertexPtr++] = rgba.g / 0xFF;
+                    vertexArrayBuffer[vertexPtr++] = rgba.b / 0xFF;
+                    vertexArrayBuffer[vertexPtr++] = (vert.alpha / 0x80) * (rgba.a / 0x80);
+                }
+            }
+
+            for (let triIndex = 0; triIndex < cluster.triangles.length; triIndex++) {
+                const triangle = cluster.triangles[triIndex];
+                draws.push({
+                    material: triangle.texture,
+                    flags: skyShell.header.flags,
+                    indexCount: 3,
+                    startIndex: indexPtr,
+                });
+                indexArrayBuffer[indexPtr++] = baseVert + triangle.indices[0];
+                indexArrayBuffer[indexPtr++] = baseVert + triangle.indices[1];
+                indexArrayBuffer[indexPtr++] = baseVert + triangle.indices[2];
+            }
+        }
+
+        // merge adjacent draws with the same material
+        for (let i = 0; i < draws.length - 1; i++) {
+            const d0 = draws[i]!;
+            const d1 = draws[i + 1]!;
+            if (d0.material === d1.material) {
+                d1.indexCount += d0.indexCount;
+                d1.startIndex = d0.startIndex;
+                d0.indexCount = 0;
+            }
+        }
+
+        return {
+            vertexArrayBuffer,
+            indexArrayBuffer,
+            draws: draws.filter(draw => draw.indexCount > 0),
+        }
     }
 
     public destroy(device: GfxDevice): void {
@@ -195,115 +282,4 @@ export class SkyRenderer {
 
         this.renderHelper.renderInstManager.popTemplate();
     }
-}
-
-function assembleSkyShellGeometry(skyShell: SkyShell) {
-    const positionScale = 1 / 1024;
-    const texcoordScale = 1 / 4096;
-
-    const verts: {
-        x: number,
-        y: number,
-        z: number,
-        s: number,
-        t: number,
-        r: number,
-        g: number,
-        b: number,
-        a: number,
-    }[] = [];
-    const draws: { material: number, flags: { textured: boolean }, indices: number[] }[] = [];
-
-    let baseVertex = 0;
-    for (let i = 0; i < skyShell.clusters.length; i++) {
-        const cluster = skyShell.clusters[i];
-        for (let j = 0; j < cluster.vertices.length; j++) {
-            const vert = cluster.vertices[j];
-            const st = cluster.texcoords[j];
-            const rgba = cluster.rgbas[j];
-            if (skyShell.header.flags.textured) {
-                verts.push({
-                    x: vert.x,
-                    y: vert.y,
-                    z: vert.z,
-                    s: st.s,
-                    t: st.t,
-                    r: 0xFF,
-                    g: 0xFF,
-                    b: 0xFF,
-                    a: vert.alpha,
-                });
-            } else {
-                verts.push({
-                    x: vert.x,
-                    y: vert.y,
-                    z: vert.z,
-                    s: 0,
-                    t: 0,
-                    r: rgba.r,
-                    g: rgba.g,
-                    b: rgba.b,
-                    a: (rgba.a / 0x80) * (vert.alpha / 0x80) * 0x80,
-                });
-            }
-        }
-        for (let j = 0; j < cluster.triangles.length; j++) {
-            const triangle = cluster.triangles[j];
-            draws.push({
-                material: triangle.texture,
-                flags: skyShell.header.flags,
-                indices: [
-                    triangle.indices[0] + baseVertex,
-                    triangle.indices[1] + baseVertex,
-                    triangle.indices[2] + baseVertex,
-                ],
-            });
-        }
-        baseVertex += cluster.vertices.length;
-    }
-
-    const vertexArrayBuffer = new Float32Array(verts.length * SkyProgram.elementsPerVertex);
-    let ptr = 0;
-    for (let i = 0; i < verts.length; i++) {
-        const vert = verts[i];
-        vertexArrayBuffer[ptr++] = positionScale * vert.x;
-        vertexArrayBuffer[ptr++] = positionScale * vert.y;
-        vertexArrayBuffer[ptr++] = positionScale * vert.z;
-        vertexArrayBuffer[ptr++] = texcoordScale * vert.s;
-        vertexArrayBuffer[ptr++] = texcoordScale * vert.t;
-        vertexArrayBuffer[ptr++] = (vert.r / 0xFF);
-        vertexArrayBuffer[ptr++] = (vert.g / 0xFF);
-        vertexArrayBuffer[ptr++] = (vert.b / 0xFF);
-        vertexArrayBuffer[ptr++] = (vert.a / 0xFF * 2);
-    }
-
-    const indexArrayBuffer = new Uint16Array(draws.length * 3);
-    const draws2: { material: number, flags: { textured: boolean }, startIndex: number, indexCount: number }[] = [];
-    for (let i = 0; i < draws.length; i++) {
-        const draw = draws[i];
-        assert(draw.flags.textured === false || draw.material !== 0xFF);
-        indexArrayBuffer[i * 3 + 0] = draw.indices[0];
-        indexArrayBuffer[i * 3 + 1] = draw.indices[1];
-        indexArrayBuffer[i * 3 + 2] = draw.indices[2];
-        draws2.push({
-            material: draw.material,
-            flags: draw.flags,
-            startIndex: i * 3,
-            indexCount: 3,
-        });
-    }
-
-    // merge adjacent draws with the same material
-    for (let i = 0; i < draws2.length - 1; i++) {
-        const d0 = draws2[i]!;
-        const d1 = draws2[i + 1]!;
-        if (d0.material === d1.material) {
-            d1.indexCount += d0.indexCount;
-            d1.startIndex = d0.startIndex;
-            d0.indexCount = 0;
-        }
-    }
-    const draws3 = draws2.filter(draw => draw.indexCount > 0);
-
-    return { vertexArrayBuffer, indexArrayBuffer, draws: draws3 };
 }
