@@ -90,8 +90,8 @@ void main() {
     vec3 tangentY = dFdy(v_PositionWorld);
     vec3 faceNormal = normalize(cross(tangentX, tangentY));
     float light = 0.3
-        + 0.4 * max(dot(faceNormal, u_DirectionLights[0].directionA), 0.0)
-        + 0.4 * max(dot(faceNormal, u_DirectionLights[0].directionB), 0.0);
+        + 0.4 * max(dot(faceNormal, u_DirectionLights[0].directionA.xyz), 0.0)
+        + 0.4 * max(dot(faceNormal, u_DirectionLights[0].directionB.xyz), 0.0);
 
     gl_FragColor = vec4(v_Rgb * light, 1.0);
 }

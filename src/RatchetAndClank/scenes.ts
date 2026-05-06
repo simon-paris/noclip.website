@@ -299,26 +299,36 @@ class RatchetAndClank1Scene implements SceneGfx {
         offs += fillVec3v(data, offs, cameraDirection, 0);
         offs += fillVec4(data, offs, nearClip, farClip, viewerInput.camera.isOrthographic ? 1 : 0, 0);
 
-        // lod and texture settings (4 floats)
-        offs += fillVec4(data, offs, this.settings.lodSetting, this.settings.lodBias, this.settings.enableTextures ? 1 : 0, 0);
+        // lod settings (4 floats)
+        offs += fillVec4(data, offs, this.settings.lodSetting, this.settings.lodBias, 0, 0);
+
+        // render settings (4 floats)
+        offs += fillVec4(data, offs, this.settings.enableTextures ? 1 : 0, 0, 0, 0);
 
         // background color (4 floats)
         const backgroundColor = levelSettings.backgroundColor;
         offs += fillVec4(data, offs, backgroundColor.r / 0xFF, backgroundColor.g / 0xFF, backgroundColor.b / 0xFF, 1);
 
-        // fog params (8 floats)
+        // fog params (12 floats)
         if (this.settings.enableFog) {
             const fogColor = levelSettings.fogColor;
             offs += fillVec4(data, offs, fogColor.r / 0xFF, fogColor.g / 0xFF, fogColor.b / 0xFF, 1);
             offs += fillVec4(data, offs,
                 levelSettings.fogNearDistance / 1024,
                 levelSettings.fogFarDistance / 1024,
+                0,
+                0,
+            );
+            offs += fillVec4(data, offs,
                 1 - (levelSettings.fogNearIntensity / 255),
                 1 - (levelSettings.fogFarIntensity / 255),
+                0,
+                0,
             );
         } else {
             offs += fillVec4(data, offs, 0, 0, 0, 0);
             offs += fillVec4(data, offs, 0, 1, 0, 0);
+            offs += fillVec4(data, offs, 0, 0, 0, 0);
         }
 
         // lights (16 * 16 floats)

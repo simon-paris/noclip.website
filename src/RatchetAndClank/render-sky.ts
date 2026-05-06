@@ -62,14 +62,14 @@ in vec4 v_Rgba;
 
 void main() {
     // discard the hemisphere behind the camera (needed for ortho view since no backface culling)
-    if (dot(u_CameraData.direction, v_WorldPos - u_CameraData.position) > 0.0) discard;
+    if (dot(u_CameraData.direction.xyz, v_WorldPos - u_CameraData.position.xyz) > 0.0) discard;
 
     float isTextured = u_ExtraData.x;
     if (isTextured == 1.0) {
-        if (u_EnableTextures == 0.0) discard;
+        if (u_RenderSettings.x == 0.0) discard;
         gl_FragColor = commonFragmentShader(v_Rgba, texture(SAMPLER_2D(u_Texture), v_ST), 0.0);
     } else {
-        if (u_EnableTextures == 0.0) { gl_FragColor = v_Rgba; return; }
+        if (u_RenderSettings.x == 0.0) { gl_FragColor = v_Rgba; return; }
         gl_FragColor = commonFragmentShader(v_Rgba, vec4(1.0, 1.0, 1.0, 1.0), 0.0);
     }
 }

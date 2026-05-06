@@ -4,10 +4,10 @@ export const RatchetShaderLib = {
     SceneParamsSizeInFloats: [
         16, // camera transform
         12, // camera data
-        4, // lod and texture settings
+        4, // lod settings
+        4, // render settings
         4, // background color
-        4, // sky color
-        8, // fog params
+        12, // fog params
         16 * 16, // directional lights
         4 * 256 * 3, // texture remaps (3 arrays of 256 vec4s)
     ].reduce((a, b) => a + b, 0),
@@ -15,32 +15,23 @@ export const RatchetShaderLib = {
 
 // size 12
 struct CameraData {
-    vec3 position;
-    float pad1;
-    vec3 direction;
-    float pad2;
-    float near;
-    float far;
-    float isOrtho;
-    float pad3;
+    vec4 position;
+    vec4 direction;
+    vec4 extras; // x = near, y = far, z = isOrtho
 };
 
-// size 8
+// size 12
 struct FogParams {
     vec4 color;
-    float nearDist;
-    float farDist;
-    float nearIntensity;
-    float farIntensity;
+    vec4 distanceNearFar; // x = near, y = far
+    vec4 intensityNearFar; // x = near intensity, y = far intensity
 };
 
 // size 16
 struct DirectionLight {
-    vec3 directionA;
-    float pad1;
+    vec4 directionA;
     vec4 colorA;
-    vec3 directionB;
-    float pad2;
+    vec4 directionB;
     vec4 colorB;
 };
 
@@ -55,10 +46,8 @@ struct TextureRemaps {
 layout(std140) uniform ub_SceneParams {
     Mat4x4 u_ClipFromWorld;
     CameraData u_CameraData;
-    float u_LodPreset;
-    float u_LodBias;
-    float u_EnableTextures;
-    float pad1;
+    vec4 u_LodSettings; // x = preset, y = bias
+    vec4 u_RenderSettings; // x = enable textures
     vec4 u_BackgroundColor;
     FogParams u_FogParams;
     DirectionLight u_DirectionLights[16];
@@ -78,9 +67,9 @@ vec4 applyDirectionalLight(vec3 normal, int dirLightIndex) {
     DirectionLight dirlight = u_DirectionLights[dirLightIndex];
 
     vec4 light = vec4(0.0);
-    float nDotL_A = dot(normal, dirlight.directionA);
+    float nDotL_A = dot(normal, dirlight.directionA.xyz);
     if (nDotL_A > 0.0) light += nDotL_A * dirlight.colorA;
-    float nDotL_B = dot(normal, dirlight.directionB);
+    float nDotL_B = dot(normal, dirlight.directionB.xyz);
     if (nDotL_B > 0.0) light += nDotL_B * dirlight.colorB;
     return light;
 }
@@ -102,10 +91,17 @@ vec4 commonVertexLighting(vec4 rgba, vec3 normal, vec4 dirLightIndices) {
 }
 
 float fogFactor(vec3 vertexPosWorld) {
-    if (u_CameraData.isOrtho == 1.0) return 0.0;
-    float distWorld = length(vertexPosWorld - u_CameraData.position);
-    float distFogRange01 = 1.0 - clamp((u_FogParams.farDist - distWorld) / (u_FogParams.farDist - u_FogParams.nearDist), 0.0, 1.0);
-    return u_FogParams.nearIntensity + distFogRange01 * (u_FogParams.farIntensity - u_FogParams.nearIntensity);
+    float nearDist = u_FogParams.distanceNearFar.x;
+    float farDist = u_FogParams.distanceNearFar.y;
+    float nearIntensity = u_FogParams.intensityNearFar.x;
+    float farIntensity = u_FogParams.intensityNearFar.y;
+
+    // for ortho, use arbitrary constant fog factor
+    if (u_CameraData.extras.z == 1.0) return (nearIntensity + farIntensity) / 2.0;
+
+    float distWorld = length(vertexPosWorld - u_CameraData.position.xyz);
+    float distFogRange01 = 1.0 - clamp((farDist - distWorld) / (farDist - nearDist), 0.0, 1.0);
+    return nearIntensity + distFogRange01 * (farIntensity - nearIntensity);
 }
 
     `,
@@ -116,8 +112,8 @@ const float SATURATION_ADJUST = 1.15;
 
 float linear01Depth() {
     float depth = gl_FragCoord.z;
-    float near = u_CameraData.near;
-    float far = u_CameraData.far;
+    float near = u_CameraData.extras.x;
+    float far = u_CameraData.extras.y;
 
     float z = (1.0 - gl_FragCoord.z) * 2.0 - 1.0;
     float depthWorld = (2.0 * near * far) / (far + near - z * (far - near));
@@ -164,9 +160,9 @@ Custom texture sampling function that can dynamically select textures and sampli
 vec4 ratchetSampler(float bucket, float slice, int clampRegister, vec2 st) {
     int lod = 0;
 
-    if (u_CameraData.isOrtho == 0.0) {
+    if (u_CameraData.extras.z == 0.0) { // skip mip selection for ortho
         // ps2 selects mips based on depth not texcoords, but the bias is configurable (in TEX1), I know where the data is in the meshes but I don't know how to decode it.
-        float bias = log2(bucket) + 1.0 - (u_LodBias / 20.0);
+        float bias = log2(bucket) + 1.0 - (u_LodSettings.y / 20.0);
         float maxLod = log2(bucket);
         float lodLevel = clamp(log2(linear01Depth()) + bias, 0.0, maxLod - 2.0);
         lod = int(lodLevel);
