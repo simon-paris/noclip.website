@@ -29,8 +29,9 @@ export class TieProgram extends DeviceProgram {
     public static a_InstanceTransform2 = 7;
     public static a_InstanceDirectionLights = 8;
     public static a_InstanceExtraData = 9;
+    public static a_InstanceExtraData2 = 10;
 
-    public static elementsPerInstance = 20; // transform (12), lights (4), extra (4)
+    public static elementsPerInstance = 24; // transform (12), lights (4), extra (8)
 
     public static ub_SceneParams = 0;
     public static ub_TieParams = 1;
@@ -65,12 +66,13 @@ layout(location = ${TieProgram.a_InstanceTransform1}) in vec4 a_InstanceTransfor
 layout(location = ${TieProgram.a_InstanceTransform2}) in vec4 a_InstanceTransform2;
 layout(location = ${TieProgram.a_InstanceDirectionLights}) in vec4 a_InstanceDirectionLights;
 layout(location = ${TieProgram.a_InstanceExtraData}) in vec4 a_InstanceExtraData; // x = ambient RGBA row index, y = lod morph factor, z = enable vertex colors
-
+layout(location = ${TieProgram.a_InstanceExtraData2}) in float a_InstanceExtraData2; // mode bits
 out vec2 v_ST;
 out vec4 v_Rgba;
 out float v_FogFactor;
 flat out int v_TextureIndex;
 flat out int v_Clamp;
+flat out int v_ModeBits;
 
 ${RatchetShaderLib.LightingFunctions}
 ${GfxShaderLibrary.MulNormalMatrix}
@@ -97,6 +99,7 @@ void main() {
     v_FogFactor = fogFactor(positionWorld.xyz);
     v_TextureIndex = int(a_ExtraData.x);
     v_Clamp = int(a_ExtraData.y);
+    v_ModeBits = int(a_InstanceExtraData2);
 }
 
 `;
@@ -110,11 +113,19 @@ in vec4 v_Rgba;
 in float v_FogFactor;
 flat in int v_TextureIndex;
 flat in int v_Clamp;
+flat in int v_ModeBits;
 
 void main() {
     if (u_RenderSettings.x == 0.0) { gl_FragColor = vec4(v_Rgba.rgb / 2.0, v_Rgba.a); return; }
+
     ivec2 texRemap = getTexRemap(v_TextureIndex);
     vec4 textureSample = ratchetSampler(texRemap, v_Clamp, v_ST);
+
+    if ((v_ModeBits & 0x20) != 0) {
+        // TODO: write alpha channel to specular mask texture
+        textureSample.a = 1.0;
+    }
+
     gl_FragColor = commonFragmentShader(v_Rgba, textureSample, v_FogFactor, 0.01);
 }
 `;
@@ -142,6 +153,7 @@ export class TieGeometry {
                 { location: TieProgram.a_InstanceTransform2, format: GfxFormat.F32_RGBA, bufferByteOffset: 8 * 4, bufferIndex: 1, },
                 { location: TieProgram.a_InstanceDirectionLights, format: GfxFormat.F32_RGBA, bufferByteOffset: 12 * 4, bufferIndex: 1, },
                 { location: TieProgram.a_InstanceExtraData, format: GfxFormat.F32_RGBA, bufferByteOffset: 16 * 4, bufferIndex: 1, },
+                { location: TieProgram.a_InstanceExtraData2, format: GfxFormat.F32_RGBA, bufferByteOffset: 20 * 4, bufferIndex: 1, },
             ],
             vertexBufferDescriptors: [
                 { byteStride: TieProgram.elementsPerVertex * 0x4, frequency: GfxVertexBufferFrequency.PerVertex, },
@@ -345,7 +357,7 @@ export class TieRenderer {
         this.tieProgram = renderHelper.renderCache.createProgram(new TieProgram());
     }
 
-    renderTie(renderInstList: GfxRenderInstList, tieGeometriesByLod: (TieGeometry | null)[], tieClass: TieClass, tieInstanceBatch: TieInstance[], textureMappings: GfxSamplerBinding[], cameraPosition: vec3, cameraFrustum: Frustum, settingLodPreset: number, settingLodBias: number, gn:GN, instanceDataBuffer: MegaBuffer): void {
+    renderTie(renderInstList: GfxRenderInstList, tieGeometriesByLod: (TieGeometry | null)[], tieClass: TieClass, tieInstanceBatch: TieInstance[], textureMappings: GfxSamplerBinding[], cameraPosition: vec3, cameraFrustum: Frustum, settingLodPreset: number, settingLodBias: number, gn: GN, instanceDataBuffer: MegaBuffer): void {
         const enableVertexColors = gn === 1;
 
         type TieDrawInstance = { objectMatrix: mat4, directionLights: number[], rgbasRow: number, lodMorphFactor: number };
@@ -419,6 +431,7 @@ export class TieRenderer {
                 instanceDataBuffer.ptr += fillMatrix4x3(instanceDataBuffer.f32View, instanceDataBuffer.ptr, inst.objectMatrix);
                 instanceDataBuffer.ptr += fillVec4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, inst.directionLights[0], inst.directionLights[1], inst.directionLights[2], inst.directionLights[3]);
                 instanceDataBuffer.ptr += fillVec4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, inst.rgbasRow, inst.lodMorphFactor, enableVertexColors ? 1 : 0, 0);
+                instanceDataBuffer.ptr += fillVec4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, tieClass.header.modeBits, 0, 0, 0);
             }
 
             renderInst.setVertexInput(

@@ -5,7 +5,7 @@ import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { DeviceProgram } from "../Program";
 import { RatchetShaderLib } from "./shader-lib";
 import { SkyShell } from "./bin-core";
-import { mat4, vec3 } from "gl-matrix";
+import { mat4, quat, vec3 } from "gl-matrix";
 import { noclipSpaceFromRatchetSpace } from "./utils";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { fillMatrix4x4, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
@@ -28,7 +28,7 @@ ${RatchetShaderLib.SceneParams}
 
 layout(std140) uniform ub_SkyParams {
     Mat4x4 u_SkyTransform;
-    vec4 u_ExtraData; // x = isTextured, yzw = padding
+    vec4 u_ExtraData; // x = isTextured, y = bloom, z = material id
 };
 
 layout(binding = 0) uniform sampler2D u_Texture;
@@ -64,6 +64,14 @@ void main() {
     if (dot(u_CameraData.direction.xyz, v_WorldPos - u_CameraData.position.xyz) > 0.0) discard;
 
     float isTextured = u_ExtraData.x;
+    float materialId = u_ExtraData.z;
+
+    if (isTextured == 1.0 && materialId == 255.0) {
+        // not allowed
+        gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);
+        return;
+    }
+
     if (isTextured == 1.0) {
         if (u_RenderSettings.x == 0.0) discard;
         gl_FragColor = commonFragmentShader(v_Rgba, texture(SAMPLER_2D(u_Texture), v_ST), 0.0, 0.0);
@@ -76,16 +84,16 @@ void main() {
 
 }
 
-type SkyDraw = { material: number, flags: { textured: boolean }, indexCount: number, startIndex: number };
+type SkyDraw = { material: number, flags: { textured: boolean, bloom: boolean }, indexCount: number, startIndex: number };
 
 export class SkyGeometry {
     public inputLayout: GfxInputLayout;
 
     private vertexBuffer: GfxBuffer;
     private indexBuffer: GfxBuffer;
-    private draws: { material: number, flags: { textured: boolean }, indexCount: number, startIndex: number }[] = [];
+    private draws: SkyDraw[] = [];
 
-    constructor(private cache: GfxRenderCache, public index: number, private skyShell: SkyShell) {
+    constructor(private cache: GfxRenderCache, public index: number, public skyShell: SkyShell) {
         this.inputLayout = cache.createInputLayout({
             vertexAttributeDescriptors: [
                 { location: SkyProgram.a_Position, format: GfxFormat.F32_RGB, bufferByteOffset: 0, bufferIndex: 0, },
@@ -238,6 +246,10 @@ const megaStateFlags = {
     }],
 };
 
+export interface SkyAnimationState {
+    quat: quat;
+}
+
 export class SkyRenderer {
     private skyProgram: GfxProgram;
 
@@ -245,7 +257,7 @@ export class SkyRenderer {
         this.skyProgram = renderHelper.renderCache.createProgram(new SkyProgram());
     }
 
-    renderSky(renderInstList: GfxRenderInstList, cameraPosition: vec3, time: number, skyShellGeometry: SkyGeometry, skyShellTextures: GfxTexture[], skySampler: GfxSampler, isOrtho: boolean): void {
+    renderSky(renderInstList: GfxRenderInstList, cameraPosition: vec3, dt: number, skyShellGeometry: SkyGeometry, skyShellTextures: GfxTexture[], skySampler: GfxSampler, animationState: SkyAnimationState, isOrtho: boolean): void {
         const objectMatrix = mat4.identity(scratchMat4);
         mat4.translate(objectMatrix, objectMatrix, cameraPosition);
         if (isOrtho) {
@@ -254,10 +266,15 @@ export class SkyRenderer {
         }
         mat4.multiply(objectMatrix, objectMatrix, noclipSpaceFromRatchetSpace);
 
-        // can't find data for sky shell rotation speed
-        // if (...) {
-        //     mat4.rotateZ(objectMatrix, objectMatrix, time / ...);
-        // }
+        if (skyShellGeometry.skyShell.header.angularVelocity) {
+            const rotationScale = (dt / 1000) * (Math.PI / 180) / 4;
+            quat.rotateX(animationState.quat, animationState.quat, skyShellGeometry.skyShell.header.angularVelocity.x * rotationScale);
+            quat.rotateY(animationState.quat, animationState.quat, skyShellGeometry.skyShell.header.angularVelocity.y * rotationScale);
+            quat.rotateZ(animationState.quat, animationState.quat, skyShellGeometry.skyShell.header.angularVelocity.z * rotationScale);
+        }
+
+        const rotationMatrix = mat4.fromQuat(mat4.create(), animationState.quat);
+        mat4.multiply(objectMatrix, objectMatrix, rotationMatrix);
 
         const template1 = this.renderHelper.pushTemplateRenderInst();
         template1.setGfxProgram(this.skyProgram);
@@ -273,7 +290,7 @@ export class SkyRenderer {
             const skyParams = renderInst.allocateUniformBufferF32(SkyProgram.ub_SkyParams, 20);
             let offs = 0;
             offs += fillMatrix4x4(skyParams, offs, objectMatrix);
-            offs += fillVec4(skyParams, offs, Number(draw.flags.textured), 0, 0, 0);
+            offs += fillVec4(skyParams, offs, Number(draw.flags.textured), Number(draw.flags.bloom), draw.material, 0);
 
             renderInst.setVertexInput(
                 skyShellGeometry.inputLayout,
@@ -282,7 +299,7 @@ export class SkyRenderer {
             );
             if (draw.flags.textured) {
                 renderInst.setSamplerBindingsFromTextureMappings([
-                    { gfxTexture: skyShellTextures[draw.material], gfxSampler: skySampler }
+                    { gfxTexture: skyShellTextures[draw.material === 0xFF ? 0 : draw.material], gfxSampler: skySampler }
                 ]);
             }
             renderInst.setDrawCount(draw.indexCount, draw.startIndex);

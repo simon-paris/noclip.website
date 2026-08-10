@@ -81,7 +81,7 @@ export function readTieClass(gn: GN, view: DataViewExt, oClass: number): TieClas
     if (gn >= 2) {
         for (let i = 0; i < 3; i++) {
             const offset = header.rgbaRemapOffsets![i];
-            if (offset === header.adGifsOffset || header.lodHeaders![i].vertCount === 0) continue;
+            if (offset === header.adGifsOffset || header.lodHeaders![i]!.vertCount === 0) continue;
             rgbaRemaps[i] = readTieRgbaRemaps(view.subview(header.normalsOffset + offset));
 
             // const remapsInThisLod = rgbaRemaps[i];
@@ -227,8 +227,21 @@ export type TieClassHeader = {
     farDist: number,
     adGifsOffset: number,
     bsphere: { x: number, y: number, z: number, w: number },
+    /**
+     * Seems to affect what the alpha channel does
+     * 0x2 = wind effect?
+     * 0x4 = also wind effect?
+     * 0x10 = glow?
+     * 0x20 = specular mask?
+     * 0x40 = no idea (used on enemy spawners on rac3 veldin)
+     */
+    modeBits: number,
+    rgbaRemapOffsets: number[];
+    lodHeaders: (TieLodHeader | null)[],
+    scale: number,
+    [k: string]: unknown
 }
-export function readTieClassHeader(gn: GN, view: DataViewExt) {
+export function readTieClassHeader(gn: GN, view: DataViewExt): TieClassHeader {
     switch (gn) {
         case 1: {
             /*
@@ -237,7 +250,6 @@ export function readTieClassHeader(gn: GN, view: DataViewExt) {
             return {
                 packetOffsets: view.getArrayOfNumbers(0x0, 3, Uint32Array),
                 normalsOffset: view.getUint32(0xc),
-                normalsCount: 64, // always 64 normals in rac1
                 nearDist: view.getFloat32(0x10),
                 midDist: view.getFloat32(0x14),
                 farDist: view.getFloat32(0x18),
@@ -246,6 +258,12 @@ export function readTieClassHeader(gn: GN, view: DataViewExt) {
                 adGifsOffset: view.getUint32(0x2c),
                 bsphere: view.getFloat32_Xyzw(0x30),
                 scale: view.getFloat32(0x40),
+                // many unknown fields here
+
+                normalsCount: 64, // always 64 normals in rac1
+                modeBits: 0, // probably exists but not sure where
+                rgbaRemapOffsets: [0, 0, 0], // not present in rac1
+                lodHeaders: [null, null, null], // present but not sure where
             };
         }
         case 2:
@@ -798,7 +816,7 @@ export interface Tfrag {
     },
 }
 
-export function readTfrag(view: DataViewExt, header: TfragHeader) {
+export function readTfrag(view: DataViewExt, header: TfragHeader, tfragNumber: number) {
     const rgbas = view.subdivide(header.rgbaOffset, header.rgbaSize * 4, 0x4).map(view => view.getUint8_Rgba(0));
     const lights = view.subdivide(header.lightOfs + 0x10, header.vertCount, SIZEOF_TFRAG_LIGHT).map(readTfragLight); // why plus 0x10?
 
@@ -990,7 +1008,7 @@ export function readTfrag(view: DataViewExt, header: TfragHeader) {
         }
 
         let vertexInfoPart3: TfragVertexInfo[] | null = null;
-        if (vuHeader.positionsLod0Count > 0) {
+        if (unpackReader.hasNext() && unpackReader.peekNextVnvl() === VifUnpackFormat.V4_16) {
             assert(unpackReader.peekNextVnvl() === VifUnpackFormat.V4_16);
             vertexInfoPart3 = unpackReader.next().subdivide(0, 0xFFFF, SIZEOF_TFRAG_VERTEX_INFO).map(readTfragVertexInfo);
         }
@@ -1362,14 +1380,14 @@ export function readShrubClass(view: DataViewExt) {
 }
 
 export interface Sky {
-    header: SkyHeader,
+    header: SkyHeader | null, // sky is optional
     textureEntries: SkyTextureEntry[],
     shells: SkyShell[],
 }
-export function readSky(skyView: DataViewExt): Sky {
+export function readSky(gn: GN, skyView: DataViewExt): Sky {
     const header = readSkyHeader(skyView);
     const textureEntries = skyView.subdivide(header.textureDefs, header.textureCount, SIZEOF_SKY_TEXTURE_ENTRY).map(readSkyTextureEntry);
-    const shells = header.shells.slice(0, header.shellCount).map(offset => readSkyShell(skyView, skyView.subview(offset)));
+    const shells = header.shells.slice(0, header.shellCount).map((offset, i) => readSkyShell(gn, skyView, skyView.subview(offset), i));
     return {
         header,
         textureEntries,
@@ -1386,8 +1404,8 @@ export interface SkyShell {
         triangles: SkyFace[],
     }[],
 };
-export function readSkyShell(skyView: DataViewExt, skyShellView: DataViewExt): SkyShell {
-    const shellHeader = readSkyShellHeader(skyShellView);
+export function readSkyShell(gn: GN, skyView: DataViewExt, skyShellView: DataViewExt, shellIndex: number): SkyShell {
+    const shellHeader = readSkyShellHeader(gn, skyShellView, shellIndex);
     const skyShells: SkyShell = {
         header: shellHeader,
         clusters: [],
@@ -1410,11 +1428,11 @@ export function readSkyShell(skyView: DataViewExt, skyShellView: DataViewExt): S
         const indicesBuffer = dataView.subview(clusterHeader.triOffset);
         const triangles = indicesBuffer.subdivide(0, clusterHeader.triCount, SIZEOF_SKY_FACE).map(readSkyFace);
 
-        for (const triangle of triangles) {
-            // make sure it's not mixing texcoords and rgbas
-            const expectedTexture = shellHeader.flags.textured ? triangle.texture : 0xFF;
-            assert(triangle.texture === expectedTexture);
-        }
+        // for (const triangle of triangles) {
+        //     // make sure it's not mixing texcoords and rgbas
+        //     const expectedTexture = shellHeader.flags.textured ? triangle.texture : 0xFF;
+        //     assert(triangle.texture === expectedTexture);
+        // }
 
         skyShells.clusters.push({
             vertices,
@@ -1484,24 +1502,60 @@ export interface SkyShellHeader {
     clusterCount: number,
     flags: {
         textured: boolean,
+        unknownFlag?: boolean,
+        bloom: boolean,
     },
+    rotation: { x: number, y: number, z: number } | null;
+    angularVelocity: { x: number, y: number, z: number } | null;
 };
-export const SIZEOF_SKY_SHELL_HEADER = 0x8;
-export function readSkyShellHeader(view: DataViewExt): SkyShellHeader {
+export const SIZEOF_SKY_SHELL_HEADER = (gn: GN) => {
+    switch (gn) {
+        case 1:
+        case 2: return 0x8;
+        case 3:
+        case 4: return 0x10;
+    }
+    assert(false);
+}
+export function readSkyShellHeader(gn: GN, view: DataViewExt, shellIndex: number): SkyShellHeader {
     /*
     https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/sky.h#L87C15-L87C34
-
-    Different in rac3+
     */
 
-    const flags = view.getInt32(0x4);
+    switch (gn) {
+        case 1:
+        case 2: {
+            const flags = view.getInt32(0x4);
 
-    return {
-        clusterCount: view.getInt32(0x0),
-        flags: {
-            textured: flags & 0x1 ? false : true,
-        },
-    };
+            return {
+                clusterCount: view.getInt32(0x0),
+                flags: {
+                    textured: (flags & 0x1) === 0,
+                    bloom: false,
+                },
+                rotation: null,
+                angularVelocity: null
+            };
+        }
+        case 3:
+        case 4: {
+            const flags = view.getInt16(0x4);
+
+            return {
+                clusterCount: view.getInt16(0x0),
+                flags: {
+                    textured: shellIndex !== 0,
+                    unknownFlag: (flags & 0x1) === 1,
+                    bloom: (flags & 0x2) === 1,
+                },
+                rotation: view.getInt16_Xyz(0x4),
+                angularVelocity: view.getInt16_Xyz(0xa),
+            };
+        }
+        default: {
+            assert(false);
+        }
+    }
 }
 
 export interface SkyClusterHeader {
@@ -1825,6 +1879,7 @@ export type MobyClass = {
     oClass: number,
     header: MobyClassHeader,
     mesh: MobyMesh | null,
+    bangles: MobyBangles | null,
 };
 export function readMobyClass(gn: GN, view: DataViewExt, oClass: number): MobyClass {
     const header = readMobyClassHeader(view);
@@ -1838,10 +1893,16 @@ export function readMobyClass(gn: GN, view: DataViewExt, oClass: number): MobyCl
         mesh = readMobyMesh(meshGn, view, header.packetTableOffset, header.meshInfo);
     }
 
+    let bangles: MobyBangles | null = null;
+    if (header.bangles) {
+        bangles = readMobyBangles(gn, view, header.bangles * 0x10, header.packetTableOffset);
+    }
+
     return {
         oClass,
         header,
         mesh,
+        bangles
     };
 }
 
@@ -1925,13 +1986,89 @@ export function readMobyMeshInfo(view: DataViewExt): MobyMeshInfo {
     }
 }
 
+export interface MobyBangles {
+    header: MobyBanglesHeader,
+    bangles: MobyBangle[],
+}
+export interface MobyBangle {
+    packetsByLod: [MobyMeshPacket[], MobyMeshPacket[]],
+}
+export function readMobyBangles(gn: GN, mobyView: DataViewExt, banglesOffset: number, packetTableOffset: number): MobyBangles {
+    const header = readMobyBanglesHeader(mobyView.subview(banglesOffset));
+    let bangles: MobyBangle[] = [];
+    for (let i = 0; i < header.bangleDescriptors.length; i++) {
+        const bangleDescriptor = header.bangleDescriptors[i];
+        if (!bangleDescriptor) continue;
+
+        let packetsLod0: MobyMeshPacket[] = [];
+        if (bangleDescriptor.lod0Count > 0) {
+            const bangleOffset = packetTableOffset + bangleDescriptor.lod0Offset * 0x10;
+            const packetHeaders = mobyView.subdivide(bangleOffset, bangleDescriptor.lod0Count, SIZEOF_MOBY_MESH_PACKET_HEADER).map(readMobyMeshPacketHeader);
+            packetsLod0 = packetHeaders.map(packetHeader => readMobyMeshPacket(gn, mobyView, packetHeader, true));
+        }
+
+        let packetsLod1: MobyMeshPacket[] = [];
+        if (bangleDescriptor.lod1Count > 0) {
+            const bangleOffset = packetTableOffset + bangleDescriptor.lod1Offset * 0x10;
+            const packetHeaders = mobyView.subdivide(bangleOffset, bangleDescriptor.lod1Count, SIZEOF_MOBY_MESH_PACKET_HEADER).map(readMobyMeshPacketHeader);
+            packetsLod1 = packetHeaders.map(packetHeader => readMobyMeshPacket(gn, mobyView, packetHeader, true));
+        }
+
+        if (packetsLod0.length || packetsLod1.length) {
+            bangles.push({
+                packetsByLod: [packetsLod0, packetsLod1],
+            });
+        }
+    }
+    return {
+        header,
+        bangles,
+    };
+}
+
+export interface MobyBangleDescriptor {
+    lod0Offset: number;
+    lod0Count: number;
+    lod1Offset: number;
+    lod1Count: number;
+}
+export interface MobyBanglesHeader {
+    unknown0: number,
+    bangleDescriptors: (MobyBangleDescriptor | null)[],
+}
+export function readMobyBanglesHeader(view: DataViewExt) {
+    let ptr = 0;
+    const unknown0 = view.getUint16(0); // ??
+    const enabledBanglesBitmask = view.getUint16(2);
+    ptr += 4;
+    const bangleDescriptors: (MobyBangleDescriptor | null)[] = []
+    for (let i = 0; i < 15; i++) {
+        if (enabledBanglesBitmask & (1 << i)) {
+            bangleDescriptors.push({
+                lod0Offset: view.getUint8(ptr + 0x0),
+                lod0Count: view.getUint8(ptr + 0x1),
+                lod1Offset: view.getUint8(ptr + 0x2),
+                lod1Count: view.getUint8(ptr + 0x3),
+            });
+        } else {
+            bangleDescriptors.push(null);
+        }
+        ptr += 4;
+    }
+
+    return {
+        unknown0,
+        bangleDescriptors,
+    }
+}
+
 export interface MobyMesh {
     packetHeaders: MobyMeshPacketHeader[],
     packetsByLod: [MobyMeshPacket[], MobyMeshPacket[]],
 };
 export function readMobyMesh(gn: GN, mobyView: DataViewExt, packetTableOffset: number, meshInfo: MobyMeshInfo): MobyMesh {
     const packetHeaders = mobyView.subdivide(packetTableOffset, meshInfo.highLodCount + meshInfo.lowLodCount, SIZEOF_MOBY_MESH_PACKET_HEADER).map(readMobyMeshPacketHeader);
-    const packets = packetHeaders.map(packetHeader => readMobyMeshPacket(gn, mobyView, packetHeader));
+    const packets = packetHeaders.map(packetHeader => readMobyMeshPacket(gn, mobyView, packetHeader, false));
     const packetsLod0 = packets.slice(0, meshInfo.highLodCount);
     const packetsLod1 = packets.slice(meshInfo.highLodCount);
     // TODO: read metal packets
@@ -1977,8 +2114,9 @@ export interface MobyMeshPacket {
     textures: MobyTexturePrimitive[],
     vertices: MobyVertex[],
     duplicateVertices: number[],
+    isBanglePacket: boolean,
 };
-export function readMobyMeshPacket(meshGn: GN, packetView: DataViewExt, packetHeader: MobyMeshPacketHeader): MobyMeshPacket {
+export function readMobyMeshPacket(meshGn: GN, packetView: DataViewExt, packetHeader: MobyMeshPacketHeader, isBanglePacket: boolean): MobyMeshPacket {
     const vifCommands = readVifCommandList(packetView.subview(packetHeader.vifListOffset, packetHeader.vifListSize * 0x10));
     const unpackReader = new VifUnpackReader(vifCommands);
 
@@ -2017,6 +2155,7 @@ export function readMobyMeshPacket(meshGn: GN, packetView: DataViewExt, packetHe
         textures,
         vertices: vertexTable.vertices,
         duplicateVertices: vertexTable.duplicateVertices,
+        isBanglePacket,
     };
 }
 

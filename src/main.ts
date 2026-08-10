@@ -230,6 +230,8 @@ const sceneGroups: (string | SceneGroup)[] = [
     Scenes_Spyro.sceneGroup3,
     Scenes_RatchetAndClank.sceneGroup1,
     Scenes_RatchetAndClank.sceneGroup2,
+    Scenes_RatchetAndClank.sceneGroup3,
+    Scenes_RatchetAndClank.sceneGroup4,
     Scenes_PlusForXP.sceneGroup,
     Scenes_DonkeyKong64.sceneGroup,
     Scenes_DonkeyKongCountryReturns.sceneGroup,

@@ -3,8 +3,25 @@ import { DataViewExt } from "./DataViewExt";
 import { GN, matrixToNoclipSpace, noclipSpaceFromRatchetSpace } from "./utils";
 import { assert } from "../util";
 
-export type GameplayHeader = ReturnType<typeof readGameplayHeader>;
-export function readGameplayHeader(gn: GN, view: DataViewExt) {
+export type GameplayHeader = {
+    levelSettings: number,
+    directionLightInstances: number,
+    tieClasses: number,
+    tieInstances: number,
+    shrubClasses: number,
+    shrubInstances: number,
+    mobyClasses: number,
+    mobyInstances: number,
+    shapesCuboids: number,
+    shapesSpheres: number,
+    shapesCylinders: number,
+    shapesPills: number,
+    paths: number,
+    grindPaths: number,
+    pointLightInstances: number,
+    tieAmbientRgbas: number, // rac2+ only
+}
+export function readGameplayHeader(gn: GN, view: DataViewExt, artBlockView_rac4: DataViewExt | null): GameplayHeader {
     switch (gn) {
         case 1: {
             /*
@@ -12,61 +29,40 @@ export function readGameplayHeader(gn: GN, view: DataViewExt) {
             struct GameplayHeader {
                 // 0x0 
                 int32 levelSettings;
-                // 0x4 - InstanceBlock<DirectionLightInstance>
                 int32 directionLightInstances;
-                // 0x8 - InstanceBlock<CameraInstance>
                 int32 cameraInstances;
-                // 0xc - InstanceBlock<SoundInstance>
                 int32 soundInstances;
-                // 0x10 - 0x2c
-                // help message fields
+                // 0x10
+                int32 helpMessagesByLanguage[8];
                 // 0x30
-                int32 tieClasses; // just an array of o_class numbers, not class definitions
-                // 0x34 - InstanceBlock<TieInstance>
+                int32 tieClasses;
                 int32 tieInstances;
-                // 0x38
                 int32 shrubClasses;
-                // 0x3c - InstanceBlock<ShrubInstance>
                 int32 shrubInstances;
                 // 0x40
                 int32 mobyClasses;
-                // 0x44 (not the same InstanceBlock structure as the other instance blocks)
                 int32 mobyInstances;
-                // 0x48
                 int32 mobyGroupInstances;
-                // 0x4c
                 int32 sharedData;
                 // 0x50
                 int32 pvarMobyLinks;
-                // 0x54
                 int32 pvarTable;
-                // 0x58
                 int32 pvarData;
-                // 0x5c
                 int32 pvarRelativePointers;
                 // 0x60
                 int32 shapesCuboids;
-                // 0x64
                 int32 shapesSpheres;
-                // 0x68
                 int32 shapesCylinders;
-                // 0x6c
                 int32 shapesPills;
                 // 0x70
                 int32 paths;
-                // 0x74
                 int32 grindPaths;
-                // 0x78
                 int32 pointLightGrid;
-                // 0x7c
                 int32 pointLightInstances;
                 // 0x80
                 int32 envTransitions;
-                // 0x84
                 int32 camColGrid;
-                // 0x88
                 int32 envSamplePoints;
-                // 0x8c
                 int32 occlusionMappings;
             }
             */
@@ -86,75 +82,54 @@ export function readGameplayHeader(gn: GN, view: DataViewExt) {
                 paths: view.getInt32(0x70),
                 grindPaths: view.getInt32(0x74),
                 pointLightInstances: view.getInt32(0x7c),
+                tieAmbientRgbas: 0, // not in rac1
             };
         }
-        case 2: {
+        case 2:
+        case 3: {
             /*
             // https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/instancemgr/gameplay.cpp#L113
             struct GameplayHeader {
                 // 0x0
                 int32 levelSettings;
-                // 0x4
                 int32 directionLightInstances;
-                // 0x8
                 int32 cameraInstances;
-                // 0xc
                 int32 soundInstances;
-                // 0x10 - 0x2c
-                // help message fields
+                // 0x10
+                int32 helpMessagesByLanguage[8];
                 // 0x30
                 int32 tieClasses;
-                // 0x34
                 int32 tieInstances;
-                // 0x38
                 int32 tieGroups;
-                // 0x3c
                 int32 shrubClasses;
                 // 0x40
                 int32 shrubInstances;
-                // 0x44
                 int32 shrubGroups;
-                // 0x48
                 int32 mobyClasses;
-                // 0x4c
                 int32 mobyInstances;
                 // 0x50
                 int32 mobyGroups;
-                // 0x54
                 int32 sharedData;
-                // 0x58
                 int32 pvarMobyLinks;
-                // 0x5c
                 int32 pvarTable;
                 // 0x60
                 int32 pvarData;
-                // 0x64
                 int32 pvarRelativePointers;
-                // 0x68
                 int32 cuboids;
-                // 0x6c
                 int32 spheres;
                 // 0x70
                 int32 cylinders;
-                // 0x74
                 int32 pills;
-                // 0x78
                 int32 paths;
-                // 0x7c
                 int32 grindPaths;
                 // 0x80
                 int32 pointLights;
-                // 0x84
                 int32 envTransitions;
-                // 0x88
                 int32 camCollGrid;
-                // 0x8c
                 int32 envSamplePoints;
                 // 0x90
                 int32 occlusion;
-                // 0x94
                 int32 tieAmbientRgbas;
-                // 0x98
                 int32 areas;
             }
             */
@@ -177,6 +152,81 @@ export function readGameplayHeader(gn: GN, view: DataViewExt) {
                 pointLightInstances: view.getInt32(0x80),
                 tieAmbientRgbas: view.getInt32(0x94),
             };
+        }
+        case 4: {
+            /*
+            struct GameplayHeader {
+                // 0x0
+                int32 levelSettings;
+                int32 cameraInstances;
+                int32 soundInstances;
+                // 0xc
+                int32 helpMessagesByLanguage[8];
+                // 0x2c
+                int32 mobyClasses;
+                // 0x30
+                int32 mobyInstances;
+                int32 mobyGroups;
+                int32 sharedData;
+                int32 mobyLinkFixupTable;
+                // 0x40
+                int32 pvarTable;
+                int32 pvarData;
+                int32 pvarRelativePointers;
+                int32 cuboids;
+                // 0x50
+                int32 spheres;
+                int32 cylinders;
+                int32 pills;
+                int32 paths;
+                // 0x60
+                int32 grindPaths;
+                int32 pointLights;
+                int32 unused;
+                int32 camColGrid;
+                // 0x70
+                int32 envSamplePoints;
+                int32 areas;
+            }
+
+            struct ArtInstancesBlockHeader {
+                // 0x0
+                int32 directionLightInstances;
+                int32 tieClasses;
+                int32 tieInstances;
+                int32 tieGroups;
+                // 0x10
+                int32 shrubClasses;
+                int32 shrubInstances;
+                int32 shrubGroups;
+                int32 occlusionMappings;
+                // 0x20
+                int32 tieAmbientRgbas;
+            }
+            */
+
+            assert(artBlockView_rac4 !== null);
+
+            return {
+                levelSettings: view.getInt32(0x0),
+                mobyClasses: view.getInt32(0x2c),
+                mobyInstances: view.getInt32(0x30),
+                shapesCuboids: view.getInt32(0x4c),
+                shapesSpheres: view.getInt32(0x50),
+                shapesCylinders: view.getInt32(0x54),
+                shapesPills: view.getInt32(0x58),
+                paths: view.getInt32(0x5c),
+                grindPaths: view.getInt32(0x60),
+                pointLightInstances: view.getInt32(0x80),
+
+                // in rac4, these belong to the art file instead of gameplay
+                directionLightInstances: artBlockView_rac4.getInt32(0x0),
+                tieClasses: artBlockView_rac4.getInt32(0x4),
+                tieInstances: artBlockView_rac4.getInt32(0x8),
+                shrubClasses: artBlockView_rac4.getInt32(0x10),
+                shrubInstances: artBlockView_rac4.getInt32(0x14),
+                tieAmbientRgbas: artBlockView_rac4.getInt32(0x20),
+            }
         }
         default: {
             throw new Error("not implemented");
@@ -343,6 +393,8 @@ export function readTieInstance(gn: GN, view: DataViewExt, instanceIndex: number
 }
 
 export interface MobyInstance {
+    size: number,
+    mission: number,
     oClass: number,
     scale: number,
     drawDistance: number,
@@ -371,6 +423,7 @@ export function readMobyInstance(gn: GN, view: DataViewExt): MobyInstance {
             */
             return {
                 size: view.getInt32(0x0),
+                mission: view.getInt32(0x4), // guess
                 oClass: view.getInt32(0x18),
                 scale: view.getFloat32(0x1c),
                 drawDistance: view.getInt32(0x20),
@@ -411,6 +464,28 @@ export function readMobyInstance(gn: GN, view: DataViewExt): MobyInstance {
                 modeBits: view.getInt32(0x70),
                 color: view.getInt32_Rgb(0x74), // wrench calls this lightColor, not sure if different from the color field in rac1
                 directionalLights: view.getNibbleArray(0x80, 2),
+            };
+        }
+        case 4: {
+            return {
+                size: view.getInt32(0x0),
+                mission: view.getInt32(0x4),
+                uid: view.getInt32(0x8),
+                bolts: view.getInt32(0xc),
+                oClass: view.getInt32(0x10),
+                scale: view.getFloat32(0x14),
+                drawDistance: view.getInt32(0x18),
+                updateDistance: view.getInt32(0x1c),
+                position: view.getFloat32_Xyz(0x28),
+                rotation: view.getFloat32_Xyz(0x34),
+                group: view.getInt32(0x40),
+                isRooted: view.getInt32(0x44),
+                rootedDistance: view.getFloat32(0x48),
+                pvarIndex: view.getInt32(0x50),
+                occlusion: view.getInt32(0x54),
+                modeBits: view.getInt32(0x58),
+                color: view.getInt32_Rgb(0x5c),
+                directionalLights: view.getNibbleArray(0x68, 2),
             };
         }
         default: {

@@ -1,4 +1,4 @@
-import { mat4, quat, vec3 } from "gl-matrix";
+import { mat4, quat, vec3, vec4 } from "gl-matrix";
 import { makeBackbufferDescSimple, standardFullClearRenderPassDescriptor } from "../gfx/helpers/RenderGraphHelpers";
 import { fillMatrix4x4, fillVec3v, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
 import { GfxBlendFactor, GfxBlendMode, GfxChannelWriteMask, GfxCullMode, GfxDevice, GfxMipFilterMode, GfxSampler, GfxSamplerBinding, GfxTexFilterMode, GfxTexture, GfxWrapMode } from "../gfx/platform/GfxPlatform";
@@ -16,13 +16,14 @@ import { createMegaBuffer, MegaBuffer, noclipSpaceFromRatchetSpace, lineChainToL
 import { TfragGeometry, TfragRenderer } from "./render-tfrag";
 import { ShrubGeometry, ShrubRenderer } from "./render-shrub";
 import { colorNewFromRGBA, OpaqueBlack, White } from "../Color";
-import { SkyGeometry, SkyRenderer } from "./render-sky";
+import { SkyAnimationState, SkyGeometry, SkyRenderer } from "./render-sky";
 import { RatchetShaderLib } from "./shader-lib";
 import { createGfxTextureForPaletteTexture, createTextureAtlases, createTieRgbaTexture_Rac1, createTieRgbaTexture_Rac234, TextureAtlases } from "./textures";
 import { CollisionGeometry, CollisionRenderer } from "./render-collision";
 import { IS_DEVELOPMENT } from "../BuildVersion";
 import { GfxDynamicBufferCache } from "../gfx/render/GfxRenderCache";
 import { MobyGeometry, MobyRenderer } from "./render-moby";
+import { nArray } from "../util";
 
 const pathBase = (gn: GN) => `RatchetAndClank${gn}`;
 
@@ -36,6 +37,8 @@ class RatchetAndClankScene implements SceneGfx {
 
     public textureHolder = new FakeTextureHolder([]);
 
+    private missionsPanel: UI.Panel | null = null;
+
     private settings = {
         lodSetting: -1, // -1 means dynamic
         lodBias: 40,
@@ -43,12 +46,14 @@ class RatchetAndClankScene implements SceneGfx {
         enableTfrag: true,
         enableTies: true,
         enableMobys: true,
+        enableBangles: false, // disable bangles by default because, bangles representing armour work well but many objects have destructable bits that overlap their main mesh
         enableShrubs: true,
         enableSky: true,
         enableFog: true,
         enableTextures: true,
-        showInvisibleMobyPositions: false,
+        showObjectIds: false,
         showPaths: false,
+        mobyMissionFlags: 0xFFFFFFFF, // bitmask to despawn mobys on completed missions
     };
 
     private levelResources: LevelResources;
@@ -66,6 +71,10 @@ class RatchetAndClankScene implements SceneGfx {
         shrubs: Map<number, ShrubGeometry>,
         skyShells: Map<number, SkyGeometry>,
         collision: CollisionGeometry | null,
+    };
+
+    private animationStates: {
+        sky: SkyAnimationState[]
     };
 
     private renderers: {
@@ -110,6 +119,7 @@ class RatchetAndClankScene implements SceneGfx {
             mobyClassTextureIndices: null,
             mobyInstances: null,
             mobyInstancesByOClass: null,
+            mobyUniqueMissionIds: null,
             shrubTextures: null,
             shrubOClasses: null,
             shrubClasses: null,
@@ -151,6 +161,10 @@ class RatchetAndClankScene implements SceneGfx {
             collision: null,
         };
 
+        this.animationStates = {
+            sky: nArray(8, () => ({ quat: quat.create() })),
+        };
+
         this.renderers = {
             tfrag: new TfragRenderer(this.renderHelper),
             tie: new TieRenderer(this.renderHelper),
@@ -163,9 +177,11 @@ class RatchetAndClankScene implements SceneGfx {
         this.instanceDataBuffer = createMegaBuffer(cache.device, "Instance Data", 1024 * 1024);
         this.instanceDataBufferCache = new GfxDynamicBufferCache(cache.device);
 
-        const filePromises = loadFilesFromNetwork(sceneContext.dataFetcher, `${pathBase(this.gn)}/level_${this.levelNumber}`, this.chunkNumber);
+        const filePromises = loadFilesFromNetwork(sceneContext.dataFetcher, `${pathBase(this.gn)}/level_${this.levelNumber}`, this.gn, this.chunkNumber);
         load(this.gn, this.chunkNumber, this.levelResources, filePromises).then(() => {
             if (IS_DEVELOPMENT) console.log(this);
+        }).then(() => {
+            this.populateMissionsList();
         }).catch((e) => {
             console.error(`Error loading level:`, e);
         });
@@ -357,7 +373,7 @@ class RatchetAndClankScene implements SceneGfx {
         offs += fillVec4(data, offs, this.settings.lodSetting, this.settings.lodBias, 0, 0);
 
         // render settings (4 floats)
-        offs += fillVec4(data, offs, this.settings.enableTextures ? 1 : 0, 0, 0, 0);
+        offs += fillVec4(data, offs, this.settings.enableTextures ? 1 : 0, this.settings.mobyMissionFlags, 0, 0);
 
         // background color (4 floats)
         const backgroundColor = levelSettings.backgroundColor;
@@ -447,7 +463,7 @@ class RatchetAndClankScene implements SceneGfx {
                 const skyShellGeometry = this.getOrCreateSkyGeometry(i);
                 if (!skyShellGeometry) continue;
                 if (!skyTextures) continue;
-                this.renderers.sky.renderSky(this.renderInstList, cameraPosition, viewerInput.time, skyShellGeometry, skyTextures, this.samplerSky, isOrtho);
+                this.renderers.sky.renderSky(this.renderInstList, cameraPosition, viewerInput.deltaTime, skyShellGeometry, skyTextures, this.samplerSky, this.animationStates.sky[i], isOrtho);
             }
         }
 
@@ -495,7 +511,7 @@ class RatchetAndClankScene implements SceneGfx {
                 if (!mobyInstances) continue;
                 const mobyGeometryArr = this.getOrCreateMobyGeometry(oClass);
                 if (!mobyGeometryArr) continue;
-                this.renderers.moby.renderMoby(this.renderInstList, mobyGeometryArr, mobyClass, mobyInstances, atlasTextures, cameraPosition, cameraFrustum, lodSetting, lodBias, this.instanceDataBuffer);
+                this.renderers.moby.renderMoby(this.renderInstList, mobyGeometryArr, mobyClass, mobyInstances, atlasTextures, cameraPosition, cameraFrustum, lodSetting, lodBias, this.settings.enableBangles, this.settings.mobyMissionFlags, this.instanceDataBuffer);
             }
         }
 
@@ -512,14 +528,10 @@ class RatchetAndClankScene implements SceneGfx {
             }
         }
 
-        // invisible moby positions
-        if (this.settings.showInvisibleMobyPositions) {
-            const mobyInstances = this.levelResources.mobyInstances ?? [];
-            for (let i = 0; i < mobyInstances.length; i++) {
-                const mobyInstance = mobyInstances[i];
-                const mobyClass = this.levelResources.mobyClasses?.get(mobyInstance.oClass);
-                if (mobyClass && mobyClass.mesh) continue;
-                const pos = vec3.fromValues(mobyInstance.position.x, mobyInstance.position.y, mobyInstance.position.z);
+        // object ids
+        if (this.settings.showObjectIds) {
+            const renderObjectPosition = (text: string, _pos: vec3) => {
+                const pos = vec3.clone(_pos);
                 vec3.transformMat4(pos, pos, noclipSpaceFromRatchetSpace);
                 this.renderHelper.debugDraw.drawLocator(pos, 0.3, White);
                 const mat = mat4.fromTranslation(mat4.create(), pos);
@@ -527,7 +539,29 @@ class RatchetAndClankScene implements SceneGfx {
                 mat4.getRotation(rotation, viewerInput.camera.worldMatrix);
                 mat4.fromRotationTranslationScale(mat, rotation, pos, vec3.fromValues(0.01, 0.01, 0.01));
                 if (vec3.distance(pos, cameraPosition) < 40) {
-                    this.renderHelper.debugDraw.drawWorldTextMtx(String(mobyInstance.oClass), mat, White);
+                    this.renderHelper.debugDraw.drawWorldTextMtx(String(text), mat, White);
+                }
+            }
+
+            if (this.settings.enableTies) {
+                const tieInstances = this.levelResources.tieInstances ?? [];
+                for (let i = 0; i < tieInstances.length; i++) {
+                    const inst = tieInstances[i];
+                    renderObjectPosition("tie" + inst.oClass, mat4.getTranslation(vec3.create(), inst.matrix));
+                }
+            }
+            if (this.settings.enableMobys) {
+                const mobyInstances = this.levelResources.mobyInstances ?? [];
+                for (let i = 0; i < mobyInstances.length; i++) {
+                    const inst = mobyInstances[i];
+                    renderObjectPosition("moby" + inst.oClass, vec3.fromValues(inst.position.x, inst.position.y, inst.position.z));
+                }
+            }
+            if (this.settings.enableShrubs) {
+                const shrubInstances = this.levelResources.shrubInstances ?? [];
+                for (let i = 0; i < shrubInstances.length; i++) {
+                    const inst = shrubInstances[i];
+                    renderObjectPosition("shrub" + inst.oClass, mat4.getTranslation(vec3.create(), inst.matrix));
                 }
             }
         }
@@ -620,6 +654,12 @@ class RatchetAndClankScene implements SceneGfx {
         };
         renderSettingsPanel.contents.appendChild(enableMobys.elem);
 
+        const enableBangles = new UI.Checkbox('Enable Bangles', this.settings.enableBangles);
+        enableBangles.onchanged = () => {
+            this.settings.enableBangles = enableBangles.checked;
+        };
+        renderSettingsPanel.contents.appendChild(enableBangles.elem);
+
         const enableShrubs = new UI.Checkbox('Enable Shrubs', this.settings.enableShrubs);
         enableShrubs.onchanged = () => {
             this.settings.enableShrubs = enableShrubs.checked;
@@ -644,11 +684,11 @@ class RatchetAndClankScene implements SceneGfx {
         };
         renderSettingsPanel.contents.appendChild(enableSky.elem);
 
-        const showInvisibleMobyPositions = new UI.Checkbox('Show Hidden Moby Positions', this.settings.showInvisibleMobyPositions);
-        showInvisibleMobyPositions.onchanged = () => {
-            this.settings.showInvisibleMobyPositions = showInvisibleMobyPositions.checked;
+        const showObjectIds = new UI.Checkbox('Object IDs', this.settings.showObjectIds);
+        showObjectIds.onchanged = () => {
+            this.settings.showObjectIds = showObjectIds.checked;
         };
-        renderSettingsPanel.contents.appendChild(showInvisibleMobyPositions.elem);
+        renderSettingsPanel.contents.appendChild(showObjectIds.elem);
 
         const showPaths = new UI.Checkbox('Show Paths', this.settings.showPaths);
         showPaths.onchanged = () => {
@@ -656,7 +696,32 @@ class RatchetAndClankScene implements SceneGfx {
         };
         renderSettingsPanel.contents.appendChild(showPaths.elem);
 
-        return [renderSettingsPanel];
+        const missionsPanel = new UI.Panel();
+        missionsPanel.customHeaderBackgroundColor = UI.COOL_BLUE_COLOR;
+        missionsPanel.setTitle(UI.LAYER_ICON, 'Moby Mission Flags');
+        this.missionsPanel = missionsPanel;
+
+        return [renderSettingsPanel, missionsPanel];
+    }
+
+    populateMissionsList() {
+        if (!this.missionsPanel) return;
+        if (!this.levelResources.mobyUniqueMissionIds) return;
+
+        const missionSelector = new UI.MultiSelect();
+        const missionList = Array.from(this.levelResources.mobyUniqueMissionIds.keys())
+            .filter(num => num != -1)
+            .sort((a, b) => a - b);
+        missionSelector.setStrings(missionList.map(num => `Mission ${num}`));
+        for (let i = 0; i < missionList.length; i++) missionSelector.setItemSelected(i, true);
+        missionSelector.onitemchanged = (index: number, v: boolean) => {
+            if (v) {
+                this.settings.mobyMissionFlags |= (1 << index);
+            } else {
+                this.settings.mobyMissionFlags &= ~(1 << index);
+            }
+        };
+        this.missionsPanel.contents.appendChild(missionSelector.elem);
     }
 
     public destroy(device: GfxDevice): void {
@@ -723,29 +788,64 @@ class RatchetAndClank2SceneDesc implements SceneDesc {
     }
 }
 
+class RatchetAndClank3SceneDesc implements SceneDesc {
+    id: string;
+
+    constructor(public levelNumber: number, public chunkNumber: number | null, public name: string) {
+        if (chunkNumber === null) {
+            this.id = String(levelNumber);
+        } else {
+            this.id = `${levelNumber}_${chunkNumber}`;
+        }
+    }
+
+    public async createScene(device: GfxDevice, sceneContext: SceneContext): Promise<SceneGfx> {
+        return new RatchetAndClankScene(sceneContext, 3, this.levelNumber, this.chunkNumber);
+    }
+}
+
+class RatchetAndClank4SceneDesc implements SceneDesc {
+    id: string;
+
+    constructor(public levelNumber: number, public chunkNumber: number | null, public name: string) {
+        if (chunkNumber === null) {
+            this.id = String(levelNumber);
+        } else {
+            this.id = `${levelNumber}_${chunkNumber}`;
+        }
+    }
+
+    public async createScene(device: GfxDevice, sceneContext: SceneContext): Promise<SceneGfx> {
+        return new RatchetAndClankScene(sceneContext, 4, this.levelNumber, this.chunkNumber);
+    }
+}
+
+const SPLITSCREEN_RAC3 = 10;
+const SPLITSCREEN_RAC4 = 20;
+
 export const sceneGroup1: SceneGroup = {
     id: "RatchetAndClank1",
     name: "Ratchet & Clank",
     sceneDescs: [
-        new RatchetAndClank1SceneDesc(0, "Kyzil Plateau, Veldin (Tutorial)"),
-        new RatchetAndClank1SceneDesc(1, "Tobruk Crater, Novalis"),
-        new RatchetAndClank1SceneDesc(2, "Outpost X11, Aridia"),
-        new RatchetAndClank1SceneDesc(3, "Metropolis, Kerwan"),
-        new RatchetAndClank1SceneDesc(4, "Logging Site, Eudora"),
-        new RatchetAndClank1SceneDesc(5, "Blackwater City, Rilgar"),
-        new RatchetAndClank1SceneDesc(6, "Blarg Station, Nebula G34"),
-        new RatchetAndClank1SceneDesc(7, "Quark's HQ, Umbris"),
-        new RatchetAndClank1SceneDesc(8, "Fort Krontos, Batalia"),
-        new RatchetAndClank1SceneDesc(9, "Blarg Depot, Gaspar"),
-        new RatchetAndClank1SceneDesc(10, "Kogor Refinery, Orxon"),
-        new RatchetAndClank1SceneDesc(11, "Jowai Resort, Pokitaru"),
-        new RatchetAndClank1SceneDesc(12, "Bomb Factory, Hoven"),
-        new RatchetAndClank1SceneDesc(13, "Gemlik Base, Oltanis Orbit"),
-        new RatchetAndClank1SceneDesc(14, "Gorda City Ruins, Oltanis"),
-        new RatchetAndClank1SceneDesc(15, "Robot Plant, Quartu"),
-        new RatchetAndClank1SceneDesc(16, "Gadgetron Site, Kalebo III"),
-        new RatchetAndClank1SceneDesc(17, "Drek's Fleet, Veldin Orbit"),
-        new RatchetAndClank1SceneDesc(18, "Kyzil Plateau, Veldin"),
+        new RatchetAndClank1SceneDesc(0, "Veldin (Tutorial)"),
+        new RatchetAndClank1SceneDesc(1, "Novalis"),
+        new RatchetAndClank1SceneDesc(2, "Aridia"),
+        new RatchetAndClank1SceneDesc(3, "Metropolis"),
+        new RatchetAndClank1SceneDesc(4, "Eudora"),
+        new RatchetAndClank1SceneDesc(5, "Blackwater City"),
+        new RatchetAndClank1SceneDesc(6, "Nebula G34"),
+        new RatchetAndClank1SceneDesc(7, "Quark's HQ"),
+        new RatchetAndClank1SceneDesc(8, "Batalia"),
+        new RatchetAndClank1SceneDesc(9, "Gaspar"),
+        new RatchetAndClank1SceneDesc(10, "Orxon"),
+        new RatchetAndClank1SceneDesc(11, "Pokitaru"),
+        new RatchetAndClank1SceneDesc(12, "Hoven"),
+        new RatchetAndClank1SceneDesc(13, "Oltanis Orbit"),
+        new RatchetAndClank1SceneDesc(14, "Oltanis"),
+        new RatchetAndClank1SceneDesc(15, "Quartu"),
+        new RatchetAndClank1SceneDesc(16, "Kalebo III"),
+        new RatchetAndClank1SceneDesc(17, "Veldin Orbit"),
+        new RatchetAndClank1SceneDesc(18, "Veldin"),
     ],
 };
 
@@ -754,44 +854,200 @@ export const sceneGroup2: SceneGroup = {
     name: "Ratchet & Clank: Going Commando",
     hidden: !IS_DEVELOPMENT,
     sceneDescs: [
-        new RatchetAndClank2SceneDesc(0, null, "Flying Lab, Aranos (Tutorial)"),
-        new RatchetAndClank2SceneDesc(1, 0, "Megacorp Outlet, Oozla"),
-        new RatchetAndClank2SceneDesc(1, 1, "Megacorp Outlet, Oozla (Secret boss)"),
+        "Main Game",
+        new RatchetAndClank2SceneDesc(0, null, "Aranos (Tutorial)"),
+        new RatchetAndClank2SceneDesc(1, 0, "Oozla"),
+        new RatchetAndClank2SceneDesc(1, 1, "Oozla (Secret boss)"),
         new RatchetAndClank2SceneDesc(25, null, "Wupash Nebula (Space)"),
-        new RatchetAndClank2SceneDesc(2, 0, "Maktar Resort, Maktar Nebula"),
-        new RatchetAndClank2SceneDesc(2, 1, "Maktar Resort, Maktar Nebula (Arena)"),
-        new RatchetAndClank2SceneDesc(26, null, "Jamming Array, Maktar Nebula"),
-        new RatchetAndClank2SceneDesc(3, null, "Megapolis, Endako"),
-        new RatchetAndClank2SceneDesc(4, 0, "Vukovar Canyon, Barlow"),
-        new RatchetAndClank2SceneDesc(4, 1, "Vukovar Canyon, Barlow (Race)"),
-        new RatchetAndClank2SceneDesc(5, null, "Thug Rendezvous, Feltzin System (Space)"),
-        new RatchetAndClank2SceneDesc(6, null, "Canal City, Notak"),
+        new RatchetAndClank2SceneDesc(2, 0, "Maktar Resort"),
+        new RatchetAndClank2SceneDesc(2, 1, "Maktar Resort (Arena)"),
+        new RatchetAndClank2SceneDesc(26, null, "Jamming Array"),
+        new RatchetAndClank2SceneDesc(3, null, "Megapolis"),
+        new RatchetAndClank2SceneDesc(4, 0, "Barlow"),
+        new RatchetAndClank2SceneDesc(4, 1, "Barlow (Race)"),
+        new RatchetAndClank2SceneDesc(5, null, "Thug Rendezvous (Space)"),
+        new RatchetAndClank2SceneDesc(6, null, "Notak"),
         new RatchetAndClank2SceneDesc(24, null, "Slip Cognito's Ship Shack"),
-        new RatchetAndClank2SceneDesc(7, 0, "Frozen Base, Siberius"),
-        new RatchetAndClank2SceneDesc(7, 1, "Frozen Base, Siberius (Chase sequence)"),
-        new RatchetAndClank2SceneDesc(8, 0, "Mining Area, Tabora (Tunnel)"),
-        new RatchetAndClank2SceneDesc(8, 1, "Mining Area, Tabora"),
-        new RatchetAndClank2SceneDesc(9, null, "Testing Facility, Dobbo"),
+        new RatchetAndClank2SceneDesc(7, 0, "Siberius"),
+        new RatchetAndClank2SceneDesc(7, 1, "Siberius (Chase sequence)"),
+        new RatchetAndClank2SceneDesc(8, 0, "Tabora (Tunnel)"),
+        new RatchetAndClank2SceneDesc(8, 1, "Tabora"),
+        new RatchetAndClank2SceneDesc(9, null, "Dobbo"),
         new RatchetAndClank2SceneDesc(22, null, "Dobbo Orbit (Giant Clank)"),
-        new RatchetAndClank2SceneDesc(10, null, "Deep Space Disposal, Hrugis Cloud (Space)"),
-        new RatchetAndClank2SceneDesc(11, 0, "Megacorp Games, Joba"),
-        new RatchetAndClank2SceneDesc(11, 1, "Megacorp Games, Joba (Race & Arena)"),
-        new RatchetAndClank2SceneDesc(12, null, "Megacorp Armory, Todano"),
-        new RatchetAndClank2SceneDesc(13, null, "Silver City, Boldan"),
-        new RatchetAndClank2SceneDesc(14, null, "Flying Lab, Aranos"),
-        new RatchetAndClank2SceneDesc(15, null, "Thugs-4-Less Fleet, Gorn (Space)"),
-        new RatchetAndClank2SceneDesc(16, null, "Thug HQ, Snivelak"),
-        new RatchetAndClank2SceneDesc(17, null, "Distribution Facility, Smolg"),
-        new RatchetAndClank2SceneDesc(18, null, "Allgon City, Damosel"),
+        new RatchetAndClank2SceneDesc(10, null, "Deep Space Disposal (Space)"),
+        new RatchetAndClank2SceneDesc(11, 0, "Joba"),
+        new RatchetAndClank2SceneDesc(11, 1, "Joba (Race & arena)"),
+        new RatchetAndClank2SceneDesc(12, null, "Todano"),
+        new RatchetAndClank2SceneDesc(13, null, "Boldan"),
+        new RatchetAndClank2SceneDesc(14, null, "Aranos"),
+        new RatchetAndClank2SceneDesc(15, null, "Thugs-4-Less Fleet (Space)"),
+        new RatchetAndClank2SceneDesc(16, null, "Snivelak"),
+        new RatchetAndClank2SceneDesc(17, null, "Smolg"),
+        new RatchetAndClank2SceneDesc(18, null, "Damosel"),
         new RatchetAndClank2SceneDesc(23, null, "Damosel Orbit (Giant Clank)"),
-        new RatchetAndClank2SceneDesc(19, 0, "Tundor Wastes, Grelbin"),
-        new RatchetAndClank2SceneDesc(19, 1, "Tundor Wastes, Grelbin (Glider)"),
-        new RatchetAndClank2SceneDesc(19, 2, "Tundor Wastes, Grelbin (Hypnomatic)"),
-        new RatchetAndClank2SceneDesc(20, 0, "Protopet Factory, Yeedil"),
-        new RatchetAndClank2SceneDesc(20, 1, "Protopet Factory, Yeedil (Interior)"),
-        new RatchetAndClank2SceneDesc(20, 2, "Protopet Factory, Yeedil (Final boss)"),
-        new RatchetAndClank2SceneDesc(30, null, "Insomniac Museum, Burbank"),
-        // there is no 21 or 27-29
+        new RatchetAndClank2SceneDesc(19, 0, "Grelbin"),
+        new RatchetAndClank2SceneDesc(19, 1, "Grelbin (Glider)"),
+        new RatchetAndClank2SceneDesc(19, 2, "Grelbin (Hypnomatic)"),
+        new RatchetAndClank2SceneDesc(20, 0, "Yeedil"),
+        new RatchetAndClank2SceneDesc(20, 1, "Yeedil (Interior)"),
+        new RatchetAndClank2SceneDesc(20, 2, "Yeedil (Boss)"),
 
+        "Extras",
+        new RatchetAndClank2SceneDesc(30, null, "Insomniac Museum, Burbank"),
+    ],
+};
+
+export const sceneGroup3: SceneGroup = {
+    id: "RatchetAndClank3",
+    name: "Ratchet & Clank: Up Your Arsenal",
+    hidden: !IS_DEVELOPMENT,
+    sceneDescs: [
+        "Main Game",
+        new RatchetAndClank3SceneDesc(1, null, "Veldin"),
+        new RatchetAndClank3SceneDesc(2, null, "Florana"),
+        new RatchetAndClank3SceneDesc(3, null, "Starship Pheonix"),
+        new RatchetAndClank3SceneDesc(6, null, "Starship Pheonix (Under attack)"),
+        new RatchetAndClank3SceneDesc(4, 0, "Marcadia"),
+        new RatchetAndClank3SceneDesc(4, 1, "Marcadia (Refractor)"),
+        new RatchetAndClank3SceneDesc(4, 2, "Marcadia (Ranger missions)"),
+        new RatchetAndClank3SceneDesc(7, 0, "Annihilation Nation (Gauntlet)"),
+        new RatchetAndClank3SceneDesc(7, 1, "Annihilation Nation (Mission select & arena)"),
+        new RatchetAndClank3SceneDesc(8, null, "Aquatos"),
+        new RatchetAndClank3SceneDesc(27, null, "Aquatos (Tyhrra-Guise / Clank)"),
+        new RatchetAndClank3SceneDesc(28, null, "Aquatos (Sewer Crystals)"),
+        new RatchetAndClank3SceneDesc(9, 0, "Tyhrranosis (First visit)"),
+        new RatchetAndClank3SceneDesc(9, 2, "Tyhrranosis"),
+        new RatchetAndClank3SceneDesc(9, 1, "Tyhrranosis (Boss)"),
+        new RatchetAndClank3SceneDesc(29, null, "Tyhrranosis (Ranger Missions)"),
+        new RatchetAndClank3SceneDesc(5, null, "Daxx"),
+        new RatchetAndClank3SceneDesc(11, null, "Obani Gemini"),
+        new RatchetAndClank3SceneDesc(23, null, "Holostar Studios (Clank)"),
+        new RatchetAndClank3SceneDesc(13, null, "Holostar Studios (Ratchet)"),
+        new RatchetAndClank3SceneDesc(12, null, "Blackwater City (Ranger missions)"),
+        new RatchetAndClank3SceneDesc(21, null, "Obani Draco"),
+        new RatchetAndClank3SceneDesc(10, 0, "Zeldrin Starport"),
+        new RatchetAndClank3SceneDesc(10, 1, "Zeldrin Starport (The Leviathan)"),
+        new RatchetAndClank3SceneDesc(10, 2, "Zeldrin Starport (Cutscene)"),
+        new RatchetAndClank3SceneDesc(16, null, "Metropolis"),
+        new RatchetAndClank3SceneDesc(26, null, "Metropolis (Ranger missions)"),
+        new RatchetAndClank3SceneDesc(17, null, "Zeldrin"),
+        new RatchetAndClank3SceneDesc(18, null, "Aridia"),
+        new RatchetAndClank3SceneDesc(19, 0, "Quark's Hideout"),
+        new RatchetAndClank3SceneDesc(19, 1, "Quark's Hideout (Clank)"),
+        new RatchetAndClank3SceneDesc(14, null, "Koros"),
+        new RatchetAndClank3SceneDesc(22, null, "Mylon"),
+        new RatchetAndClank3SceneDesc(20, null, "Mylon (Boss)"),
+
+        "Vid-Comics",
+        new RatchetAndClank3SceneDesc(31, null, "Vid-Comic 1: Booty is in the Eye of the Beholder"),
+        new RatchetAndClank3SceneDesc(33, null, "Vid-Comic 2: Arriba Amoeba!"),
+        new RatchetAndClank3SceneDesc(34, null, "Vid-Comic 3: Shadow of the Robot"),
+        new RatchetAndClank3SceneDesc(32, null, "Vid-Comic 4: Deja Q All Over Again"),
+        new RatchetAndClank3SceneDesc(35, null, "Vid-Comic 5: The Shaming of the Q"),
+
+        "Multiplayer",
+        new RatchetAndClank3SceneDesc(40, null, "MP Bakisi Isles"),
+        new RatchetAndClank3SceneDesc(41, null, "MP Hoven Gorge"),
+        new RatchetAndClank3SceneDesc(42, null, "MP Outpost X12"),
+        new RatchetAndClank3SceneDesc(43, null, "MP Korgon Outpost"),
+        new RatchetAndClank3SceneDesc(44, null, "MP Metropolis"),
+        new RatchetAndClank3SceneDesc(45, null, "MP Blackwater City"),
+        new RatchetAndClank3SceneDesc(46, null, "MP Command Center"),
+        new RatchetAndClank3SceneDesc(47, null, "MP Blackwater Docks"),
+        new RatchetAndClank3SceneDesc(48, null, "MP Aquatos Sewers"),
+        new RatchetAndClank3SceneDesc(49, null, "MP Marcadia Palace"),
+
+        "Multiplayer (Splitscreen)",
+        new RatchetAndClank3SceneDesc(SPLITSCREEN_RAC3 + 40, null, "Splitscreen MP Bakisi Isles"),
+        new RatchetAndClank3SceneDesc(SPLITSCREEN_RAC3 + 41, null, "Splitscreen MP Hoven Gorge"),
+        new RatchetAndClank3SceneDesc(SPLITSCREEN_RAC3 + 42, null, "Splitscreen MP Outpost X12"),
+        new RatchetAndClank3SceneDesc(SPLITSCREEN_RAC3 + 43, null, "Splitscreen MP Korgon Outpost"),
+        new RatchetAndClank3SceneDesc(SPLITSCREEN_RAC3 + 44, null, "Splitscreen MP Metropolis"),
+        new RatchetAndClank3SceneDesc(SPLITSCREEN_RAC3 + 45, null, "Splitscreen MP Blackwater City"),
+
+        "Extras",
+        new RatchetAndClank3SceneDesc(24, 0, "Insomniac Museum"),
+        new RatchetAndClank3SceneDesc(24, 1, "Insomniac Museum (Florana Race)"),
+        new RatchetAndClank3SceneDesc(30, null, "Vid-Comic 0: Unnamed Prototype"),
+        new RatchetAndClank3SceneDesc(36, null, "Vid-Comic 1: Special Edition"),
+
+        // broken levels:
+        // 39: a menu?
+        // 8_1 and 8_2: misconfigured chunks with nothing in them
+    ],
+};
+
+export const sceneGroup4: SceneGroup = {
+    id: "RatchetAndClank4",
+    name: "Ratchet: Deadlocked",
+    hidden: !IS_DEVELOPMENT,
+    sceneDescs: [
+        "Main Game",
+        new RatchetAndClank4SceneDesc(41, 0, "MP Battledome Tower (Tutorial)"),
+        new RatchetAndClank4SceneDesc(1, 0, "DreadZone Station (Hub)"),
+        new RatchetAndClank4SceneDesc(1, 1, "DreadZone Station (Arenas)"),
+        new RatchetAndClank4SceneDesc(2, null, "Catacrom Graveyard"),
+        new RatchetAndClank4SceneDesc(4, null, "Sarathos Swamp"),
+        new RatchetAndClank4SceneDesc(5, 0, "Dark Cathedral"),
+        new RatchetAndClank4SceneDesc(5, 1, "Dark Cathedral (Interior)"),
+        new RatchetAndClank4SceneDesc(6, null, "Temple of Shaar"),
+        new RatchetAndClank4SceneDesc(7, null, "Valix Lighthouse"),
+        new RatchetAndClank4SceneDesc(8, null, "Mining Facility"),
+        new RatchetAndClank4SceneDesc(10, null, "Torval Ruins"),
+        new RatchetAndClank4SceneDesc(11, null, "Tempus Station"),
+        new RatchetAndClank4SceneDesc(13, null, "Maraxus Prison"),
+        new RatchetAndClank4SceneDesc(14, 0, "Ghost Station"),
+        new RatchetAndClank4SceneDesc(14, 1, "Ghost Station (Interior)"),
+        new RatchetAndClank4SceneDesc(15, 0, "DreadZone Station (Finale)"),
+        new RatchetAndClank4SceneDesc(15, 1, "DreadZone Station (Boss)"),
+
+        "Main Game (Splitscreen Coop)",
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 41, 0, "Splitscreen MP Battledome Tower (Tutorial)"),
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 1, 0, "Splitscreen DreadZone Station (Hub)"),
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 1, 1, "Splitscreen DreadZone Station (Arenas)"),
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 2, null, "Splitscreen Catacrom Graveyard"),
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 4, null, "Splitscreen Sarathos Swamp"),
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 5, 0, "Splitscreen Dark Cathedral"),
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 5, 1, "Splitscreen Dark Cathedral (Interior)"),
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 6, null, "Splitscreen Temple of Shaar"),
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 7, null, "Splitscreen Valix Lighthouse"),
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 8, null, "Splitscreen Mining Facility"),
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 10, null, "Splitscreen Torval Ruins"),
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 11, null, "Splitscreen Tempus Station"),
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 13, null, "Splitscreen Maraxus Prison"),
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 14, 0, "Splitscreen Ghost Station"),
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 14, 1, "Splitscreen Ghost Station (Interior)"),
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 15, 0, "Splitscreen DreadZone Station (Finale)"),
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 15, 1, "Splitscreen DreadZone Station (Boss)"),
+
+        "Multiplayer",
+        new RatchetAndClank4SceneDesc(41, 1, "MP Battledome Tower"),
+        new RatchetAndClank4SceneDesc(42, null, "MP Catacrom Graveyard"),
+        new RatchetAndClank4SceneDesc(44, null, "MP Sarathos Swamp"),
+        new RatchetAndClank4SceneDesc(45, 0, "MP Dark Cathedral"),
+        new RatchetAndClank4SceneDesc(46, null, "MP Temple of Shaar"),
+        new RatchetAndClank4SceneDesc(47, null, "MP Valix Lighthouse"),
+        new RatchetAndClank4SceneDesc(48, null, "MP Mining Facility"),
+        new RatchetAndClank4SceneDesc(50, null, "MP Torval Ruins"),
+        new RatchetAndClank4SceneDesc(51, null, "MP Tempus Station"),
+        new RatchetAndClank4SceneDesc(53, null, "MP Maraxus Prison"),
+        new RatchetAndClank4SceneDesc(54, 0, "MP Ghost Station"),
+
+        "Multiplayer",
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 41, 1, "Splitscreen MP Battledome Tower"),
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 42, null, "Splitscreen MP Catacrom Graveyard"),
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 44, null, "Splitscreen MP Sarathos Swamp"),
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 45, 0, "Splitscreen MP Dark Cathedral"),
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 46, null, "Splitscreen MP Temple of Shaar"),
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 47, null, "Splitscreen MP Valix Lighthouse"),
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 48, null, "Splitscreen MP Mining Facility"),
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 50, null, "Splitscreen MP Torval Ruins"),
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 51, null, "Splitscreen MP Tempus Station"),
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 53, null, "Splitscreen MP Maraxus Prison"),
+        new RatchetAndClank4SceneDesc(SPLITSCREEN_RAC4 + 54, 0, "Splitscreen MP Ghost Station"),
+
+        // broken levels:
+        // 0: a menu?
+        // 45_1, 54_1, 65_1, 74_1: misconfigured chunks
     ],
 };

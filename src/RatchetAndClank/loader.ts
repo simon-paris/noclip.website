@@ -11,7 +11,7 @@ import { Collision, Sky, Tfrag } from "./bin-core";
 import { LevelCoreHeader } from "./bin-index";
 import { DataFetcher } from "../DataFetcher";
 import { WadDecompressor } from "./decompress";
-import { mat4, vec3 } from "gl-matrix";
+import { assert } from "../util";
 
 export interface LevelResources {
     levelCoreHeader: LevelCoreHeader | null,
@@ -43,6 +43,7 @@ export interface LevelResources {
     mobyClassTextureIndices: Map<number, number[]> | null,
     mobyInstances: MobyInstance[] | null,
     mobyInstancesByOClass: Map<number, MobyInstance[]> | null,
+    mobyUniqueMissionIds: Set<number> | null,
 
     shrubTextures: PaletteTexture[] | null,
     shrubOClasses: number[] | null,
@@ -78,16 +79,18 @@ async function decompressWadPromise(dataViewPromise: Promise<DataViewExt>): Prom
 type BinaryFilePromises = {
     coreDataFilePromise: Promise<DataViewExt>,
     gameplayFilePromise: Promise<DataViewExt>,
+    artInstancesFilePromise: Promise<DataViewExt | null>,
     coreIndexFilePromise: Promise<DataViewExt>,
     gsRamFilePromise: Promise<DataViewExt>,
     chunkTfragFilePromise: Promise<DataViewExt> | null,
     chunkCollisionFilePromise: Promise<DataViewExt> | null,
 }
-export function loadFilesFromNetwork(dataFetcher: DataFetcher, basePath: string, chunkNumber: number | null): BinaryFilePromises {
+export function loadFilesFromNetwork(dataFetcher: DataFetcher, basePath: string, gn: GN, chunkNumber: number | null): BinaryFilePromises {
     // load binary files
     return {
         coreDataFilePromise: decompressWadPromise(checkNotEmpty(toDataViewExt(dataFetcher.fetchData(`${basePath}_core.wad`)))),
         gameplayFilePromise: decompressWadPromise(checkNotEmpty(toDataViewExt(dataFetcher.fetchData(`${basePath}_gameplay.wad`)))),
+        artInstancesFilePromise: gn === 4 ? decompressWadPromise(checkNotEmpty(toDataViewExt(dataFetcher.fetchData(`${basePath}_art_instances.wad`)))) : Promise.resolve(null),
         coreIndexFilePromise: checkNotEmpty(toDataViewExt(dataFetcher.fetchData(`${basePath}_index.bin`))),
         gsRamFilePromise: checkNotEmpty(toDataViewExt(dataFetcher.fetchData(`${basePath}_gs.bin`))),
         chunkTfragFilePromise: chunkNumber !== null ? decompressWadPromise(checkNotEmpty(toDataViewExt(dataFetcher.fetchData(`${basePath}_${chunkNumber}_tfrag.wad`)))) : null,
@@ -96,16 +99,20 @@ export function loadFilesFromNetwork(dataFetcher: DataFetcher, basePath: string,
 }
 
 export function load(gn: GN, filterChunk: number | null, out: LevelResources, filePromises: BinaryFilePromises) {
-    const { coreDataFilePromise, gameplayFilePromise, coreIndexFilePromise, gsRamFilePromise, chunkTfragFilePromise, chunkCollisionFilePromise } = filePromises;
+    const { coreDataFilePromise, gameplayFilePromise, artInstancesFilePromise, coreIndexFilePromise, gsRamFilePromise, chunkTfragFilePromise, chunkCollisionFilePromise } = filePromises;
+
+    // instance data and tie rgbas are in the gameplay file in rac123, but rac4 moves them to a separate file
+    if (gn === 4) assert(artInstancesFilePromise !== null);
+    const gameplayOrArtFilePromise = (gn === 4 ? artInstancesFilePromise : gameplayFilePromise) as Promise<DataViewExt>;
 
     // load metadata
-    const gameplayHeaderPromise = loadGameplayHeader(gn, out, gameplayFilePromise);
+    const gameplayHeaderPromise = loadGameplayHeader(gn, out, gameplayFilePromise, artInstancesFilePromise);
     const indexDataPromise = loadIndexData(gn, out, coreIndexFilePromise);
     const levelSettingsPromise = loadLevelSettings(gn, out, gameplayFilePromise, gameplayHeaderPromise);
 
     // load assets
-    const miscGameplayDataPromise = loadMiscGameplayData(gn, out, gameplayFilePromise, gameplayHeaderPromise);
-    const instanceDataPromise = loadInstanceData(gn, out, filterChunk, gameplayFilePromise, gameplayHeaderPromise, levelSettingsPromise);
+    const miscGameplayDataPromise = loadMiscGameplayData(gn, out, gameplayFilePromise, artInstancesFilePromise, gameplayHeaderPromise);
+    const instanceDataPromise = loadInstanceData(gn, out, filterChunk, gameplayFilePromise, gameplayOrArtFilePromise, gameplayHeaderPromise, levelSettingsPromise);
     let tfragDataPromise: Promise<void>;
     if (chunkTfragFilePromise) {
         tfragDataPromise = loadChunkTfragData(gn, out, chunkTfragFilePromise);
@@ -123,7 +130,7 @@ export function load(gn: GN, filterChunk: number | null, out: LevelResources, fi
         collisionDataPromise = loadCollisionData(gn, out, coreDataFilePromise, indexDataPromise);
     }
     const skyDataPromise = loadSkyData(gn, out, coreDataFilePromise, indexDataPromise);
-    const tieAmbientRgbasPromise = loadTieAmbientRgbas(gn, out, gameplayFilePromise, gameplayHeaderPromise);
+    const tieAmbientRgbasPromise = loadTieAmbientRgbas(gn, out, gameplayOrArtFilePromise, gameplayHeaderPromise);
 
     return Promise.all([
         miscGameplayDataPromise,
@@ -184,31 +191,36 @@ export async function loadIndexData(gn: GN, out: LevelResources, coreIndexFilePr
     };
 }
 
-async function loadGameplayHeader(gn: GN, out: LevelResources, gameplayFilePromise: Promise<DataViewExt>) {
+async function loadGameplayHeader(gn: GN, out: LevelResources, gameplayFilePromise: Promise<DataViewExt>, artInstancesFilePromise: Promise<DataViewExt | null>) {
     const gameplayFile = await gameplayFilePromise;
-    const gameplayHeader = readGameplayHeader(gn, gameplayFile);
+    const artFile = await artInstancesFilePromise;
+    const gameplayHeader = readGameplayHeader(gn, gameplayFile, artFile);
     out.gameplayHeader = gameplayHeader;
     return gameplayHeader;
 }
 
-async function loadInstanceData(gn: GN, out: LevelResources, filterChunk: number | null, gameplayFilePromise: Promise<DataViewExt>, gameplayHeaderPromise: Promise<GameplayHeader>, levelSettingsPromise: Promise<LevelSettings>) {
-    const [gameplayFile, gameplayHeader, levelSettings] = await Promise.all([gameplayFilePromise, gameplayHeaderPromise, levelSettingsPromise]);
+async function loadInstanceData(gn: GN, out: LevelResources, filterChunk: number | null, gameplayFilePromise: Promise<DataViewExt>, gameplayOrArtFilePromise: Promise<DataViewExt>, gameplayHeaderPromise: Promise<GameplayHeader>, levelSettingsPromise: Promise<LevelSettings>) {
+    const [gameplayFile, gameplayOrArtFile, gameplayHeader, levelSettings] = await Promise.all([gameplayFilePromise, gameplayOrArtFilePromise, gameplayHeaderPromise, levelSettingsPromise]);
+
+    assert(gameplayOrArtFile !== null);
 
     const chunkPlanes = levelSettings.chunkPlanes;
 
-    out.tieOClasses = readClassPositionBlock(gameplayFile.subview(gameplayHeader.tieClasses));
-    let tieInstances = readInstanceBlock(gameplayFile.subview(gameplayHeader.tieInstances), SIZEOF_TIE_INSTANCE(gn), (view, i) => readTieInstance(gn, view, i)).instances;
+    out.tieOClasses = readClassPositionBlock(gameplayOrArtFile.subview(gameplayHeader.tieClasses));
+    let tieInstances = readInstanceBlock(gameplayOrArtFile.subview(gameplayHeader.tieInstances), SIZEOF_TIE_INSTANCE(gn), (view, i) => readTieInstance(gn, view, i)).instances;
     tieInstances = filterInstancesByChunkPlane(filterChunk, tieInstances, chunkPlanes);
     out.tieInstances = tieInstances;
     out.tieInstancesByOClass = makeInstanceOClassMap(tieInstances);
 
     out.mobyOClasses = readClassPositionBlock(gameplayFile.subview(gameplayHeader.mobyClasses));
     const mobyInstances = readInstanceBlock(gameplayFile.subview(gameplayHeader.mobyInstances), SIZEOF_MOBY_INSTANCE(gn), (view, i) => readMobyInstance(gn, view)).instances;
+    out.mobyUniqueMissionIds = new Set();
+    for (let i = 0; i < mobyInstances.length; i++) out.mobyUniqueMissionIds.add(mobyInstances[i].mission);
     out.mobyInstances = filterMobyInstancesByChunkPlane(filterChunk, mobyInstances, chunkPlanes);
     out.mobyInstancesByOClass = makeInstanceOClassMap(out.mobyInstances);
 
-    out.shrubOClasses = readClassPositionBlock(gameplayFile.subview(gameplayHeader.shrubClasses));
-    let shrubInstances = readInstanceBlock(gameplayFile.subview(gameplayHeader.shrubInstances), SIZEOF_SHRUB_INSTANCE, readShrubInstance).instances;
+    out.shrubOClasses = readClassPositionBlock(gameplayOrArtFile.subview(gameplayHeader.shrubClasses));
+    let shrubInstances = readInstanceBlock(gameplayOrArtFile.subview(gameplayHeader.shrubInstances), SIZEOF_SHRUB_INSTANCE, readShrubInstance).instances;
     shrubInstances = filterInstancesByChunkPlane(filterChunk, shrubInstances, chunkPlanes);
     out.shrubInstances = shrubInstances;
     out.shrubInstancesByOClass = makeInstanceOClassMap(shrubInstances);
@@ -243,7 +255,7 @@ async function loadTfragData(gn: GN, out: LevelResources, coreDataFilePromise: P
 
     const tfragBlockHeader = readTfragBlockHeader(coreDataFile.subview(indexData.levelCoreHeader.tfrags));
     const tfragHeaders = coreDataFile.subdivide(tfragBlockHeader.tableOffset, tfragBlockHeader.tfragCount, SIZEOF_TFRAG_HEADER).map(view => readTfragHeader(view));
-    out.tfrags = tfragHeaders.map(tfragHeader => readTfrag(coreDataFile.subview(tfragBlockHeader.tableOffset + tfragHeader.data), tfragHeader));
+    out.tfrags = tfragHeaders.map((tfragHeader, i) => readTfrag(coreDataFile.subview(tfragBlockHeader.tableOffset + tfragHeader.data), tfragHeader, i));
 }
 
 async function loadChunkTfragData(gn: GN, out: LevelResources, chunkTfragFilePromise: Promise<DataViewExt | null>) {
@@ -252,7 +264,7 @@ async function loadChunkTfragData(gn: GN, out: LevelResources, chunkTfragFilePro
 
     const tfragBlockHeader = readTfragBlockHeader(chunkTfragFile);
     const tfragHeaders = chunkTfragFile.subdivide(tfragBlockHeader.tableOffset, tfragBlockHeader.tfragCount, SIZEOF_TFRAG_HEADER).map(view => readTfragHeader(view));
-    out.tfrags = tfragHeaders.map(tfragHeader => readTfrag(chunkTfragFile.subview(tfragBlockHeader.tableOffset + tfragHeader.data), tfragHeader));
+    out.tfrags = tfragHeaders.map((tfragHeader, i) => readTfrag(chunkTfragFile.subview(tfragBlockHeader.tableOffset + tfragHeader.data), tfragHeader, i));
 }
 
 async function loadTextureData(gn: GN, out: LevelResources, coreDataFilePromise: Promise<DataViewExt>, gsRamFilePromise: Promise<DataViewExt>, indexDataPromise: Promise<LoadIndexDataResult>) {
@@ -272,22 +284,35 @@ async function loadLevelSettings(gn: GN, out: LevelResources, gameplayFilePromis
     return levelSettings;
 }
 
-async function loadMiscGameplayData(gn: GN, out: LevelResources, gameplayFilePromise: Promise<DataViewExt>, gameplayHeaderPromise: Promise<GameplayHeader>) {
-    const [gameplayFile, gameplayHeader] = await Promise.all([gameplayFilePromise, gameplayHeaderPromise]);
+async function loadMiscGameplayData(gn: GN, out: LevelResources, gameplayFilePromise: Promise<DataViewExt>, artInstancesFilePromise: Promise<DataViewExt | null>, gameplayHeaderPromise: Promise<GameplayHeader>) {
+    const [gameplayFile, artInstancesFile, gameplayHeader] = await Promise.all([gameplayFilePromise, artInstancesFilePromise, gameplayHeaderPromise]);
 
     out.grindPaths = readGrindPathBlock(gameplayFile.subview(gameplayHeader.grindPaths));
     out.paths = readPathBlock(gameplayFile.subview(gameplayHeader.paths));
 
-    out.directionLights = readInstanceBlock(gameplayFile.subview(gameplayHeader.directionLightInstances), SIZEOF_DIRECTION_LIGHT_INSTANCE, readDirectionLightInstance).instances;
+    const fileContainingDirectionLights = gn === 4 ? artInstancesFile : gameplayFile;
+    assert(fileContainingDirectionLights !== null);
+    out.directionLights = readInstanceBlock(fileContainingDirectionLights.subview(gameplayHeader.directionLightInstances), SIZEOF_DIRECTION_LIGHT_INSTANCE, readDirectionLightInstance).instances;
+
     out.pointLights = readInstanceBlock(gameplayFile.subview(gameplayHeader.pointLightInstances), SIZEOF_POINT_LIGHT_INSTANCE, readPointLightInstance).instances;
 }
 
 export async function loadSkyData(gn: GN, out: LevelResources, coreDataFilePromise: Promise<DataViewExt>, indexDataPromise: Promise<LoadIndexDataResult>) {
     const [coreDataFile, indexData] = await Promise.all([coreDataFilePromise, indexDataPromise]);
 
-    const sky = readSky(coreDataFile.subview(indexData.levelCoreHeader.sky));
+    if (!indexData.levelCoreHeader.sky) {
+        out.sky = {
+            header: null,
+            shells: [],
+            textureEntries: []
+        }
+        out.skyTextures = [];
+        return;
+    }
+
+    const sky = readSky(gn, coreDataFile.subview(indexData.levelCoreHeader.sky));
     out.sky = sky;
-    out.skyTextures = sky.textureEntries.map((textureEntry, i) => readPalette8TextureSky(coreDataFile.subview(indexData.levelCoreHeader.sky), sky.header, textureEntry, i));
+    out.skyTextures = sky.textureEntries.map((textureEntry, i) => readPalette8TextureSky(coreDataFile.subview(indexData.levelCoreHeader.sky), sky.header!, textureEntry, i));
 }
 
 export async function loadCollisionData(gn: GN, out: LevelResources, coreDataFilePromise: Promise<DataViewExt>, indexDataPromise: Promise<LoadIndexDataResult>) {
@@ -307,10 +332,10 @@ export async function loadChunkCollisionData(gn: GN, out: LevelResources, chunkC
     };
 }
 
-export async function loadTieAmbientRgbas(gn: GN, out: LevelResources, gameplayFilePromise: Promise<DataViewExt>, gameplayHeaderPromise: Promise<GameplayHeader>) {
-    const [gameplayFile, gameplayHeader] = await Promise.all([gameplayFilePromise, gameplayHeaderPromise]);
+export async function loadTieAmbientRgbas(gn: GN, out: LevelResources, gameplayOrArtFilePromise: Promise<DataViewExt>, gameplayHeaderPromise: Promise<GameplayHeader>) {
+    const [gameplayOrArtFile, gameplayHeader] = await Promise.all([gameplayOrArtFilePromise, gameplayHeaderPromise]);
 
     if (gn <= 1) return;
 
-    out.tieAmbientRgbas = readTieAmbientRgbaBlock(gameplayFile.subview(gameplayHeader.tieAmbientRgbas));
+    out.tieAmbientRgbas = readTieAmbientRgbaBlock(gameplayOrArtFile.subview(gameplayHeader.tieAmbientRgbas));
 }
