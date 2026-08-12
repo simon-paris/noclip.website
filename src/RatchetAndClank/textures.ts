@@ -5,6 +5,7 @@ import { SkyHeader, SkyTextureEntry } from "./bin-core";
 import { TieAmbientRgbaBlock, TieInstance } from "./bin-gameplay";
 import { assert } from "../util";
 import { TextureEntry } from "./bin-index";
+import { GN } from "./utils";
 
 export interface PaletteTexture {
     name: string,
@@ -12,6 +13,7 @@ export interface PaletteTexture {
     pixels: Uint8Array,
     palette: Color[],
     hasAlpha: boolean,
+    swizzled: boolean,
 };
 
 export function readPalette8TextureWithPaletteInGsRam(textureEntry: TextureEntry, textureData: DataViewExt, gsRam: DataViewExt, ownerType: string, i: number): PaletteTexture {
@@ -25,6 +27,7 @@ export function readPalette8TextureWithPaletteInGsRam(textureEntry: TextureEntry
         pixels,
         palette: rgbaPalette,
         hasAlpha: paletteHasAlpha(pixels, rgbaPalette),
+        swizzled: false,
     };
 }
 
@@ -39,6 +42,7 @@ export function readPalette8TextureSky(skyView: DataViewExt, skyHeader: SkyHeade
         pixels,
         palette: rgbaPalette,
         hasAlpha: paletteHasAlpha(pixels, rgbaPalette),
+        swizzled: false,
     };
 }
 
@@ -82,6 +86,61 @@ function unpalettizeTexture(texture: PaletteTexture): Uint8Array {
         palettedPixels[i] = rgba.r | (rgba.g << 8) | (rgba.b << 16) | (rgba.a << 24);
     }
     return new Uint8Array(palettedPixels.buffer, palettedPixels.byteOffset, palettedPixels.byteLength);
+}
+
+export function swizzleAllTextures(gn: GN, textures: PaletteTexture[]) {
+    for (let i = 0; i < textures.length; i++) {
+        swizzleTexture(gn, textures[i]);
+    }
+}
+
+// Replaces the pixel array with an unswizzled copy. Idempotent.
+export function swizzleTexture(gn: GN, texture: PaletteTexture) {
+    if (gn !== 4) return;
+    if (texture.swizzled) return;
+
+    const width = texture.textureEntry.width;
+    const out = new Uint8Array(texture.pixels.length);
+    for (let i = 0; i < out.length; i++) {
+        let dest = swizzleMapPixelIndex(i, width);
+        if (dest > out.length) dest = out.length - 1;
+        out[dest] = texture.pixels[i];
+    }
+
+    texture.pixels = out;
+    texture.swizzled = true;
+}
+
+function swizzleMapPixelIndex(i: number, width: number) {
+    /*
+    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/core/texture.cpp#L467
+    */
+    let s = Math.trunc(i / (width * 2));
+    let r = 0;
+    if (s % 2 === 0)
+        r = s * 2;
+    else
+        r = (s - 1) * 2 + 1;
+
+    let q = Math.trunc((i % (width * 2)) / 32);
+
+    let m = i % 4;
+    let n = Math.trunc(i / 4) % 4;
+    let o = i % 2;
+    let p = Math.trunc(i / 16) % 2;
+
+    if (Math.trunc(s / 2) % 2 == 1)
+        p = 1 - p;
+
+    if (o == 0)
+        m = (m + p) % 4;
+    else
+        m = ((m - p) + 4) % 4;
+
+    let x = n + ((m + q * 4) * 4);
+    let y = r + (o * 2);
+
+    return (x % width) + (y * width);
 }
 
 // scale down texture by 2x using box filter

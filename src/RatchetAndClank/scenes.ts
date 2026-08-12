@@ -18,7 +18,7 @@ import { ShrubGeometry, ShrubRenderer } from "./render-shrub";
 import { colorNewFromRGBA, OpaqueBlack, White } from "../Color";
 import { SkyAnimationState, SkyGeometry, SkyRenderer } from "./render-sky";
 import { RatchetShaderLib } from "./shader-lib";
-import { createGfxTextureForPaletteTexture, createTextureAtlases, createTieRgbaTexture_Rac1, createTieRgbaTexture_Rac234, TextureAtlases } from "./textures";
+import { createGfxTextureForPaletteTexture, createTextureAtlases, createTieRgbaTexture_Rac1, createTieRgbaTexture_Rac234, swizzleAllTextures, TextureAtlases } from "./textures";
 import { CollisionGeometry, CollisionRenderer } from "./render-collision";
 import { IS_DEVELOPMENT } from "../BuildVersion";
 import { GfxDynamicBufferCache } from "../gfx/render/GfxRenderCache";
@@ -308,6 +308,8 @@ class RatchetAndClankScene implements SceneGfx {
         const { skyTextures } = this.levelResources;
         if (!skyTextures) return null;
 
+        swizzleAllTextures(this.gn, skyTextures);
+
         const gfxTextures: GfxTexture[] = [];
         for (let i = 0; i < skyTextures.length; i++) {
             const skyTexture = skyTextures[i];
@@ -347,6 +349,11 @@ class RatchetAndClankScene implements SceneGfx {
     getOrCreateAtlasTextures(): GfxSamplerBinding[] | null {
         const { tfragTextures, tieTextures, mobyTextures, shrubTextures } = this.levelResources;
         if (!tfragTextures || !tieTextures || !mobyTextures || !shrubTextures) return null;
+
+        swizzleAllTextures(this.gn, tfragTextures);
+        swizzleAllTextures(this.gn, tieTextures);
+        swizzleAllTextures(this.gn, mobyTextures);
+        swizzleAllTextures(this.gn, shrubTextures);
 
         if (!this.textures.textureAtlases) {
             this.textures.textureAtlases = createTextureAtlases(this.renderHelper.device, tfragTextures, tieTextures, mobyTextures, shrubTextures);
