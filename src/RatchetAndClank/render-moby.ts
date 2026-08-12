@@ -290,6 +290,12 @@ export class MobyGeometry {
                         // when it reaches the end of the list it will terminate the async process early and the
                         // in flight verts will be discarded
                         for (let j = 0; j < 9; j++) outputVerts.pop();
+
+                        if (packet.isBanglePacket) {
+                            bangleVertexCount -= 9;
+                        } else {
+                            mainMeshVertexCount -= 9;
+                        }
                         break;
                     }
 

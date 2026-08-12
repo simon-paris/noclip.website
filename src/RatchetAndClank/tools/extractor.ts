@@ -67,7 +67,6 @@ for (const levelSectors of tableOfContents.levelSectors) {
     if (!levelDescriptor) continue;
 
     const levelNum = levelDescriptor.id;
-    console.log(`Start level ${levelNum}`);
 
     const files: { name: string, compressed: boolean, size: number, decompressedSize: number }[] = [];
     async function extractLevelFile(name: string, buf: DataViewExt) {
@@ -79,35 +78,49 @@ for (const levelSectors of tableOfContents.levelSectors) {
         files.push({ name: filename, compressed, size: buf.byteLength, decompressedSize });
     }
 
-    // level
+    // entire level range
     const levelDataSector = levelDescriptor.data;
     const levelDataBuffer = await diskFns.readBytes(levelDescriptor.sector + levelDataSector.startSector, levelDataSector.sizeInSectors * SECTOR_SIZE);
     const levelData = new DataViewExt(levelDataBuffer, { littleEndian: true });
     const levelDataHeader = readLevelDataHeader(gn, levelData);
 
-    // level/gs
+    // level_n_gs
     const gsRam = levelData.subview(levelDataHeader.gsRam.offset, levelDataHeader.gsRam.size);
 
-    // level/gameplay
+    // level_n_gameplay
     const gameplaySector = levelDescriptor.gameplay;
     const gameplayFile = new DataViewExt(await diskFns.readWithSizeHeader(levelDescriptor.sector + gameplaySector.startSector, 0x3), { littleEndian: true });
 
-    // level/art
+    // level_n_gameplay_art
     const artSector = levelDescriptor.art
     let artInstancesFile: DataViewExt | null = null;
     if (artSector) {
         artInstancesFile = new DataViewExt(await diskFns.readWithSizeHeader(levelDescriptor.sector + artSector.startSector, 0x3), { littleEndian: true });
     }
 
-    // level/index
+    // level_n_gameplay_mission_n
+    const missions: { missionNumber: number, missionGameplayFile: DataViewExt }[] = [];
+    if (levelDescriptor.missions) {
+        for (let i = 0; i < 128; i++) {
+            if (levelDescriptor.missions.gameplay[i].startSector) {
+                // we only care about the gameplay file
+                // the data file seems to be a compressed copy of the gameplay file (???), and audio is not used
+                const missionGameplaySectors = levelDescriptor.missions.gameplay[i];
+                const missionGameplayFile = new DataViewExt(await diskFns.readBytes(levelDescriptor.sector + missionGameplaySectors.startSector, missionGameplaySectors.sizeInSectors * SECTOR_SIZE), { littleEndian: true });
+                missions.push({ missionNumber: i, missionGameplayFile });
+            }
+        }
+    }
+
+    // level_n_index
     const levelCoreIndex = levelData.subview(levelDataHeader.coreIndex.offset, levelDataHeader.coreIndex.size);
     const levelCoreHeader = await readLevelCoreHeader(levelCoreIndex);
 
-    // level/core
+    // level_n_core
     const levelCoreDataWad = levelData.subview(levelDataHeader.coreData.offset, levelDataHeader.coreData.size);
     assert(levelCoreDataWad.byteLength === levelCoreHeader.assetsCompressedSize);
 
-    // level/chunk_n
+    // level_n_n_tfrag and level_n_n_collision
     const chunkFiles: { tfragFile: DataViewExt, collisionFile: DataViewExt }[] = [];
     for (let chunkNum = 0; chunkNum < levelDescriptor.chunks.chunks.length; chunkNum++) {
         const chunkSector = levelDescriptor.chunks.chunks[chunkNum];
@@ -120,12 +133,15 @@ for (const levelSectors of tableOfContents.levelSectors) {
         chunkFiles.push({
             tfragFile,
             collisionFile,
-        })
+        });
     }
 
     // write files
     await extractLevelFile(`level_{}_gameplay.wad`, gameplayFile);
-    if (artInstancesFile) await extractLevelFile(`level_{}_art_instances.wad`, artInstancesFile);
+    if (artInstancesFile) await extractLevelFile(`level_{}_gameplay_art.wad`, artInstancesFile);
+    for (let i = 0; i < missions.length; i++) {
+        await extractLevelFile(`level_{}_gameplay_mission_${missions[i].missionNumber}.bin`, missions[i].missionGameplayFile);
+    }
     await extractLevelFile(`level_{}_core.wad`, levelCoreDataWad);
     await extractLevelFile(`level_{}_index.bin`, levelCoreIndex);
     await extractLevelFile(`level_{}_gs.bin`, gsRam);
@@ -136,75 +152,79 @@ for (const levelSectors of tableOfContents.levelSectors) {
     const metaFile = { files, levelDataHeader, levelDescriptor };
     await extractLevelFile(`level_{}.json`, new DataViewExt(encoder.encode(JSON.stringify(metaFile)).buffer, { littleEndian: true }));
 
-    // test parsing everything
-    const resources: LevelResources = {
-        levelCoreHeader: null,
-        gameplayHeader: null,
-        gsTable: null,
-        levelSettings: null,
-        paths: null,
-        grindPaths: null,
-        directionLights: null,
-        pointLights: null,
-        collisionGetter: null,
-        tfrags: null,
-        tfragTextures: null,
-        tieTextures: null,
-        tieOClasses: null,
-        tieClasses: null,
-        tieClassTextureIndices: null,
-        tieInstances: null,
-        tieInstancesByOClass: null,
-        tieAmbientRgbas: null,
-        mobyTextures: null,
-        mobyGsStashList: null,
-        mobyOClasses: null,
-        mobyClasses: null,
-        mobyClassTextureIndices: null,
-        mobyInstances: null,
-        mobyInstancesByOClass: null,
-        mobyUniqueMissionIds: null,
-        shrubTextures: null,
-        shrubOClasses: null,
-        shrubClasses: null,
-        shrubClassTextureIndices: null,
-        shrubInstances: null,
-        shrubInstancesByOClass: null,
-        sky: null,
-        skyTextures: null,
-    };
-    const requiredProperties = Object.fromEntries(Object.entries(resources).map(kv => {
-        if (["tieAmbientRgbas"].includes(kv[0])) return [kv[0], false];
-        else return [kv[0], true]
-    }))
-    if (chunkFiles.length) {
-        for (let i = 0; i < chunkFiles.length; i++) {
-            await load(gn, i, resources, {
-                coreDataFilePromise: Promise.resolve(decompress(levelCoreDataWad)),
-                gameplayFilePromise: Promise.resolve(decompress(gameplayFile)),
-                artInstancesFilePromise: Promise.resolve(artInstancesFile ? decompress(artInstancesFile) : null),
-                coreIndexFilePromise: Promise.resolve(levelCoreIndex),
-                gsRamFilePromise: Promise.resolve(gsRam),
-                chunkTfragFilePromise: Promise.resolve(decompress(chunkFiles[i].tfragFile)),
-                chunkCollisionFilePromise: Promise.resolve(decompress(chunkFiles[i].collisionFile))
-            });
-        }
-    } else {
-        await load(gn, null, resources, {
+    async function test(chunkNumber: number | null, missionNumber: number | null) {
+        // test parsing everything
+        const resources: LevelResources = {
+            metadata: null,
+            levelCoreHeader: null,
+            gameplayHeader: null,
+            missionGameplayHeader: null,
+            gsTable: null,
+            levelSettings: null,
+            paths: null,
+            grindPaths: null,
+            directionLights: null,
+            pointLights: null,
+            collisionGetter: null,
+            tfrags: null,
+            tfragTextures: null,
+            tieTextures: null,
+            tieOClasses: null,
+            tieClasses: null,
+            tieClassTextureIndices: null,
+            tieInstances: null,
+            tieInstancesByOClass: null,
+            tieAmbientRgbas: null,
+            mobyTextures: null,
+            mobyGsStashList: null,
+            mobyOClasses: null,
+            mobyClasses: null,
+            mobyClassTextureIndices: null,
+            mobyInstances: null,
+            mobyInstancesByOClass: null,
+            mobyUniqueMissionIds: null,
+            missionMobyOClasses: null,
+            missionMobyInstances: null,
+            missionMobyInstancesByOClass: null,
+            shrubTextures: null,
+            shrubOClasses: null,
+            shrubClasses: null,
+            shrubClassTextureIndices: null,
+            shrubInstances: null,
+            shrubInstancesByOClass: null,
+            sky: null,
+            skyTextures: null,
+        };
+
+        const testMission = missions.find(m => m.missionNumber === missionNumber) ?? null;
+        await load(gn, chunkNumber, resources, {
+            metadataFilePromise: Promise.resolve(metaFile),
             coreDataFilePromise: Promise.resolve(decompress(levelCoreDataWad)),
             gameplayFilePromise: Promise.resolve(decompress(gameplayFile)),
-            artInstancesFilePromise: Promise.resolve(artInstancesFile ? decompress(artInstancesFile) : null),
+            gameplayArtFilePromise: artInstancesFile ? Promise.resolve(decompress(artInstancesFile)) : null,
+            gameplayMissionFilePromise: testMission ? Promise.resolve(testMission.missionGameplayFile) : null,
             coreIndexFilePromise: Promise.resolve(levelCoreIndex),
             gsRamFilePromise: Promise.resolve(gsRam),
-            chunkTfragFilePromise: null,
-            chunkCollisionFilePromise: null
+            chunkTfragFilePromise: chunkNumber !== null ? Promise.resolve(decompress(chunkFiles[chunkNumber].tfragFile)) : null,
+            chunkCollisionFilePromise: chunkNumber !== null ? Promise.resolve(decompress(chunkFiles[chunkNumber].collisionFile)) : null
         });
+        console.log("validated level", levelNum, "chunk", chunkNumber, "mission", missionNumber);
+
+        // assert every key is populated
+        for (const key of Object.keys(resources)) {
+            if (gn === 1 && key === "tieAmbientRgbas") continue; // expected to be mission in rac1
+            if (missionNumber === null && key.startsWith("mission")) continue; // no mission
+            if (!resources[key as keyof typeof resources]) {
+                throw new Error(`Level ${levelNum}: ${key} was not populated`);
+            }
+        }
     }
 
-    // assert every key is populated
-    for (const [key, required] of Object.entries(requiredProperties)) {
-        if (required && !resources[key as keyof typeof resources]) {
-            throw new Error(`Level ${levelNum}: ${key} was not populated`);
+    const testChunks = chunkFiles.length ? chunkFiles.map((chunk, i) => i) : [null];
+    const testMissions = missions.length ? missions.map(mission => mission.missionNumber) : [null];
+    for (let i = 0; i < testChunks.length; i++) {
+        for (let j = 0; j < testMissions.length; j++) {
+            await test(testChunks[i], testMissions[j]);
         }
     }
 }

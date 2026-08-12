@@ -21,7 +21,7 @@ export type GameplayHeader = {
     pointLightInstances: number,
     tieAmbientRgbas: number, // rac2+ only
 }
-export function readGameplayHeader(gn: GN, view: DataViewExt, artBlockView_rac4: DataViewExt | null): GameplayHeader {
+export function readGameplayHeader(gn: GN, view: DataViewExt, artFileView_rac4: DataViewExt | null): GameplayHeader {
     switch (gn) {
         case 1: {
             /*
@@ -189,7 +189,7 @@ export function readGameplayHeader(gn: GN, view: DataViewExt, artBlockView_rac4:
                 int32 areas;
             }
 
-            struct ArtInstancesBlockHeader {
+            struct ArtInstancesFileHeader {
                 // 0x0
                 int32 directionLightInstances;
                 int32 tieClasses;
@@ -205,7 +205,7 @@ export function readGameplayHeader(gn: GN, view: DataViewExt, artBlockView_rac4:
             }
             */
 
-            assert(artBlockView_rac4 !== null);
+            assert(artFileView_rac4 !== null);
 
             return {
                 levelSettings: view.getInt32(0x0),
@@ -220,17 +220,42 @@ export function readGameplayHeader(gn: GN, view: DataViewExt, artBlockView_rac4:
                 pointLightInstances: view.getInt32(0x80),
 
                 // in rac4, these belong to the art file instead of gameplay
-                directionLightInstances: artBlockView_rac4.getInt32(0x0),
-                tieClasses: artBlockView_rac4.getInt32(0x4),
-                tieInstances: artBlockView_rac4.getInt32(0x8),
-                shrubClasses: artBlockView_rac4.getInt32(0x10),
-                shrubInstances: artBlockView_rac4.getInt32(0x14),
-                tieAmbientRgbas: artBlockView_rac4.getInt32(0x20),
+                directionLightInstances: artFileView_rac4.getInt32(0x0),
+                tieClasses: artFileView_rac4.getInt32(0x4),
+                tieInstances: artFileView_rac4.getInt32(0x8),
+                shrubClasses: artFileView_rac4.getInt32(0x10),
+                shrubInstances: artFileView_rac4.getInt32(0x14),
+                tieAmbientRgbas: artFileView_rac4.getInt32(0x20),
             }
         }
         default: {
             throw new Error("not implemented");
         }
+    }
+}
+
+export interface MissionGameplayHeader {
+    mobyClasses: number,
+    mobyInstances: number,
+}
+export function readMissionGameplayHeader(view: DataViewExt) {
+    /*
+    struct MissionInstancesFileHeader {
+        // 0x0
+        int32 mobyClasses
+        int32 mobyInstances;
+        int32 mobyGroups;
+        int32 globalPvar;
+        // 0x10
+        int32 mobyLinkFixupTable;
+        int32 pvarTable;
+        int32 pvarData;
+        int32 relativePvarPointers;
+    }
+    */
+    return {
+        mobyClasses: view.getInt32(0x0),
+        mobyInstances: view.getInt32(0x4),
     }
 }
 
@@ -531,7 +556,8 @@ export function readInstanceBlock<T>(view: DataViewExt, instanceSize: number, re
     struct InstanceBlockHeader<T> {
         // 0x0
         int32 count;
-        int32 pad[3];
+        int32 unknown4;
+        int32 pad[2];
         // 0x10
         T instances[count];
     }

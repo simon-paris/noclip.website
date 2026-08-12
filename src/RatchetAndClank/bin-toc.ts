@@ -276,13 +276,13 @@ export function readChunksList(view: DataViewExt) {
 }
 
 export interface LevelMissionDescriptor {
-    instances: { startSector: number, sizeInSectors: number }[],
+    gameplay: { startSector: number, sizeInSectors: number }[],
     data: { startSector: number, sizeInSectors: number }[],
     sound: { startSector: number, sizeInSectors: number }[],
 }
 export function readLevelMissionDescriptor_Rac4(view: DataViewExt): LevelMissionDescriptor {
     let ptr = 0;
-    const instances = view.subdivide(ptr, 128, 0x8).map(view => {
+    const gameplay = view.subdivide(ptr, 128, 0x8).map(view => {
         return view.getInt32PairAs(0, "startSector", "sizeInSectors");
     });
     ptr += 128 * 0x8;
@@ -295,7 +295,7 @@ export function readLevelMissionDescriptor_Rac4(view: DataViewExt): LevelMission
     });
 
     return {
-        instances,
+        gameplay,
         data,
         sound,
     };
