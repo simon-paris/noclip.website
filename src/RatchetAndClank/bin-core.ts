@@ -2279,24 +2279,23 @@ export function readMobyVertexTable(meshGn: GN, vertexTableView: DataViewExt, pa
 
     alignTo(8);
 
-    // duplicate verts are copied from the cache
+    // verts to copy from the cache
     const duplicateVertices = vertexTableView.getArrayOfNumbers(ptr, vertexTableHeader.duplicateVertexCount, Uint16Array).map(value => value >> 7);
 
     ptr = vertexTableHeader.vertexTableOffset;
 
     const vertexCount = vertexTableHeader.twoWayBlendVertexCount + vertexTableHeader.threeWayBlendVertexCount + vertexTableHeader.mainVertexCount;
-    const verticesView = vertexTableView.subview(ptr); // imortant - must inherit accurate length from parent view 
+    const verticesView = vertexTableView.subview(ptr); // important - must inherit accurate length from parent view 
     const vertices = verticesView.subdivide(0, vertexCount, SIZEOF_MOBY_VERTEX).map(view => readMobyVertex(view));
 
-    // read cache addresses and copy into verts
-    const verticesCacheAddresses = readMobyCacheAddresses(verticesView, vertexCount);
-    for (let i = 0; i < vertices.length; i++) vertices[i].cacheAddress = verticesCacheAddresses[i];
+    // assign cache addresses to verts
+    readMobyCacheAddresses(verticesView, vertices);
 
     return {
         vertexTableHeader,
-        vertices,
         matrixTransfers,
         duplicateVertices,
+        vertices,
     };
 }
 
@@ -2359,29 +2358,32 @@ export function readVertexTableHeader(gn: GN, view: DataViewExt): VertexTableHea
     /*
     https://github.com/chaoticgd/wrench/blob/ba12611f5e5b54733fd807f17b3210fd0248f996/src/engine/moby_vertex.cpp#L25-L45
     */
-    if (gn === 1) {
-        return {
-            matrixTransferCount: view.getInt32(0x0),
-            twoWayBlendVertexCount: view.getInt32(0x4),
-            threeWayBlendVertexCount: view.getInt32(0x8),
-            mainVertexCount: view.getInt32(0xc),
-            duplicateVertexCount: view.getInt32(0x10),
-            transferVertexCount: view.getInt32(0x14),
-            vertexTableOffset: view.getInt32(0x18),
-            unknownE: view.getInt32(0x1c),
-        };
-    } else {
-        // same but with 16 bit fields instead of 32 bit
-        return {
-            matrixTransferCount: view.getInt16(0x0),
-            twoWayBlendVertexCount: view.getInt16(0x2),
-            threeWayBlendVertexCount: view.getInt16(0x4),
-            mainVertexCount: view.getInt16(0x6),
-            duplicateVertexCount: view.getInt16(0x8),
-            transferVertexCount: view.getInt16(0xa),
-            vertexTableOffset: view.getInt16(0xc),
-            unknownE: view.getInt16(0xe),
-        };
+    switch (gn) {
+        case 1:
+            return {
+                matrixTransferCount: view.getInt32(0x0),
+                twoWayBlendVertexCount: view.getInt32(0x4),
+                threeWayBlendVertexCount: view.getInt32(0x8),
+                mainVertexCount: view.getInt32(0xc),
+                duplicateVertexCount: view.getInt32(0x10),
+                transferVertexCount: view.getInt32(0x14),
+                vertexTableOffset: view.getInt32(0x18),
+                unknownE: view.getInt32(0x1c),
+            };
+        case 2:
+        case 3:
+        case 4:
+            // same but with 16 bit fields instead of 32 bit
+            return {
+                matrixTransferCount: view.getInt16(0x0),
+                twoWayBlendVertexCount: view.getInt16(0x2),
+                threeWayBlendVertexCount: view.getInt16(0x4),
+                mainVertexCount: view.getInt16(0x6),
+                duplicateVertexCount: view.getInt16(0x8),
+                transferVertexCount: view.getInt16(0xa),
+                vertexTableOffset: view.getInt16(0xc),
+                unknownE: view.getInt16(0xe),
+            };
     }
 }
 
@@ -2409,13 +2411,14 @@ export function readMobyVertex(view: DataViewExt): MobyVertex {
     };
 }
 
-function readMobyCacheAddresses(view: DataViewExt, count: number) {
+function readMobyCacheAddresses(view: DataViewExt, verts: MobyVertex[]) {
     /**
      * Each vert has a cache address.
      * But they are arranged in most insane way possible.
      * 
      * We have to iterate with a stride of 0x10, until we would reach the end of the buffer,
-     * then we advance 0x4 once, then 0x2 thereafter.
+     * then we advance 0x4 once, then 0x2 thereafter. The trailing space varies but it's always a multiple of 0x10.
+     * 
      * We need to skip the first 7 elements but the iteration order is not affected by skipping.
      * 
      * They are arranged like this.
@@ -2430,7 +2433,7 @@ function readMobyCacheAddresses(view: DataViewExt, count: number) {
      * |01XXXXXXXXXXXXXX|
      * |02XXXXXXXXXXXXXX|
      * |03XXXXXXXXXXXXXX| vert 10
-     * |04--------------|
+     * |04--------------| trailing space
      * |05--------------|
      * |06--07080910----| end of buffer
      * 
@@ -2439,50 +2442,41 @@ function readMobyCacheAddresses(view: DataViewExt, count: number) {
      * |--XXXXXXXXXXXXXX|
      * |--XXXXXXXXXXXXXX|
      * |--XXXXXXXXXXXXXX| vert 4
-     * |----------------|
+     * |----------------| trailing space
      * |------01020304--| end of buffer
      */
 
     let ptr = 0;
-    let didOverflow = false;
-
-    const cacheAddresses = [];
-
+    let vertIdx = 0;
     let i = 0;
+
+    const lastRow = view.byteLength - 0x10;
+
     while (true) {
         // skip the first 7 verts, we still need to apply the same pointer math for the skipped verts
         if (i >= 7) {
-            cacheAddresses.push(view.getUint16(ptr) & 0x1FF);
+            verts[vertIdx].cacheAddress = view.getUint16(ptr) & 0x1FF;
+            vertIdx++;
         }
 
-        if (cacheAddresses.length === count) {
+        if (vertIdx === verts.length) {
             // done
             break;
         }
 
-        // advance 0x10 bytes normally, but 2 bytes if we already hit the end
-        ptr += didOverflow ? 0x2 : 0x10;
-
-        if (ptr >= view.byteLength) {
-            assert(didOverflow === false);
-
-            // we have overflowed
-            // revert the pointer
-            ptr -= 0x10;
-            // then advance by 4 (not 2 for some reason)
+        if (ptr === lastRow) {
+            // 4 bytes when we hit the last row
             ptr += 0x4;
-            // advance by 2 from now on
-            didOverflow = true;
+        } else if (ptr >= lastRow) {
+            // 2 bytes within the last row
+            ptr += 0x2;
+        } else {
+            // 0x10 bytes before the last row
+            ptr += 0x10;
         }
 
         i++;
     }
-
-    return cacheAddresses;
-}
-
-export function readMobyVertexCacheAddress(view: DataViewExt) {
-    return view.getUint16(0x0) & 0x1FF;
 }
 
 export type MobyMatrixTransfer = {
