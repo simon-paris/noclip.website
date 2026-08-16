@@ -2215,19 +2215,21 @@ export function readMobyMeshPacket(meshGn: GN, mobyView: DataViewExt, packetHead
     const indicesHeader = readMobyIndicesHeader(unpack2);
     const indices = unpack2.subview(0x4).getTypedArrayView(Int8Array);
 
-    // they've packed vertex indices into all the padding bytes...
-    const secretIndices: number[] = [indicesHeader.secretIndex];
+    let textures: MobyTexturePrimitive[] = [];
 
-    const textures: MobyTexturePrimitive[] = [];
+    // more unhinged behavior -
+    // secret indices are a secondary index buffer, when the regular index buffer contains a 0,
+    // the next secret index is used instead and the next texture is used
+    // but if the secret index is also 0 that means the end of the mesh was 3 verts earlier.
+    let secretIndices: number[] = [indicesHeader.secretIndex];
 
     assert(!!packetHeader.vifListTextureUnpackOffset === !!unpackReader.hasNext());
     if (packetHeader.vifListTextureUnpackOffset) {
         const unpack3 = unpackReader.next();
         assert(unpack3.byteLength % 0x40 === 0);
-        for (let i = 0; i < unpack3.byteLength / 0x40; i++) {
-            secretIndices.push(unpack3.getInt8(i * 0x10 + 0xc));
-            textures.push(readMobyTexturePrimitive(unpack3.subview(i * 0x40)));
-        }
+        const res = readMobyTexturePrimitives(unpack3);
+        textures = res.textures;
+        secretIndices = secretIndices.concat(res.secretIndices);
     }
 
     // important to have accurate size here so it knows how to read weird trailing cache address data
@@ -2316,30 +2318,55 @@ export function readMobyIndicesHeader(view: DataViewExt): MobyIndicesHeader {
     };
 }
 
+export function readMobyTexturePrimitives(view: DataViewExt) {
+    assert(view.byteLength % 0x40 === 0);
+
+    const textures = view.subdivide(0, 0xFFFF, 0x40).map(view => readMobyTexturePrimitive(view));
+
+    /*
+    Some unhinged behavior here -
+    The secret indices occupy the same memory as the textures, but they fill the padding space.
+    They're spaced weirdly - they're 0x10 apart even though the textures are 0x40.
+    
+    e.g. If there are 3 textures X,Y,Z then there will be 3 indices arranged like this:
+    |XXXXXXXXX---01--|
+    |XXXXXXXXX---02--|
+    |XXXXXXXXX---03--|
+    |XXXXXXXXX-------|
+    |YYYYYYYYY-------|
+    |YYYYYYYYY-------|
+    |YYYYYYYYY-------|
+    |YYYYYYYYY-------|
+    |ZZZZZZZZZ-------|
+    |ZZZZZZZZZ-------|
+    |ZZZZZZZZZ-------|
+    |ZZZZZZZZZ-------|
+    */
+    const secretIndices = view.subdivide(0, textures.length, 0x10).map(view => view.getInt32(0xc));
+
+    return {
+        textures,
+        secretIndices,
+    }
+}
+
 export interface MobyTexturePrimitive {
     tex1: GifAd,
-    superSecretIndex1: number,
     clamp: GifAd,
-    superSecretIndex2: number,
     tex0: GifAd,
-    superSecretIndex3: number,
     miptbp1: GifAd,
-    superSecretIndex4: number,
 };
 export const SIZEOF_MOBY_TEXTURE_PRIMITIVE = 0x40;
 export function readMobyTexturePrimitive(view: DataViewExt): MobyTexturePrimitive {
     /*
     https://github.com/chaoticgd/wrench/blob/master/src/engine/moby_packet.h#L44
+    Vertex indices are packed into the padding bytes but they don't correspond to the same texture so they're read elsewhere.
     */
     return {
         tex1: readGifAdData(view.subview(0x0)),
-        superSecretIndex1: view.getInt32(0xc),
         clamp: readGifAdData(view.subview(0x10)),
-        superSecretIndex2: view.getInt32(0x1c),
         tex0: readGifAdData(view.subview(0x20)),
-        superSecretIndex3: view.getInt32(0x2c),
         miptbp1: readGifAdData(view.subview(0x30)),
-        superSecretIndex4: view.getInt32(0x3c),
     };
 }
 
@@ -2417,7 +2444,8 @@ function readMobyCacheAddresses(view: DataViewExt, verts: MobyVertex[]) {
      * But they are arranged in most insane way possible.
      * 
      * We have to iterate with a stride of 0x10, until we would reach the end of the buffer,
-     * then we advance 0x4 once, then 0x2 thereafter. The trailing space varies but it's always a multiple of 0x10.
+     * then we advance 0x4 once, then 0x2 thereafter.
+     * The trailing varies but it's at least 0x10 and always a multiple of 0x10.
      * 
      * We need to skip the first 7 elements but the iteration order is not affected by skipping.
      * 
@@ -2437,7 +2465,7 @@ function readMobyCacheAddresses(view: DataViewExt, verts: MobyVertex[]) {
      * |05--------------|
      * |06--07080910----| end of buffer
      * 
-     * Another example with 4 verts:
+     * Another example with 4 verts - the cache addresses don't overlap the vertex data at all:
      * |--XXXXXXXXXXXXXX| vert 1
      * |--XXXXXXXXXXXXXX|
      * |--XXXXXXXXXXXXXX|
@@ -2453,7 +2481,7 @@ function readMobyCacheAddresses(view: DataViewExt, verts: MobyVertex[]) {
     const lastRow = view.byteLength - 0x10;
 
     while (true) {
-        // skip the first 7 verts, we still need to apply the same pointer math for the skipped verts
+        // read cache address, skip the first 7
         if (i >= 7) {
             verts[vertIdx].cacheAddress = view.getUint16(ptr) & 0x1FF;
             vertIdx++;
