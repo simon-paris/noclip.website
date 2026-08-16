@@ -1,11 +1,12 @@
 import { Color } from "../Color";
 import { DataViewExt } from "./DataViewExt";
 import { GfxDevice, GfxFormat, GfxTexture, GfxTextureDimension, GfxTextureUsage, makeTextureDescriptor2D } from "../gfx/platform/GfxPlatform";
-import { SkyHeader, SkyTextureEntry } from "./bin-core";
+import { SkyHeader, SkyTextureEntry, TieClass } from "./bin-core";
 import { TieAmbientRgbaBlock, TieInstance } from "./bin-gameplay";
 import { assert } from "../util";
 import { TextureEntry } from "./bin-index";
 import { GN } from "./utils";
+import { getPixelAddressPSMCT32, getPixelAddressPSMT8 } from "../Common/PS2/GS";
 
 export interface PaletteTexture {
     name: string,
@@ -13,13 +14,15 @@ export interface PaletteTexture {
     pixels: Uint8Array,
     palette: Color[],
     hasAlpha: boolean,
-    swizzled: boolean,
+    unswizzled: boolean,
 };
 
-export function readPalette8TextureWithPaletteInGsRam(textureEntry: TextureEntry, textureData: DataViewExt, gsRam: DataViewExt, ownerType: string, i: number): PaletteTexture {
-    const pixels = textureData.subview(textureEntry.dataOffset, textureEntry.width * textureEntry.height).getTypedArrayView(Uint8Array);
+export function readPalette8TextureWithPaletteInGsRam(gn: GN, textureEntry: TextureEntry, textureData: DataViewExt, gsRam: DataViewExt, ownerType: string, i: number): PaletteTexture {
+    let pixels = textureData.subview(textureEntry.dataOffset, textureEntry.width * textureEntry.height).getTypedArrayView(Uint8Array);
+    if (gn == 4) pixels = unswizzleTexture(pixels, textureEntry)
+
     let rgbaPalette = gsRam.subview(textureEntry.palette * 0x100, 256 * 4).subdivide(0, 256, 4).map(view => view.getUint8_Rgba(0));
-    rgbaPalette = fixPalette(rgbaPalette);
+    rgbaPalette = unswizzlePalette(rgbaPalette);
 
     return {
         name: `${ownerType} Texture ${i}`,
@@ -27,14 +30,16 @@ export function readPalette8TextureWithPaletteInGsRam(textureEntry: TextureEntry
         pixels,
         palette: rgbaPalette,
         hasAlpha: paletteHasAlpha(pixels, rgbaPalette),
-        swizzled: false,
+        unswizzled: false,
     };
 }
 
-export function readPalette8TextureSky(skyView: DataViewExt, skyHeader: SkyHeader, textureEntry: SkyTextureEntry, i: number): PaletteTexture {
-    const pixels = skyView.subview(skyHeader.textureData + textureEntry.dataOffset, textureEntry.width * textureEntry.height).getTypedArrayView(Uint8Array);
+export function readPalette8TextureSky(gn: GN, skyView: DataViewExt, skyHeader: SkyHeader, textureEntry: SkyTextureEntry, i: number): PaletteTexture {
+    let pixels = skyView.subview(skyHeader.textureData + textureEntry.dataOffset, textureEntry.width * textureEntry.height).getTypedArrayView(Uint8Array);
+    if (gn == 4) pixels = unswizzleTexture(pixels, textureEntry)
+
     let rgbaPalette = skyView.subview(skyHeader.textureData + textureEntry.palette, 256 * 4).subdivide(0, 256, 4).map(view => view.getUint8_Rgba(0));
-    rgbaPalette = fixPalette(rgbaPalette);
+    rgbaPalette = unswizzlePalette(rgbaPalette);
 
     return {
         name: `Sky Texture ${i}`,
@@ -42,39 +47,8 @@ export function readPalette8TextureSky(skyView: DataViewExt, skyHeader: SkyHeade
         pixels,
         palette: rgbaPalette,
         hasAlpha: paletteHasAlpha(pixels, rgbaPalette),
-        swizzled: false,
+        unswizzled: false,
     };
-}
-
-// return true if any pixel is transparent
-export function paletteHasAlpha(pixels: Uint8Array, palette: Color[]) {
-    // we can't just check the palette because the texture might not use all the palette colors
-    for (let i = 0; i < pixels.length; i++) {
-        if (palette[pixels[i]].a < 255) {
-            return true;
-        }
-    }
-    return false;
-}
-
-// Shuffle some indices around then double all the alphas
-function fixPalette(palette: Color[]) {
-    const newPalette = [...palette]
-
-    for (let i = 0; i < palette.length; i++) {
-        newPalette[i] = palette[mapPaletteIndices(i)];
-    }
-
-    for (let i = 0; i < newPalette.length; i++) {
-        newPalette[i] = { ...newPalette[i], a: Math.min(newPalette[i].a * 2, 255) };
-    }
-
-    return newPalette;
-}
-
-function mapPaletteIndices(index: number) {
-    // swap the two middle bits for some reason
-    return (((index & 0b00010000) >> 1) != (index & 0b00001000)) ? (index ^ 0b00011000) : index;
 }
 
 // convert palette texture to regular RGBA texture
@@ -88,30 +62,55 @@ function unpalettizeTexture(texture: PaletteTexture): Uint8Array {
     return new Uint8Array(palettedPixels.buffer, palettedPixels.byteOffset, palettedPixels.byteLength);
 }
 
-export function swizzleAllTextures(gn: GN, textures: PaletteTexture[]) {
-    for (let i = 0; i < textures.length; i++) {
-        swizzleTexture(gn, textures[i]);
+// return true if any pixel is transparent
+export function paletteHasAlpha(pixels: Uint8Array, palette: Color[]) {
+    // we can't just check the palette because the texture might not use all the palette colors
+    for (let i = 0; i < pixels.length; i++) {
+        if (palette[pixels[i]].a < 0x80) {
+            return true;
+        }
     }
+    return false;
+}
+
+// Shuffle some indices around then double all the alphas
+function unswizzlePalette(palette: Color[]) {
+    const newPalette: Color[] = new Array(palette.length);
+
+    for (let i = 0; i < palette.length; i++) {
+        newPalette[i] = palette[unswizzlePaletteMapIndex(i)];
+    }
+
+    return newPalette;
+}
+
+function unswizzlePaletteMapIndex(index: number) {
+    return (((index & 0b00010000) >> 1) != (index & 0b00001000)) ? (index ^ 0b00011000) : index;
 }
 
 // Replaces the pixel array with an unswizzled copy. Idempotent.
-export function swizzleTexture(gn: GN, texture: PaletteTexture) {
-    if (gn !== 4) return;
-    if (texture.swizzled) return;
+export function unswizzleTexture(pixels: Uint8Array, entry: TextureEntry | SkyTextureEntry) {
+    const width = entry.width;
+    const height = entry.height;
+    const dbw = Math.ceil(width / 64);
+    const out = new Uint8Array(pixels.length);
 
-    const width = texture.textureEntry.width;
-    const out = new Uint8Array(texture.pixels.length);
-    for (let i = 0; i < out.length; i++) {
-        let dest = swizzleMapPixelIndex(i, width);
-        if (dest > out.length) dest = out.length - 1;
-        out[dest] = texture.pixels[i];
+    let i = 0;
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            // const addr = getPixelAddressPSMT8(0, dbw, x, y);
+            // out[i] = pixels[addr];
+            const addr2 = unswizzleMapPixelIndex(y * width + x, width);
+            out[addr2] = pixels[y * width + x];
+            i++;
+        }
     }
 
-    texture.pixels = out;
-    texture.swizzled = true;
+    return out;
 }
 
-function swizzleMapPixelIndex(i: number, width: number) {
+/* Should use getPixelAddressPSMT8 but this is different, not sure why */
+function unswizzleMapPixelIndex(i: number, width: number) {
     /*
     https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/core/texture.cpp#L467
     */
@@ -251,8 +250,18 @@ export function createGfxTextureArrayForPaletteTextures(device: GfxDevice, name:
     return gfxTexture;
 }
 
+const MAGENTA_A1BGR4 = 0b1_11111_00000_11111;
+const TEAL_A1BGR4 = 0b1_11111_11111_00000;
+const BLACK_A1BGR4 = 0b1_00000_00000_00000;
+function a1bgr5ToRgba8(out: Uint8Array, offset: number, a1bgr5: number) {
+    out[offset + 0] = ((a1bgr5 >> 0) & 0x1F) << 3;
+    out[offset + 1] = ((a1bgr5 >> 5) & 0x1F) << 3;
+    out[offset + 2] = ((a1bgr5 >> 10) & 0x1F) << 3;
+    out[offset + 3] = 255; // ??
+}
+
 // create a 64xN texture, where each row contains the 64-wide vertex color lookup table for one tie instance
-export function createTieRgbaTexture_Rac1(device: GfxDevice, tieInstances: TieInstance[]): GfxTexture {
+export function createTieRgbaTexture_Rac1(device: GfxDevice, tieInstances: (TieInstance | null)[]): GfxTexture {
     if (tieInstances.length === 0) {
         return create1x1x1ErrorArrayTexture(device);
     }
@@ -272,12 +281,14 @@ export function createTieRgbaTexture_Rac1(device: GfxDevice, tieInstances: TieIn
     let ptr = 0;
     for (let i = 0; i < tieInstances.length; i++) {
         const instance = tieInstances[i];
-        for (let j = 0; j < 64; j++) {
-            const a1bgr5 = instance.ambientRgbas[j];
-            data[ptr++] = ((a1bgr5 >> 0) & 0x1F) << 3;
-            data[ptr++] = ((a1bgr5 >> 5) & 0x1F) << 3;
-            data[ptr++] = ((a1bgr5 >> 10) & 0x1F) << 3;
-            data[ptr++] = 255;
+        if (instance) {
+            for (let j = 0; j < 64; j++) {
+                const a1bgr5 = instance.ambientRgbas[j];
+                a1bgr5ToRgba8(data, ptr, a1bgr5);
+                ptr += 4;
+            }
+        } else {
+            ptr += 64 * 0x4;
         }
     }
 
@@ -286,7 +297,88 @@ export function createTieRgbaTexture_Rac1(device: GfxDevice, tieInstances: TieIn
     return gfxTexture;
 }
 
-export function createTieRgbaTexture_Rac234(device: GfxDevice, tieRgbasBlock: TieAmbientRgbaBlock): GfxTexture {
+export function createTieRgbaTexture_Rac234(device: GfxDevice, tieInstances: (TieInstance | null)[], tieClasses: Map<number, TieClass>, tieRgbasBlock: TieAmbientRgbaBlock): GfxTexture {
+    const lods = 1; // TODO
+    const width = 4096;
+    const height = tieInstances.length;
+
+    const gfxTexture = device.createTexture({
+        dimension: GfxTextureDimension.n2D,
+        pixelFormat: GfxFormat.U8_RGBA_NORM,
+        width, // very wasteful
+        height,
+        depthOrArrayLayers: 1,
+        numLevels: 1,
+        usage: GfxTextureUsage.Sampled,
+    });
+    device.setResourceName(gfxTexture, `Tie Ambient RGBAs`);
+
+    const data = new Uint8Array(width * height * 4 * lods);
+    for (let i = 0; i < tieRgbasBlock.list.length; i++) {
+        const lod = 0;
+        const row = tieRgbasBlock.list[i];
+
+        const tieInst = tieInstances[row.tieIndex];
+        if (!tieInst) continue;
+        assert(row.tieIndex === tieInst.instanceIndex);
+        const tieClass = tieClasses.get(tieInst.oClass);
+        assert(tieClass !== undefined);
+        assert(tieClass.rgbaRemaps !== null);
+        const rgbaRemaps = tieClass.rgbaRemaps[lod];
+        assert(rgbaRemaps !== null);
+
+        const rowData = new Uint8Array(4 * 4096);
+
+        // initialize the row with magenta
+        for (let col = 0; col < 4096; col++) {
+            a1bgr5ToRgba8(rowData, col * 4, MAGENTA_A1BGR4);
+        }
+
+        // copy the data from the rgba block and convert to rgba8
+        for (let col = 0; col < row.count; col++) {
+            a1bgr5ToRgba8(rowData, col * 4, row.ambientRgbas[col]);
+        }
+
+        // then for each remap, evaluate the average of the 4 src elements
+        for (let packetIndex = 0; packetIndex < rgbaRemaps.packets.length; packetIndex++) {
+            const packet = rgbaRemaps.packets[packetIndex];
+            for (let remapIndex = 0; remapIndex < packet.remaps.length; remapIndex++) {
+                const remap = packet.remaps[remapIndex];
+                const dest = packet.outputBase + remap.dest;
+
+                if (Array.isArray(remap.src) && remap.src[0] === 2044) {
+                    // 2044 seems to be a macic value for "do nothing"
+                    // (2044 is (9-bit max int) << 2)
+                    continue;
+                }
+
+                if (remap.src === 0) {
+                    // write black
+                    a1bgr5ToRgba8(rowData, dest, BLACK_A1BGR4);
+                } else {
+                    // write average of 4 inputs
+                    rowData[dest + 0] = (rowData[remap.src[0] + 0] + rowData[remap.src[1] + 0] + rowData[remap.src[2] + 0] + rowData[remap.src[3] + 0]) / 4;
+                    rowData[dest + 1] = (rowData[remap.src[0] + 1] + rowData[remap.src[1] + 1] + rowData[remap.src[2] + 1] + rowData[remap.src[3] + 1]) / 4;
+                    rowData[dest + 2] = (rowData[remap.src[0] + 2] + rowData[remap.src[1] + 2] + rowData[remap.src[2] + 2] + rowData[remap.src[3] + 2]) / 4;
+                    rowData[dest + 3] = (rowData[remap.src[0] + 3] + rowData[remap.src[1] + 3] + rowData[remap.src[2] + 3] + rowData[remap.src[3] + 3]) / 4;
+                }
+
+            }
+        }
+
+        let ptr = tieInst.instanceIndex * width * 4;
+        if (ptr + rowData.byteLength > data.byteLength) {
+            console.log(tieInst, row, rgbaRemaps, lod, tieClass); debugger;
+        }
+        data.set(rowData, ptr);
+    }
+
+    device.uploadTextureData(gfxTexture, 0, [data]);
+
+    return gfxTexture;
+}
+
+export function createTieRgbaTexture_InitPreview_Rac234(device: GfxDevice, tieRgbasBlock: TieAmbientRgbaBlock): GfxTexture {
     const gfxTexture = device.createTexture({
         dimension: GfxTextureDimension.n2D,
         pixelFormat: GfxFormat.U8_RGBA_NORM,
@@ -296,7 +388,7 @@ export function createTieRgbaTexture_Rac234(device: GfxDevice, tieRgbasBlock: Ti
         numLevels: 1,
         usage: GfxTextureUsage.Sampled,
     });
-    device.setResourceName(gfxTexture, `Tie Ambient RGBAs`);
+    device.setResourceName(gfxTexture, `Tie Ambient RGBAs Initial Cache`);
 
     const data = new Uint8Array(tieRgbasBlock.maxCount * tieRgbasBlock.list.length * 4);
     for (let i = 0; i < tieRgbasBlock.list.length; i++) {

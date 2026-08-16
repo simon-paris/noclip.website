@@ -368,7 +368,7 @@ function getBlockIdPSMCT32(block: number, x: number, y: number): number {
     return block + ((x >>> 1) & ~0x1F) + blockTablePSMCT32[(blockY << 3) | blockX];
 }
 
-function getPixelAddressPSMCT32(block: number, width: number, x: number, y: number): number {
+export function getPixelAddressPSMCT32(block: number, width: number, x: number, y: number): number {
     const page = ((block >>> 5) + (y >>> 5) * width + (x >>> 6));
     const columnBase = ((y >>> 1) & 0x03) << 4;
     const columnY = y & 0x01;
@@ -385,7 +385,7 @@ function getBlockIdPSMCT16(block: number, x: number, y: number): number {
     return block + ((x >>> 1) & ~0x1F) + blockTablePSMCT32[(blockX << 3) | blockY];
 }
 
-function getPixelAddressPSMCT16(block: number, width: number, x: number, y: number): number {
+export function getPixelAddressPSMCT16(block: number, width: number, x: number, y: number): number {
     const page = ((block >>> 5) + (y >>> 6) * width + (x >>> 6));
     const columnBase = ((y >>> 1) & 0x03) << 4;
     const columnY = y & 0x01;
@@ -402,7 +402,7 @@ function getBlockIdPSMT8(block: number, x: number, y: number): number {
     return block + ((x >>> 2) & ~0x1F) + blockTablePSMT8[(blockY << 3) | blockX];
 }
 
-function getPixelAddressPSMT8(block: number, width: number, x: number, y: number): number {
+export function getPixelAddressPSMT8(block: number, width: number, x: number, y: number): number {
     const page = ((block >>> 5) + (y >>> 6) * (width >>> 1) + (x >>> 7));
     const columnY = y & 0x0F;
     const columnX = x & 0x0F;
@@ -418,7 +418,7 @@ function getBlockIdPSMT4(block: number, x: number, y: number): number {
     return block + ((x >>> 2) & ~0x1F) + blockBase + blockTablePSMT4[(blockY << 2) | blockX];
 }
 
-function getPixelAddressPSMT4(block: number, width: number, x: number, y: number): number {
+export function getPixelAddressPSMT4(block: number, width: number, x: number, y: number): number {
     const page = ((block >>> 5) + (y >>> 7) * (width >>> 1) + (x >>> 7));
     const columnY = y & 0x0F;
     const columnX = x & 0x1F;

@@ -239,6 +239,10 @@ vec4 ratchetSampler(ivec2 remap, int clampRegister, vec2 st) {
     vec4 s0 = mix(s00, s10, frac.x);
     vec4 s1 = mix(s01, s11, frac.x);
     vec4 res = mix(s0, s1, frac.y);
+
+    // ps2 convention has alpha from 0-0x80, when converted to float that's 0-(128/255), remap to 0-1
+    res.a /= 128.0 / 255.0;
+
     return res;
 }
 `

@@ -1,7 +1,7 @@
 import { IS_DEVELOPMENT } from "../BuildVersion";
 import { GsPrimitiveType } from "../Common/PS2/GS";
-import { DataViewExt } from "./DataViewExt";
-import { assert } from "../util";
+import { DataViewExt, EMPTY_VIEW } from "./DataViewExt";
+import { assert, nArray } from "../util";
 import { getBits, GN, ImaginaryGsCommand, ImaginaryGsCommandBuffer, truncateTrailing0xFF } from "./utils";
 import { readVifCommandList, VifUnpackReader } from "./vif";
 import { VifUnpackFormat } from "../Common/PS2/VIF";
@@ -30,7 +30,7 @@ export function readGsRamTableEntry(view: DataViewExt) {
 export interface TieClass {
     header: TieClassHeader,
     normalsData: { x: number, y: number, z: number }[],
-    rgbaRemaps: RgbaRemap[][] | null; // [lod][remap], not present in rac1
+    rgbaRemaps: (RgbaRemaps | null)[] | null; // [lod], not present in rac1
     nearDist: number,
     midDist: number,
     farDist: number,
@@ -59,15 +59,15 @@ export function readTieClass(gn: GN, view: DataViewExt, oClass: number): TieClas
     const normalsData = view.subdivide(header.normalsOffset, header.normalsCount, 8).map(view => view.getInt16_Xyzw(0));
 
     // there are always 3 lods
-    for (let i = 0; i < 3; i++) {
-        const packetOffset = header.packetOffsets[i];
-        const packetCount = header.packetCounts[i];
+    for (let lod = 0; lod < 3; lod++) {
+        const packetOffset = header.packetOffsets[lod];
+        const packetCount = header.packetCounts[lod];
         const packetHeaders = view.subdivide(packetOffset, packetCount, SIZEOF_TIE_PACKET_HEADER).map(readTiePacketHeader);
 
         const packetsInThisLod: TiePacket[] = [];
         for (let j = 0; j < packetCount; j++) {
             const packetDataOffset = packetOffset + packetHeaders[j].data;
-            const packetBody = readTiePacketBody(gn, view.subview(packetDataOffset), packetHeaders[j], adGifs, oClass, i, j);
+            const packetBody = readTiePacketBody(gn, view.subview(packetDataOffset), packetHeaders[j], adGifs, oClass, lod, j);
             packetsInThisLod.push({
                 header: packetHeaders[j],
                 body: packetBody,
@@ -77,25 +77,19 @@ export function readTieClass(gn: GN, view: DataViewExt, oClass: number): TieClas
         packets.push(packetsInThisLod);
     }
 
-    const rgbaRemaps: RgbaRemap[][] = [[], [], []]; // [lod][remapIndex]
+    const rgbaRemaps: (RgbaRemaps | null)[] = [null, null, null]; // by lod
     if (gn >= 2) {
-        for (let i = 0; i < 3; i++) {
-            const offset = header.rgbaRemapOffsets![i];
-            if (offset === header.adGifsOffset || header.lodHeaders![i]!.vertCount === 0) continue;
-            rgbaRemaps[i] = readTieRgbaRemaps(view.subview(header.normalsOffset + offset));
+        for (let lod = 0; lod < 3; lod++) {
+            const offset = header.rgbaRemapOffsets![lod];
+            assert(offset !== 0);
+            if (offset === header.adGifsOffset || header.lodHeaders![lod]!.vertCount === 0) continue;
 
-            // const remapsInThisLod = rgbaRemaps[i];
-            // const packetsInThisLod = packets[i];
-            // for (let j = 0; j  < remapsInThisLod.length; j++) {
-            //     const dest = remapsInThisLod[j].dest;
-            //     let vertexPtr = 0;
-            //     for (let k = 0; k < packetsInThisLod.length; k++) {
-            //     }
-            // }
+            const remaps = readTieRgbaRemaps(view.subview(header.normalsOffset + offset), oClass);
+            rgbaRemaps[lod] = remaps;
         }
     }
 
-    return {
+    const tie: TieClass = {
         header,
         normalsData,
         rgbaRemaps,
@@ -107,29 +101,48 @@ export function readTieClass(gn: GN, view: DataViewExt, oClass: number): TieClas
         packets,
         adGifs,
     };
+    return tie;
 }
 
 export interface RgbaRemap {
     dest: number,
     src: [number, number, number, number] | 0,
+    kind: number,
+}
+export interface RgbaRemapPacketDescriptor {
+    block1Size: number;
+    block2Size: number;
+    block4Size: number;
+    block5Size: number;
+    block6Size: number;
+    block3Size: number;
+    outputSize: number;
+    packetSize: number;
+}
+export interface RgbaRemapPacket {
+    outputBase: number,
+    remaps: RgbaRemap[],
+    raw: {
+        descriptor: RgbaRemapPacketDescriptor,
+        block1: RgbaRemap[] | null,
+        block2: RgbaRemap[] | null,
+        block3: RgbaRemap[] | null,
+        block4: RgbaRemap[] | null,
+        block5: RgbaRemap[] | null,
+        block6: RgbaRemap[] | null,
+    }
+}
+export interface RgbaRemaps {
+    packets: RgbaRemapPacket[],
 }
 
 // needs more reverse engineering work
 // I can parse the headers but no idea what the inner data is
-export function readTieRgbaRemaps(view: DataViewExt): RgbaRemap[] {
-    const out: RgbaRemap[] = [];
+export function readTieRgbaRemaps(view: DataViewExt, oClass: number): RgbaRemaps {
+    const blockSizes = view.getArrayOfNumbers(0x0, 32, Uint8Array).map(size => size * 0x10);
 
-    const blockSizesQw = view.getArrayOfNumbers(0x0, 32, Uint8Array);
-    const blockSizes = [];
-    for (let i = 0; i < blockSizesQw.length; i++) {
-        if (blockSizesQw[i] === 0) break;
-        blockSizes.push(blockSizesQw[i] * 16);
-    }
-
-    function validate(a: RgbaRemap) {
-        // assert((a.dest & 0x3) === 0);
-        return a;
-    }
+    let base = 0;
+    const packets: RgbaRemapPacket[] = [];
 
     let packetView = view.subview(0x20);
     for (let i = 0; i < blockSizes.length; i++) {
@@ -143,90 +156,143 @@ export function readTieRgbaRemaps(view: DataViewExt): RgbaRemap[] {
             block5Size: packetView.getUint16(0x6),
             block6Size: packetView.getUint16(0x8),
             block3Size: packetView.getUint16(0xa),
-            unknown1: packetView.getUint16(0xc),
-            totalSize: packetView.getUint16(0xe),
+            outputSize: packetView.getUint16(0xc), // <- probably in units of 0x10
+            packetSize: packetView.getUint16(0xe), // <- in bytes
         };
+
+        assert(descriptor.block1Size % 4 === 0);
+        assert(descriptor.block2Size % 4 === 0);
+        assert(descriptor.block4Size % 4 === 0);
+        assert(descriptor.block5Size % 8 === 0);
+        assert(descriptor.block6Size % 8 === 0);
 
         let ptr = 0x10;
         function alignTo(size: number) {
             if (ptr % size !== 0) ptr += size - (ptr % size);
         }
 
-        const block1_aaaa = descriptor.block1Size ? packetView.subview(ptr, descriptor.block1Size) : null;
+        const block1View = descriptor.block1Size ? packetView.subview(ptr, descriptor.block1Size) : EMPTY_VIEW;
         ptr += descriptor.block1Size;
-        const block2_aabb = descriptor.block2Size ? packetView.subview(ptr, descriptor.block2Size) : null;
+        const block2View = descriptor.block2Size ? packetView.subview(ptr, descriptor.block2Size) : EMPTY_VIEW;
         ptr += descriptor.block2Size;
-        const block3_unknown = descriptor.block3Size ? packetView.subview(ptr, descriptor.block3Size) : null;
-        ptr += descriptor.block3Size;
-        const block4_aaab = descriptor.block4Size ? packetView.subview(ptr, descriptor.block4Size) : null;
+        const block4View = descriptor.block4Size ? packetView.subview(ptr, descriptor.block4Size) : EMPTY_VIEW;
         ptr += descriptor.block4Size;
-        const block5_aabc = descriptor.block5Size ? packetView.subview(ptr, descriptor.block5Size) : null;
+        const block5View = descriptor.block5Size ? packetView.subview(ptr, descriptor.block5Size) : EMPTY_VIEW;
         ptr += descriptor.block5Size;
-        const block6_abcd = descriptor.block6Size ? packetView.subview(ptr, descriptor.block6Size) : null;
+        const block6View = descriptor.block6Size ? packetView.subview(ptr, descriptor.block6Size) : EMPTY_VIEW;
         ptr += descriptor.block6Size;
+        const block3View = descriptor.block3Size ? packetView.subview(ptr, descriptor.block3Size) : EMPTY_VIEW;
+        ptr += descriptor.block3Size;
         alignTo(0x10)
-        assert(ptr === descriptor.totalSize);
+        assert(ptr === descriptor.packetSize);
         assert(ptr === packetSizeBytes);
 
         // unsure about any of this
 
-        block1_aaaa?.subdivide(0, 0xFFFF, 4).forEach(view => {
-            const a = view.getUint16(0x0);
+        // AAAA
+        const block1Remaps: RgbaRemap[] = block1View.subdivide(0, 0xFFFF, 4).map((view): RgbaRemap => {
+            const a = view.getUint16(0x0) & 0x7FF;
+            assert(a % 4 === 0);
             const dest = view.getUint16(0x2);
-            out.push(validate({ dest, src: [a, a, a, a] }));
+            assert(dest % 4 === 0);
+            return { dest, src: [a, a, a, a], kind: 1 };
         });
 
-        block2_aabb?.subdivide(0, 0xFFFF, 4).forEach(view => {
+        // AABB
+        const block2Remaps: RgbaRemap[] = block2View.subdivide(0, 0xFFFF, 4).map(view => {
             const packed = view.getUint32(0x0);
-            const dest = packed & 0x3FFC;
+            const dest = packed & 0x7FF;
+            assert(dest % 4 === 0);
             const a = (packed >> 21) & 0x7FC;
             const b = (packed >> 12) & 0x7FC;
-            out.push(validate({ dest, src: [a, a, b, b] }));
+            return { dest, src: [a, a, b, b], kind: 2 };
         });
 
-        block4_aaab?.subdivide(0, 0xFFFF, 4).forEach(view => {
+        // AAAB
+        const block4Remaps: RgbaRemap[] = block4View.subdivide(0, 0xFFFF, 4).map(view => {
             const packed = view.getUint32(0x0);
-            const dest = packed & 0x3FFC;
+            const dest = packed & 0x7FF;
+            assert(dest % 4 === 0);
             const a = (packed >> 21) & 0x7FC;
             const b = (packed >> 12) & 0x7FC;
-            out.push(validate({ dest, src: [a, a, a, b] }));
+            return { dest, src: [a, a, a, b], kind: 4 };
         });
 
-        block5_aabc?.subdivide(0, 0xFFFF, 8).forEach(view => {
-            const a = view.getUint16(0x0);
-            const b = view.getUint16(0x2);
-            const c = view.getUint16(0x4);
-            const dest = view.getUint16(0x6);
-            out.push(validate({ dest, src: [a, a, b, c] }));
+        // AABC
+        const block5Remaps: RgbaRemap[] = block5View.subdivide(0, 0xFFFF, 8).map(view => {
+            const a = view.getUint16(0x0) & 0x7FF;
+            assert(a % 4 === 0);
+            const b = view.getUint16(0x2) & 0x7FF;
+            assert(b % 4 === 0);
+            const c = view.getUint16(0x4) & 0x7FF;
+            assert(c % 4 === 0);
+            const dest = view.getUint16(0x6) & 0x7FF;
+            assert(dest % 4 === 0);
+            return { dest, src: [a, a, b, c], kind: 5 };
         });
 
-        block6_abcd?.subdivide(0, 0xFFFF, 8).forEach(view => {
+        // ABCD
+        const block6Remaps: RgbaRemap[] = block6View.subdivide(0, 0xFFFF, 8).map(view => {
             const packed = view.getUint32(0x0);
-            const a = packed & 0x7FC;
+            const a = packed & 0x7FF;
+            assert(a % 4 === 0);
             const b = (packed >> 9) & 0x7FC;
             const c = (packed >> 18) & 0x7FC;
-            const d = view.getUint16(0x4);
-            const dest = view.getUint16(0x6);
-            out.push(validate({ dest, src: [a, b, c, d] }));
+            const d = view.getUint16(0x4) & 0x7FF;
+            assert(d % 4 === 0);
+            const dest = view.getUint16(0x6) & 0x7FF;
+            assert(dest % 4 === 0);
+            return { dest, src: [a, b, c, d], kind: 6 };
+        });
+
+        // zero
+        const block3Remaps: RgbaRemap[] = block3View.subdivide(0, 0xFFFF, 8).map(view => {
+            const dest = view.getUint16(0x0) & 0x7FF;
+            assert(dest % 4 === 0);
+            return { dest, src: 0, kind: 3 };
+        });
+
+        const allRemaps = [block1Remaps, block2Remaps, block4Remaps, block5Remaps, block6Remaps, block3Remaps].flat(1);
+
+        packets.push({
+            outputBase: base,
+            remaps: allRemaps,
+            raw: {
+                descriptor,
+                block1: block1Remaps,
+                block2: block2Remaps,
+                block3: block3Remaps,
+                block4: block4Remaps,
+                block5: block5Remaps,
+                block6: block6Remaps,
+            }
         });
 
         packetView = packetView.subview(packetSizeBytes);
+
+        base += descriptor.outputSize * 0x10; // pretty sure about this, the numbers all add up
     }
 
-    return out;
+    return {
+        packets
+    }
 }
 
 export type TieClassHeader = {
     packetOffsets: number[],
     packetCounts: number[],
-    normalsOffset: number,
-    normalsCount: number,
     textureCount: number,
     nearDist: number,
     midDist: number,
     farDist: number,
     adGifsOffset: number,
-    bsphere: { x: number, y: number, z: number, w: number },
+    instanceIndex: number,
+    cacheSizes: number[],
+    rgbaRemapOffsets: number[],
+    ambientRgbasOffset: number,
+    normalsOffset: number,
+    normalsCount: number,
+    ambientSize: number,
     /**
      * Seems to affect what the alpha channel does
      * 0x2 = wind effect?
@@ -236,10 +302,15 @@ export type TieClassHeader = {
      * 0x40 = no idea (used on enemy spawners on rac3 veldin)
      */
     modeBits: number,
-    rgbaRemapOffsets: number[];
-    lodHeaders: (TieLodHeader | null)[],
+    instanceCount: number,
     scale: number,
-    [k: string]: unknown
+    oClass: number,
+    tClass: number,
+    mipDist: number,
+    glowRgba: number,
+    bsphere: { x: number, y: number, z: number, w: number },
+    lodHeaders: (TieLodHeader | null)[],
+    glowRemapOffsets: number[],
 }
 export function readTieClassHeader(gn: GN, view: DataViewExt): TieClassHeader {
     switch (gn) {
@@ -258,12 +329,24 @@ export function readTieClassHeader(gn: GN, view: DataViewExt): TieClassHeader {
                 adGifsOffset: view.getUint32(0x2c),
                 bsphere: view.getFloat32_Xyzw(0x30),
                 scale: view.getFloat32(0x40),
-                // many unknown fields here
 
+                // fields definitely not in rac1
                 normalsCount: 64, // always 64 normals in rac1
-                modeBits: 0, // probably exists but not sure where
-                rgbaRemapOffsets: [0, 0, 0], // not present in rac1
-                lodHeaders: [null, null, null], // present but not sure where
+                rgbaRemapOffsets: [0, 0, 0],
+                cacheSizes: [],
+                ambientRgbasOffset: 0,
+
+                // fields that probably exist but idk where
+                modeBits: 0,
+                lodHeaders: [null, null, null],
+                instanceIndex: 0,
+                ambientSize: 0,
+                instanceCount: 0,
+                oClass: 0,
+                tClass: 0,
+                mipDist: 0,
+                glowRgba: 0,
+                glowRemapOffsets: []
             };
         }
         case 2:

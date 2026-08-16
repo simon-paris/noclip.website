@@ -35,7 +35,7 @@ export interface LevelResources {
     tieOClasses: number[] | null,
     tieClasses: Map<number, TieClass> | null,
     tieClassTextureIndices: Map<number, number[]> | null,
-    tieInstances: TieInstance[] | null,
+    tieInstances: (TieInstance | null)[] | null, // null means filtered out by the chunk filter
     tieInstancesByOClass: Map<number, TieInstance[]> | null,
     tieAmbientRgbas: TieAmbientRgbaBlock | null,
 
@@ -56,7 +56,7 @@ export interface LevelResources {
     shrubOClasses: number[] | null,
     shrubClasses: Map<number, ShrubClass> | null,
     shrubClassTextureIndices: Map<number, number[]> | null,
-    shrubInstances: ShrubInstance[] | null,
+    shrubInstances: (ShrubInstance | null)[] | null,
     shrubInstancesByOClass: Map<number, ShrubInstance[]> | null,
 
     sky: Sky | null,
@@ -280,16 +280,16 @@ async function loadTieAndShrubInstanceData(gn: GN, out: LevelResources, filterCh
     }
 
     out.tieOClasses = readClassPositionBlock(srcFile.subview(gameplayHeader.tieClasses));
-    let tieInstances = readInstanceBlock(srcFile.subview(gameplayHeader.tieInstances), SIZEOF_TIE_INSTANCE(gn), (view, i) => readTieInstance(gn, view, i)).instances;
-    tieInstances = filterInstancesByChunkPlane(filterChunk, tieInstances, levelSettings.chunkPlanes);
-    out.tieInstances = tieInstances;
-    out.tieInstancesByOClass = makeInstanceOClassMap(tieInstances);
+    const tieInstances = readInstanceBlock(srcFile.subview(gameplayHeader.tieInstances), SIZEOF_TIE_INSTANCE(gn), (view, i) => readTieInstance(gn, view, i)).instances;
+    const tieInstancesFiltered = filterInstancesByChunkPlane(filterChunk, tieInstances, levelSettings.chunkPlanes);
+    out.tieInstances = tieInstancesFiltered;
+    out.tieInstancesByOClass = makeInstanceOClassMap(tieInstancesFiltered);
 
     out.shrubOClasses = readClassPositionBlock(srcFile.subview(gameplayHeader.shrubClasses));
-    let shrubInstances = readInstanceBlock(srcFile.subview(gameplayHeader.shrubInstances), SIZEOF_SHRUB_INSTANCE, readShrubInstance).instances;
-    shrubInstances = filterInstancesByChunkPlane(filterChunk, shrubInstances, levelSettings.chunkPlanes);
-    out.shrubInstances = shrubInstances;
-    out.shrubInstancesByOClass = makeInstanceOClassMap(shrubInstances);
+    const shrubInstances = readInstanceBlock(srcFile.subview(gameplayHeader.shrubInstances), SIZEOF_SHRUB_INSTANCE, readShrubInstance).instances;
+    const shrubInstancesFiltered = filterInstancesByChunkPlane(filterChunk, shrubInstances, levelSettings.chunkPlanes);
+    out.shrubInstances = shrubInstancesFiltered;
+    out.shrubInstancesByOClass = makeInstanceOClassMap(shrubInstancesFiltered);
 }
 
 async function loadMobyInstanceData_Gameplay(gn: GN, out: LevelResources, filterChunk: number | null, gameplayFilePromise: Promise<DataViewExt>, gameplayHeaderPromise: Promise<GameplayHeader>, levelSettingsPromise: Promise<LevelSettings>) {
@@ -372,10 +372,10 @@ async function loadTextureData(gn: GN, out: LevelResources, coreDataFilePromise:
     const [coreDataFile, gsRamFile, indexData] = await Promise.all([coreDataFilePromise, gsRamFilePromise, indexDataPromise]);
 
     const textureData = coreDataFile.subview(indexData.levelCoreHeader.texturesBaseOffset);
-    out.tfragTextures = indexData.tfragTextureEntries.map((entry, i) => readPalette8TextureWithPaletteInGsRam(entry, textureData, gsRamFile, "Tfrag", i));
-    out.tieTextures = indexData.tieTextureEntries.map((entry, i) => readPalette8TextureWithPaletteInGsRam(entry, textureData, gsRamFile, "Tie", i));
-    out.mobyTextures = indexData.mobyTextureEntries.map((entry, i) => readPalette8TextureWithPaletteInGsRam(entry, textureData, gsRamFile, "Moby", i));
-    out.shrubTextures = indexData.shrubTextureEntries.map((entry, i) => readPalette8TextureWithPaletteInGsRam(entry, textureData, gsRamFile, "Shrub", i));
+    out.tfragTextures = indexData.tfragTextureEntries.map((entry, i) => readPalette8TextureWithPaletteInGsRam(gn, entry, textureData, gsRamFile, "Tfrag", i));
+    out.tieTextures = indexData.tieTextureEntries.map((entry, i) => readPalette8TextureWithPaletteInGsRam(gn, entry, textureData, gsRamFile, "Tie", i));
+    out.mobyTextures = indexData.mobyTextureEntries.map((entry, i) => readPalette8TextureWithPaletteInGsRam(gn, entry, textureData, gsRamFile, "Moby", i));
+    out.shrubTextures = indexData.shrubTextureEntries.map((entry, i) => readPalette8TextureWithPaletteInGsRam(gn, entry, textureData, gsRamFile, "Shrub", i));
 }
 
 async function loadLevelSettings(gn: GN, out: LevelResources, gameplayFilePromise: Promise<DataViewExt>, gameplayHeaderPromise: Promise<GameplayHeader>) {
@@ -437,7 +437,7 @@ export async function loadSkyData(gn: GN, out: LevelResources, coreDataFilePromi
 
     const sky = readSky(gn, coreDataFile.subview(indexData.levelCoreHeader.sky));
     out.sky = sky;
-    out.skyTextures = sky.textureEntries.map((textureEntry, i) => readPalette8TextureSky(coreDataFile.subview(indexData.levelCoreHeader.sky), sky.header!, textureEntry, i));
+    out.skyTextures = sky.textureEntries.map((textureEntry, i) => readPalette8TextureSky(gn, coreDataFile.subview(indexData.levelCoreHeader.sky), sky.header!, textureEntry, i));
 }
 
 export async function loadCollisionData(gn: GN, out: LevelResources, coreDataFilePromise: Promise<DataViewExt>, indexDataPromise: Promise<LoadIndexDataResult>) {

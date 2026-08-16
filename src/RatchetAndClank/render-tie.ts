@@ -122,7 +122,7 @@ void main() {
     vec4 textureSample = ratchetSampler(texRemap, v_Clamp, v_ST);
 
     if ((v_ModeBits & 0x20) != 0) {
-        // TODO: write alpha channel to specular mask texture
+        // TODO: if this flag is set, the alpha channel is treated as a specular mask
         textureSample.a = 1.0;
     }
 
@@ -138,7 +138,7 @@ export class TieGeometry {
     private vertexBuffer: GfxBuffer;
     private vertexCount: number;
 
-    constructor(private cache: GfxRenderCache, private tieOClass: number, private tie: TieClass, private lodLevel: number, private textureIndices: number[], private textureAtlases: TextureAtlases) {
+    constructor(private cache: GfxRenderCache, private gn: GN, private tieOClass: number, private tie: TieClass, private lodLevel: number, private textureIndices: number[], private textureAtlases: TextureAtlases) {
         this.inputLayout = cache.createInputLayout({
             vertexAttributeDescriptors: [
                 // per vertex
@@ -205,6 +205,7 @@ export class TieGeometry {
         const vertexArrayBuffer = new Float32Array(vertexCount * TieProgram.elementsPerVertex);
         let vertexPtr = 0;
         let currentMaterial: { texture: number, clamp: number } | undefined;
+        let globalVertexIndex = 0;
 
         let expectedVertsInStrip = 0;
         let tri = [null, null, null] as [TieVertexWithNormalAndRgba | null, TieVertexWithNormalAndRgba | null, TieVertexWithNormalAndRgba | null];
@@ -240,6 +241,10 @@ export class TieGeometry {
                         const vert = command.value;
                         assert(expectedVertsInStrip > 0);
                         expectedVertsInStrip--;
+
+                        if (this.gn >= 2) {
+                            vert.rgbaIndex = globalVertexIndex;
+                        }
 
                         tri[0] = tri[1];
                         tri[1] = tri[2];
@@ -277,6 +282,8 @@ export class TieGeometry {
                                 vertexArrayBuffer[vertexPtr++] = positionScale * vertex.lodMorphOffsetZ;
                             }
                         }
+
+                        globalVertexIndex++;
                     }
                 }
             }
@@ -358,7 +365,7 @@ export class TieRenderer {
     }
 
     renderTie(renderInstList: GfxRenderInstList, tieGeometriesByLod: (TieGeometry | null)[], tieClass: TieClass, tieInstanceBatch: TieInstance[], textureMappings: GfxSamplerBinding[], cameraPosition: vec3, cameraFrustum: Frustum, settingLodPreset: number, settingLodBias: number, gn: GN, instanceDataBuffer: MegaBuffer): void {
-        const enableVertexColors = gn === 1;
+        const enableVertexColors = true; ///gn === 1;
 
         type TieDrawInstance = { objectMatrix: mat4, directionLights: number[], rgbasRow: number, lodMorphFactor: number };
         const tieInstancesToDrawByLod: TieDrawInstance[][] = [[], [], []];

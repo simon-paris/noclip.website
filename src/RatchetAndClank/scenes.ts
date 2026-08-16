@@ -18,7 +18,7 @@ import { ShrubGeometry, ShrubRenderer } from "./render-shrub";
 import { colorNewFromRGBA, OpaqueBlack, White } from "../Color";
 import { SkyAnimationState, SkyGeometry, SkyRenderer } from "./render-sky";
 import { RatchetShaderLib } from "./shader-lib";
-import { createGfxTextureForPaletteTexture, createTextureAtlases, createTieRgbaTexture_Rac1, createTieRgbaTexture_Rac234, swizzleAllTextures, TextureAtlases } from "./textures";
+import { createGfxTextureForPaletteTexture, createTextureAtlases, createTieRgbaTexture_InitPreview_Rac234, createTieRgbaTexture_Rac1, createTieRgbaTexture_Rac234, TextureAtlases } from "./textures";
 import { CollisionGeometry, CollisionRenderer } from "./render-collision";
 import { IS_DEVELOPMENT } from "../BuildVersion";
 import { GfxDynamicBufferCache } from "../gfx/render/GfxRenderCache";
@@ -234,7 +234,7 @@ class RatchetAndClankScene implements SceneGfx {
         const tieGeometry: (TieGeometry | null)[] = [null, null, null];
         for (let i = 0; i < 3; i++) {
             if (tieClass.packets[i].length === 0) continue; // no mesh for this lod
-            tieGeometry[i] = new TieGeometry(this.renderHelper.renderCache, oClass, tieClass, i, tieTextureIndices, this.textures.textureAtlases);
+            tieGeometry[i] = new TieGeometry(this.renderHelper.renderCache, this.gn, oClass, tieClass, i, tieTextureIndices, this.textures.textureAtlases);
         }
         this.geometries.ties.set(oClass, tieGeometry);
         return tieGeometry;
@@ -308,8 +308,6 @@ class RatchetAndClankScene implements SceneGfx {
         const { skyTextures } = this.levelResources;
         if (!skyTextures) return null;
 
-        swizzleAllTextures(this.gn, skyTextures);
-
         const gfxTextures: GfxTexture[] = [];
         for (let i = 0; i < skyTextures.length; i++) {
             const skyTexture = skyTextures[i];
@@ -336,11 +334,17 @@ class RatchetAndClankScene implements SceneGfx {
             this.textureHolder.onnewtextures();
             return this.textures.tieRgbaTexture;
         } else {
-            const { tieAmbientRgbas } = this.levelResources;
+            const { tieClasses, tieAmbientRgbas, tieInstances } = this.levelResources;
+            if (!tieInstances) return null;
+            if (!tieClasses) return null;
             if (!tieAmbientRgbas) return null;
 
-            this.textures.tieRgbaTexture = createTieRgbaTexture_Rac234(this.renderHelper.device, tieAmbientRgbas);
+            this.textures.tieRgbaTexture = createTieRgbaTexture_Rac234(this.renderHelper.device, tieInstances, tieClasses, tieAmbientRgbas);
             this.textureHolder.viewerTextures.push({ gfxTexture: this.textures.tieRgbaTexture });
+
+            const debugTexture = createTieRgbaTexture_InitPreview_Rac234(this.renderHelper.device, tieAmbientRgbas);
+            this.textureHolder.viewerTextures.push({ gfxTexture: debugTexture });
+
             this.textureHolder.onnewtextures();
             return this.textures.tieRgbaTexture;
         }
@@ -349,11 +353,6 @@ class RatchetAndClankScene implements SceneGfx {
     getOrCreateAtlasTextures(): GfxSamplerBinding[] | null {
         const { tfragTextures, tieTextures, mobyTextures, shrubTextures } = this.levelResources;
         if (!tfragTextures || !tieTextures || !mobyTextures || !shrubTextures) return null;
-
-        swizzleAllTextures(this.gn, tfragTextures);
-        swizzleAllTextures(this.gn, tieTextures);
-        swizzleAllTextures(this.gn, mobyTextures);
-        swizzleAllTextures(this.gn, shrubTextures);
 
         if (!this.textures.textureAtlases) {
             this.textures.textureAtlases = createTextureAtlases(this.renderHelper.device, tfragTextures, tieTextures, mobyTextures, shrubTextures);
@@ -575,6 +574,7 @@ class RatchetAndClankScene implements SceneGfx {
                 const tieInstances = this.levelResources.tieInstances ?? [];
                 for (let i = 0; i < tieInstances.length; i++) {
                     const inst = tieInstances[i];
+                    if (!inst) continue;
                     renderObjectPosition("tie" + inst.oClass, mat4.getTranslation(vec3.create(), inst.matrix));
                 }
             }
@@ -594,6 +594,7 @@ class RatchetAndClankScene implements SceneGfx {
                 const shrubInstances = this.levelResources.shrubInstances ?? [];
                 for (let i = 0; i < shrubInstances.length; i++) {
                     const inst = shrubInstances[i];
+                    if (!inst) continue;
                     renderObjectPosition("shrub" + inst.oClass, mat4.getTranslation(vec3.create(), inst.matrix));
                 }
             }

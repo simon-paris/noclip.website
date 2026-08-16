@@ -21,9 +21,10 @@ export function matrixToNoclipSpace(matrix: ReadonlyMat4): mat4 {
 }
 
 // make map of oClass to instances of that oClass
-export function makeInstanceOClassMap<T extends { oClass: number }>(instances: T[]) {
+export function makeInstanceOClassMap<T extends { oClass: number }>(instances: (T | null)[]) {
     const map = new Map<number, T[]>();
     for (const inst of instances) {
+        if (!inst) continue;
         if (!map.has(inst.oClass)) {
             map.set(inst.oClass, []);
         }
@@ -69,17 +70,21 @@ export function ownerChunk(pos: vec3, chunkPlanes: ChunkPlane[]): number {
 }
 
 // filter tie or shrub instances matching a chunk id
-export function filterInstancesByChunkPlane<T extends { _matrixInNoclipSpace: mat4 }>(chunkNumber: number | null, instances: T[], chunkPlanes: ChunkPlane[] | undefined): T[] {
+export function filterInstancesByChunkPlane<T extends { _matrixInNoclipSpace: mat4 }>(chunkNumber: number | null, instances: T[], chunkPlanes: ChunkPlane[] | undefined): (T | null)[] {
     if (!chunkPlanes) return instances;
     if (chunkNumber === null) return instances;
-    const out: T[] = [];
+
+    const out: (T | null)[] = [];
     for (let i = 0; i < instances.length; i++) {
         const instance = instances[i];
         const pos = mat4.getTranslation(vec3.create(), instance._matrixInNoclipSpace);
         if (ownerChunk(pos, chunkPlanes) === chunkNumber) {
             out.push(instance);
+        } else {
+            out.push(null);
         }
     }
+
     return out;
 }
 
