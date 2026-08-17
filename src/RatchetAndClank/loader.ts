@@ -465,12 +465,14 @@ async function loadOcclusionMappings(gn: GN, out: LevelResources, gameplayFilePr
         }
     }
 
+    if (gameplayHeader.occlusionMappings === 0) return;
     out.occlusionMappings = readOcclusionMappings(srcFile.subview(gameplayHeader.occlusionMappings));
 }
 
 export async function loadOcclusionData(gn: GN, out: LevelResources, coreDataFilePromise: Promise<DataViewExt>, indexDataPromise: Promise<LoadIndexDataResult>) {
     const [coreDataFile, indexData] = await Promise.all([coreDataFilePromise, indexDataPromise]);
 
+    if (indexData.levelCoreHeader.occlusion === 0) return;
     out.occlusion = readOcclusion(coreDataFile.subview(indexData.levelCoreHeader.occlusion));
 }
 

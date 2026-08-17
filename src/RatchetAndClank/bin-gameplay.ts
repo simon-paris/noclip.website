@@ -735,9 +735,9 @@ export function readTieAmbientRgbaBlock(view: DataViewExt): TieAmbientRgbaBlock 
 export interface OcclusionMappings {
     // mappings of occlusion id to occlusion bit
     // some values look like they have the lower 15 bits flipped (?)
-    tfragMappings: Map<number, number[]>,
     tieMappings: Map<number, number>,
     mobyMappings: Map<number, number>,
+    // tfrag mappings are also present but we don't need them
 }
 export function readOcclusionMappings(view: DataViewExt): OcclusionMappings {
     const tfragCount = view.getUint32(0x0);
@@ -745,7 +745,7 @@ export function readOcclusionMappings(view: DataViewExt): OcclusionMappings {
     const mobyCount = view.getUint32(0x8);
 
     let ptr = 0x10;
-    const tfragMappings = readOcclusionMappingsBlock_Multiple(view.subview(ptr), tfragCount);
+    // don't read the tfrag mappings, we don't need it since we merge all the tfrags
     ptr += tfragCount * SIZEOF_OCCLUSION_MAPPING;
     const tieMappings = readOcclusionMappingsBlock(view.subview(ptr), tieCount);
     ptr += tieCount * SIZEOF_OCCLUSION_MAPPING;
@@ -753,7 +753,6 @@ export function readOcclusionMappings(view: DataViewExt): OcclusionMappings {
     ptr += mobyCount * SIZEOF_OCCLUSION_MAPPING;
 
     return {
-        tfragMappings,
         tieMappings,
         mobyMappings,
     }
@@ -766,23 +765,11 @@ export function readOcclusionMappingsBlock(view: DataViewExt, count: number) {
 
     for (let i = 0; i < count; i++) {
         const bit = view.getUint16(i * SIZEOF_OCCLUSION_MAPPING + 0x0);
+        if (bit === 0xFFFF) continue; // ??? happens in rac2 siberius
         assert(bit < 1024);
         const slot = view.getUint16(i * SIZEOF_OCCLUSION_MAPPING + 0x4);
         assert(arr.get(slot) === undefined);
         arr.set(slot, bit);
-    }
-
-    return arr;
-}
-export function readOcclusionMappingsBlock_Multiple(view: DataViewExt, count: number) {
-    const arr = new Map<number, number[]>();
-
-    for (let i = 0; i < count; i++) {
-        const bit = view.getUint16(i * SIZEOF_OCCLUSION_MAPPING + 0x0);
-        assert(bit < 1024);
-        const slot = view.getUint16(i * SIZEOF_OCCLUSION_MAPPING + 0x4);
-        if (!arr.get(slot)) arr.set(slot, []);
-        arr.get(slot)!.push(bit);
     }
 
     return arr;
