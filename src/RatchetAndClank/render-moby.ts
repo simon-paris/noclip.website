@@ -5,7 +5,7 @@ import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { DeviceProgram } from "../Program";
 import { RatchetShaderLib } from "./shader-lib";
 import { MobyClass, MobyMeshPacket, MobyVertex } from "./bin-core";
-import { MegaBuffer, noclipSpaceFromRatchetSpace } from "./utils";
+import { MegaBuffer, noclipSpaceFromRatchetSpace, OcclusionChecker } from "./utils";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { GfxRenderInstList } from "../gfx/render/GfxRenderInstManager";
 import { mat4, quat, vec3 } from "gl-matrix";
@@ -404,7 +404,7 @@ export class MobyRenderer {
         this.mobyProgram = renderHelper.renderCache.createProgram(new MobyProgram());
     }
 
-    renderMoby(renderInstList: GfxRenderInstList, mobyGeometriesByLod: (MobyGeometry | null)[], mobyClass: MobyClass, mobyInstances: MobyInstance[], textureMappings: GfxSamplerBinding[], cameraPosition: vec3, cameraFrustum: Frustum, lodSetting: number, lodBias: number, enableBangles: boolean, completedMissionFlags: number, instanceDataBuffer: MegaBuffer): void {
+    renderMoby(renderInstList: GfxRenderInstList, mobyGeometriesByLod: (MobyGeometry | null)[], mobyClass: MobyClass, mobyInstances: MobyInstance[], textureMappings: GfxSamplerBinding[], cameraPosition: vec3, occlusionChecker: OcclusionChecker | null, cameraFrustum: Frustum, lodSetting: number, lodBias: number, enableBangles: boolean, completedMissionFlags: number, instanceDataBuffer: MegaBuffer): void {
         type MobyDrawInstance = { objectMatrix: mat4, rgb: vec3, directionalLights: number[], lodAlpha: number };
 
         if (mobyGeometriesByLod[0] === null) return;
@@ -413,6 +413,9 @@ export class MobyRenderer {
         const mobyInstancesToDrawByLod: MobyDrawInstance[][] = [[], []];
         for (let i = 0; i < mobyInstances.length; i++) {
             const mobyInstance = mobyInstances[i];
+
+            // occlusion check
+            if (occlusionChecker && !mobyInstance.skipOcclusionCheck && !occlusionChecker.mobyVisible(mobyInstance.uid)) continue;
 
             if (mobyInstance.mission !== -1) {
                 // despawns enemies on completed missions

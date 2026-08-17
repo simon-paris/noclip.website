@@ -161,6 +161,8 @@ for (const levelSectors of tableOfContents.levelSectors) {
             missionGameplayHeader: null,
             gsTable: null,
             levelSettings: null,
+            occlusion: null,
+            occlusionMappings: null,
             paths: null,
             grindPaths: null,
             directionLights: null,

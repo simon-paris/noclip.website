@@ -4,7 +4,8 @@ import { Color } from "../Color";
 import { assert, nArray } from "../util";
 import { IS_DEVELOPMENT } from "../BuildVersion";
 import { ClassEntry } from "./bin-index";
-import { ChunkPlane, MobyInstance } from "./bin-gameplay";
+import { ChunkPlane, MobyInstance, OcclusionMappings } from "./bin-gameplay";
+import { Occlusion } from "./bin-core";
 
 // game number shorthand
 export type GN = 1 | 2 | 3 | 4;
@@ -137,6 +138,45 @@ export function readRGB5A1(rgba: number): Color {
     const b = ((rgba >> 10) & 0x1F) << 3;
     const a = (rgba >> 15) === 1 ? 0xFF : 0x00;
     return { r, g, b, a };
+}
+
+export class OcclusionChecker {
+    // 128 byte buffer
+    currentMaskId: number | null = null;
+    currentMask: Uint8Array | null = null;
+
+    constructor(private occlusionGrid: Occlusion, private occlusionMappings: OcclusionMappings) { }
+
+    setCameraPosition(pos: vec3) {
+        const x = Math.floor(pos[0] / 4);
+        const y = Math.floor(-pos[2] / 4);
+        const z = Math.floor(pos[1] / 4);
+
+        const nextMaskId = this.occlusionGrid.grid.get(z)?.get(y)?.get(x) ?? null;
+        if (nextMaskId === this.currentMaskId) return;
+
+        if (nextMaskId === null) {
+            this.currentMaskId = null;
+            this.currentMask = null;
+        } else {
+            this.currentMaskId = nextMaskId;
+            this.currentMask = this.occlusionGrid.masks.subview(nextMaskId * 128, 128).getTypedArrayView(Uint8Array);
+        }
+    }
+
+    tieVisible(occlusionId: number) {
+        if (!this.currentMask) return true;
+        const bit = this.occlusionMappings.tieMappings.get(occlusionId);
+        if (bit === undefined) return true;
+        return (this.currentMask[bit >> 3] & (1 << (bit % 8))) !== 0
+    }
+
+    mobyVisible(occlusionId: number) {
+        if (!this.currentMask) return true;
+        const bit = this.occlusionMappings.mobyMappings.get(occlusionId);
+        if (bit === undefined) return true;
+        return (this.currentMask[bit >> 3] & (1 << (bit % 8))) !== 0
+    }
 }
 
 export type MegaBuffer = {

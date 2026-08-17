@@ -1,8 +1,8 @@
 import { IS_DEVELOPMENT } from "../BuildVersion";
 import { GsPrimitiveType } from "../Common/PS2/GS";
 import { DataViewExt, EMPTY_VIEW } from "./DataViewExt";
-import { assert, nArray } from "../util";
-import { getBits, GN, ImaginaryGsCommand, ImaginaryGsCommandBuffer, truncateTrailing0xFF } from "./utils";
+import { align, assert } from "../util";
+import { getBits, GN, ImaginaryGsCommand, ImaginaryGsCommandBuffer } from "./utils";
 import { readVifCommandList, VifUnpackReader } from "./vif";
 import { VifUnpackFormat } from "../Common/PS2/VIF";
 
@@ -167,9 +167,6 @@ export function readTieRgbaRemaps(view: DataViewExt, oClass: number): RgbaRemaps
         assert(descriptor.block6Size % 8 === 0);
 
         let ptr = 0x10;
-        function alignTo(size: number) {
-            if (ptr % size !== 0) ptr += size - (ptr % size);
-        }
 
         const block1View = descriptor.block1Size ? packetView.subview(ptr, descriptor.block1Size) : EMPTY_VIEW;
         ptr += descriptor.block1Size;
@@ -183,7 +180,7 @@ export function readTieRgbaRemaps(view: DataViewExt, oClass: number): RgbaRemaps
         ptr += descriptor.block6Size;
         const block3View = descriptor.block3Size ? packetView.subview(ptr, descriptor.block3Size) : EMPTY_VIEW;
         ptr += descriptor.block3Size;
-        alignTo(0x10)
+        ptr = align(ptr, 0x10);
         assert(ptr === descriptor.packetSize);
         assert(ptr === packetSizeBytes);
 
@@ -482,9 +479,6 @@ export function readTiePacketBody(gn: GN, view: DataViewExt, tiePacketHeader: Ti
     */
 
     let ptr = 0;
-    function alignTo(size: number) {
-        if (ptr % size !== 0) ptr += size - (ptr % size);
-    }
 
     const AD_GIFS = 4;
     const adGifDestOffsets = view.getArrayOfNumbers(ptr, AD_GIFS, Int32Array);
@@ -499,7 +493,7 @@ export function readTiePacketBody(gn: GN, view: DataViewExt, tiePacketHeader: Ti
     ptr += tieVuHeader.stripCount * SIZEOF_TIE_STRIP;
 
     // regular verts
-    alignTo(0x10);
+    ptr = align(ptr, 0x10);
     const regularVertexCount = tieVuHeader.regularVertexCount;
     const regularVerts = view.subdivide(ptr, regularVertexCount, SIZEOF_TIE_REGULAR_VERTEX).map(readTieRegularVertex);
     ptr += regularVertexCount * SIZEOF_TIE_REGULAR_VERTEX;
@@ -516,23 +510,23 @@ export function readTiePacketBody(gn: GN, view: DataViewExt, tiePacketHeader: Ti
     let morphingRgbaIndices: { x: number, y: number, z: number }[] = [];
     if (gn === 1) {
         // indices into the tie's normal array
-        alignTo(0x10);
+        ptr = align(ptr, 0x10);
         regularNormalIndices = view.subdivide(ptr, tieVuHeader.regularVertexCount, 0x1).map(view => view.getUint8(0));
         ptr += tieVuHeader.regularVertexCount * 0x1;
-        alignTo(0x4);
+        ptr = align(ptr, 0x4);
         morphingNormalIndices = view.subdivide(ptr, tieVuHeader.morphingVertexCount, 0x4).map(view => view.getUint8_Xyz(0));
         ptr += tieVuHeader.morphingVertexCount * 0x4;
 
         // indices into the instance's rgba array
-        alignTo(0x10);
+        ptr = align(ptr, 0x10);
         regularRgbaIndices = view.subdivide(ptr, tieVuHeader.regularVertexCount, 0x1).map(view => view.getUint8(0));
         ptr += tieVuHeader.regularVertexCount * 0x1;
-        alignTo(0x4);
+        ptr = align(ptr, 0x4);
         morphingRgbaIndices = view.subdivide(ptr, tieVuHeader.morphingVertexCount, 0x4).map(view => view.getUint8_Xyzw(0));
         ptr += tieVuHeader.morphingVertexCount * 0x4;
     }
 
-    alignTo(0x10);
+    ptr = align(ptr, 0x10);
     const stripControlBytes: number[] = [];
     let stripCount = tieVuHeader.stripCount + 1;
     while (true) {
@@ -1980,6 +1974,7 @@ export function readMobyClass(gn: GN, view: DataViewExt, oClass: number): MobyCl
 
     let bangles: MobyBangles | null = null;
     if (header.bangles) {
+        assert(meshGn !== 1); // no bangles in rac1
         bangles = readMobyBangles(gn, view, header.bangles * 0x10, header.packetTableOffset);
     }
 
@@ -2264,9 +2259,6 @@ export function readMobyVertexTable(meshGn: GN, vertexTableView: DataViewExt, pa
     */
 
     let ptr = 0;
-    function alignTo(size: number) {
-        if (ptr % size !== 0) ptr += size - (ptr % size);
-    }
 
     const vertexTableHeader = readVertexTableHeader(meshGn, vertexTableView);
     ptr += SIZEOF_VERTEX_TABLE_HEADER(meshGn);
@@ -2279,7 +2271,7 @@ export function readMobyVertexTable(meshGn: GN, vertexTableView: DataViewExt, pa
     const matrixTransfers = vertexTableView.subdivide(ptr, vertexTableHeader.matrixTransferCount, SIZEOF_MOBY_MATRIX_TRANSFER).map(view => readMobyMatrixTransfer(view));
     ptr += vertexTableHeader.matrixTransferCount * SIZEOF_MOBY_MATRIX_TRANSFER;
 
-    alignTo(8);
+    ptr = align(ptr, 0x8);
 
     // verts to copy from the cache
     const duplicateVertices = vertexTableView.getArrayOfNumbers(ptr, vertexTableHeader.duplicateVertexCount, Uint16Array).map(value => value >> 7);
@@ -2445,7 +2437,9 @@ function readMobyCacheAddresses(view: DataViewExt, verts: MobyVertex[]) {
      * 
      * We have to iterate with a stride of 0x10, until we would reach the end of the buffer,
      * then we advance 0x4 once, then 0x2 thereafter.
-     * The trailing varies but it's at least 0x10 and always a multiple of 0x10.
+     * 
+     * The amount of trailing space varies but it's at least 0x10 and always a multiple of 0x10.
+     * If there's exactly 3 verts there must be at least 0x20 trailing space.
      * 
      * We need to skip the first 7 elements but the iteration order is not affected by skipping.
      * 
@@ -2519,5 +2513,63 @@ export function readMobyMatrixTransfer(view: DataViewExt): MobyMatrixTransfer {
     return {
         sprJointIndex: view.getUint8(0x0),
         vu0DestAddr: view.getUint8(0x1),
+    }
+}
+
+export interface Occlusion {
+    // [z][y][x] -> occlusion mask id
+    // where x,y,z are the camera coords divided by 4 and rounded down
+    grid: Map<number, Map<number, Map<number, number>>>,
+    // is_occluded = masks[maskId * 128][occlusionIndex / 8] & (1 << (occlusionIndex % 8))
+    masks: DataViewExt,
+};
+
+export function readOcclusion(view: DataViewExt): Occlusion {
+    const masksOffset = view.getUint32(0x0);
+    let maxMaskId = 0;
+    const grid = new Map<number, Map<number, Map<number, number>>>();
+
+    const zStart = view.getUint16(0x4);
+    const zCount = view.getUint16(0x6);
+    const zOffsets = view.getArrayOfNumbers(0x8, zCount, Uint16Array);
+
+    for (let z = 0; z < zOffsets.length; z++) {
+        const zOffset = zOffsets[z] * 4;
+        if (!zOffset) continue;
+
+        const yStart = view.getUint16(zOffset + 0x0);
+        const yCount = view.getUint16(zOffset + 0x2);
+        const yOffsets = view.getArrayOfNumbers(zOffset + 0x4, yCount, Uint16Array);
+        for (let y = 0; y < yOffsets.length; y++) {
+            const yOffset = yOffsets[y] * 4;
+            if (!yOffset) continue;
+
+            const xStart = view.getUint16(yOffset + 0x0);
+            const xCount = view.getUint16(yOffset + 0x2);
+            const xMaskIds = view.getArrayOfNumbers(yOffset + 0x4, xCount, Uint16Array);
+            for (let x = 0; x < xMaskIds.length; x++) {
+                const xMaskId = xMaskIds[x];
+                if (xMaskId === 0xFFFF) continue;
+                maxMaskId = Math.max(maxMaskId, xMaskId);
+
+                const zPos = zStart + z;
+                const yPos = yStart + y;
+                const xPos = xStart + x;
+                if (zPos > 1000 || yPos > 1000 || xPos > 1000) debugger;
+
+                let zCell = grid.get(zPos);
+                if (!zCell) zCell = grid.set(zPos, new Map()).get(zPos)!;
+                let yCell = zCell.get(yPos);
+                if (!yCell) yCell = zCell.set(yPos, new Map()).get(yPos)!;
+                yCell.set(xPos, xMaskId);
+            }
+        }
+    }
+
+    const masks = view.subview(masksOffset, (maxMaskId + 1) * 128);
+
+    return {
+        masks,
+        grid,
     }
 }

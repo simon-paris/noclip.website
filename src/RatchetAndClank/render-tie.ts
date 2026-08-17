@@ -2,7 +2,7 @@ import { mat4, vec3 } from "gl-matrix";
 import { Frustum } from "../Geometry";
 import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
-import { fillMatrix4x3, fillMatrix4x4, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
+import { fillMatrix4x3, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
 import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice, GfxFormat, GfxInputLayout, GfxProgram, GfxSamplerBinding, GfxSamplerFormatKind, GfxTextureDimension, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
@@ -12,7 +12,7 @@ import { assert } from "../util";
 import { TieClass, TieVertexWithNormalAndRgba } from "./bin-core";
 import { TieInstance } from "./bin-gameplay";
 import { RatchetShaderLib } from "./shader-lib";
-import { GN, ImaginaryGsCommandType, MegaBuffer } from "./utils";
+import { GN, ImaginaryGsCommandType, MegaBuffer, OcclusionChecker } from "./utils";
 import { packRemap, TextureAtlases } from "./textures";
 
 export class TieProgram extends DeviceProgram {
@@ -364,13 +364,16 @@ export class TieRenderer {
         this.tieProgram = renderHelper.renderCache.createProgram(new TieProgram());
     }
 
-    renderTie(renderInstList: GfxRenderInstList, tieGeometriesByLod: (TieGeometry | null)[], tieClass: TieClass, tieInstanceBatch: TieInstance[], textureMappings: GfxSamplerBinding[], cameraPosition: vec3, cameraFrustum: Frustum, settingLodPreset: number, settingLodBias: number, gn: GN, instanceDataBuffer: MegaBuffer): void {
+    renderTie(renderInstList: GfxRenderInstList, tieGeometriesByLod: (TieGeometry | null)[], tieClass: TieClass, tieInstanceBatch: TieInstance[], textureMappings: GfxSamplerBinding[], cameraPosition: vec3, occlusionChecker: OcclusionChecker | null, cameraFrustum: Frustum, settingLodPreset: number, settingLodBias: number, gn: GN, instanceDataBuffer: MegaBuffer): void {
         const enableVertexColors = true; ///gn === 1;
 
         type TieDrawInstance = { objectMatrix: mat4, directionLights: number[], rgbasRow: number, lodMorphFactor: number };
         const tieInstancesToDrawByLod: TieDrawInstance[][] = [[], [], []];
         for (let i = 0; i < tieInstanceBatch.length; i++) {
             const tieInstance = tieInstanceBatch[i];
+
+            const occlusionIndex = tieInstance.occlusionIndex;
+            if (occlusionChecker && !occlusionChecker.tieVisible(occlusionIndex)) continue;
 
             // tie instance transform
             const objectMatrix = tieInstance._matrixInNoclipSpace;

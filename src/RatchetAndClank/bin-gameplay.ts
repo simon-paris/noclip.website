@@ -19,6 +19,7 @@ export type GameplayHeader = {
     paths: number,
     grindPaths: number,
     pointLightInstances: number,
+    occlusionMappings: number,
     tieAmbientRgbas: number, // rac2+ only
 }
 export function readGameplayHeader(gn: GN, view: DataViewExt, artFileView_rac4: DataViewExt | null): GameplayHeader {
@@ -82,6 +83,7 @@ export function readGameplayHeader(gn: GN, view: DataViewExt, artFileView_rac4: 
                 paths: view.getInt32(0x70),
                 grindPaths: view.getInt32(0x74),
                 pointLightInstances: view.getInt32(0x7c),
+                occlusionMappings: view.getInt32(0x8c),
                 tieAmbientRgbas: 0, // not in rac1
             };
         }
@@ -128,7 +130,7 @@ export function readGameplayHeader(gn: GN, view: DataViewExt, artFileView_rac4: 
                 int32 camCollGrid;
                 int32 envSamplePoints;
                 // 0x90
-                int32 occlusion;
+                int32 occlusionMappings;
                 int32 tieAmbientRgbas;
                 int32 areas;
             }
@@ -150,6 +152,7 @@ export function readGameplayHeader(gn: GN, view: DataViewExt, artFileView_rac4: 
                 paths: view.getInt32(0x78),
                 grindPaths: view.getInt32(0x7c),
                 pointLightInstances: view.getInt32(0x80),
+                occlusionMappings: view.getInt32(0x90),
                 tieAmbientRgbas: view.getInt32(0x94),
             };
         }
@@ -225,6 +228,7 @@ export function readGameplayHeader(gn: GN, view: DataViewExt, artFileView_rac4: 
                 tieInstances: artFileView_rac4.getInt32(0x8),
                 shrubClasses: artFileView_rac4.getInt32(0x10),
                 shrubInstances: artFileView_rac4.getInt32(0x14),
+                occlusionMappings: view.getInt32(0x1c),
                 tieAmbientRgbas: artFileView_rac4.getInt32(0x20),
             }
         }
@@ -420,6 +424,7 @@ export function readTieInstance(gn: GN, view: DataViewExt, instanceIndex: number
 export interface MobyInstance {
     size: number,
     mission: number,
+    uid: number,
     oClass: number,
     scale: number,
     drawDistance: number,
@@ -428,6 +433,7 @@ export interface MobyInstance {
     rotation: { x: number, y: number, z: number },
     color: { r: number, g: number, b: number },
     directionalLights: number[],
+    skipOcclusionCheck: number,
     [unknown: string]: unknown,
 };
 
@@ -449,6 +455,7 @@ export function readMobyInstance(gn: GN, view: DataViewExt): MobyInstance {
             return {
                 size: view.getInt32(0x0),
                 mission: view.getInt32(0x4), // guess
+                uid: view.getInt32(0xc), // guess
                 oClass: view.getInt32(0x18),
                 scale: view.getFloat32(0x1c),
                 drawDistance: view.getInt32(0x20),
@@ -459,7 +466,7 @@ export function readMobyInstance(gn: GN, view: DataViewExt): MobyInstance {
                 isRooted: view.getInt32(0x4c),
                 rootedDistance: view.getFloat32(0x50),
                 pvarIndex: view.getInt32(0x58),
-                occlusion: view.getInt32(0x5c),
+                skipOcclusionCheck: view.getInt32(0x5c),
                 modeBits: view.getInt32(0x60),
                 color: view.getInt32_Rgb(0x64),
                 directionalLights: view.getNibbleArray(0x70, 2),
@@ -485,7 +492,7 @@ export function readMobyInstance(gn: GN, view: DataViewExt): MobyInstance {
                 isRooted: view.getInt32(0x5c),
                 rootedDistance: view.getFloat32(0x60),
                 pvarIndex: view.getInt32(0x68),
-                occlusion: view.getInt32(0x6c),
+                skipOcclusionCheck: view.getInt32(0x6c),
                 modeBits: view.getInt32(0x70),
                 color: view.getInt32_Rgb(0x74), // wrench calls this lightColor, not sure if different from the color field in rac1
                 directionalLights: view.getNibbleArray(0x80, 2),
@@ -507,7 +514,7 @@ export function readMobyInstance(gn: GN, view: DataViewExt): MobyInstance {
                 isRooted: view.getInt32(0x44),
                 rootedDistance: view.getFloat32(0x48),
                 pvarIndex: view.getInt32(0x50),
-                occlusion: view.getInt32(0x54),
+                skipOcclusionCheck: view.getInt32(0x54),
                 modeBits: view.getInt32(0x58),
                 color: view.getInt32_Rgb(0x5c),
                 directionalLights: view.getNibbleArray(0x68, 2),
@@ -723,4 +730,60 @@ export function readTieAmbientRgbaBlock(view: DataViewExt): TieAmbientRgbaBlock 
         view = view.subview(4 + count * 2);
     }
     return out;
+}
+
+export interface OcclusionMappings {
+    // mappings of occlusion id to occlusion bit
+    // some values look like they have the lower 15 bits flipped (?)
+    tfragMappings: Map<number, number[]>,
+    tieMappings: Map<number, number>,
+    mobyMappings: Map<number, number>,
+}
+export function readOcclusionMappings(view: DataViewExt): OcclusionMappings {
+    const tfragCount = view.getUint32(0x0);
+    const tieCount = view.getUint32(0x4);
+    const mobyCount = view.getUint32(0x8);
+
+    let ptr = 0x10;
+    const tfragMappings = readOcclusionMappingsBlock_Multiple(view.subview(ptr), tfragCount);
+    ptr += tfragCount * SIZEOF_OCCLUSION_MAPPING;
+    const tieMappings = readOcclusionMappingsBlock(view.subview(ptr), tieCount);
+    ptr += tieCount * SIZEOF_OCCLUSION_MAPPING;
+    const mobyMappings = readOcclusionMappingsBlock(view.subview(ptr), mobyCount);
+    ptr += mobyCount * SIZEOF_OCCLUSION_MAPPING;
+
+    return {
+        tfragMappings,
+        tieMappings,
+        mobyMappings,
+    }
+}
+
+export const SIZEOF_OCCLUSION_MAPPING = 0x8;
+export const OCCLUSION_MAPPING_NONE = 0x1FFFF;
+export function readOcclusionMappingsBlock(view: DataViewExt, count: number) {
+    const arr = new Map<number, number>();
+
+    for (let i = 0; i < count; i++) {
+        const bit = view.getUint16(i * SIZEOF_OCCLUSION_MAPPING + 0x0);
+        assert(bit < 1024);
+        const slot = view.getUint16(i * SIZEOF_OCCLUSION_MAPPING + 0x4);
+        assert(arr.get(slot) === undefined);
+        arr.set(slot, bit);
+    }
+
+    return arr;
+}
+export function readOcclusionMappingsBlock_Multiple(view: DataViewExt, count: number) {
+    const arr = new Map<number, number[]>();
+
+    for (let i = 0; i < count; i++) {
+        const bit = view.getUint16(i * SIZEOF_OCCLUSION_MAPPING + 0x0);
+        assert(bit < 1024);
+        const slot = view.getUint16(i * SIZEOF_OCCLUSION_MAPPING + 0x4);
+        if (!arr.get(slot)) arr.set(slot, []);
+        arr.get(slot)!.push(bit);
+    }
+
+    return arr;
 }
