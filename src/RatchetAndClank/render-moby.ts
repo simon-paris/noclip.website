@@ -415,7 +415,13 @@ export class MobyRenderer {
             const mobyInstance = mobyInstances[i];
 
             // occlusion check
-            if (occlusionChecker && !mobyInstance.skipOcclusionCheck && !occlusionChecker.mobyVisible(mobyInstance.uid)) continue;
+            if (occlusionChecker && occlusionChecker.mask && !mobyInstance.skipOcclusionCheck) {
+                const bit = occlusionChecker.mobyMappings[mobyInstance._iOccl * 2];
+                // these pass but I'll turn them off for performance
+                // assert(bit < 1024);
+                // assert(occlusionChecker.mobyMappings[mobyInstance._iOccl * 2 + 1] === mobyInstance.uid);
+                if ((occlusionChecker.mask[bit >> 3] & (1 << (bit % 8))) === 0) continue;
+            }
 
             if (mobyInstance.mission !== -1) {
                 // despawns enemies on completed missions

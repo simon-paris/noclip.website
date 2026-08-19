@@ -372,8 +372,14 @@ export class TieRenderer {
         for (let i = 0; i < tieInstanceBatch.length; i++) {
             const tieInstance = tieInstanceBatch[i];
 
-            const occlusionIndex = tieInstance.occlusionIndex;
-            if (occlusionChecker && !occlusionChecker.tieVisible(occlusionIndex)) continue;
+            // occlusion check
+            if (occlusionChecker && occlusionChecker.mask) {
+                const bit = occlusionChecker.tieMappings[tieInstance._i * 2];
+                // these pass but I'll turn them off for performance
+                // assert(bit < 1024);
+                // assert(occlusionChecker.tieMappings[tieInstance._i * 2 + 1] === tieInstance.occlusionIndex);
+                if ((occlusionChecker.mask[bit >> 3] & (1 << (bit % 8))) === 0) continue;
+            }
 
             // tie instance transform
             const objectMatrix = tieInstance._matrixInNoclipSpace;
@@ -418,7 +424,7 @@ export class TieRenderer {
                 objectMatrix,
                 directionLights: tieInstance.directionalLights,
                 lodMorphFactor,
-                rgbasRow: tieInstance.instanceIndex,
+                rgbasRow: tieInstance._i,
             });
         }
 

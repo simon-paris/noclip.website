@@ -336,8 +336,10 @@ export function readChunkPlanes(view: DataViewExt): ChunkPlane[] {
 export type ChunkPlane = {
     count: number,
     point: vec3,
-    _pointInNoclipSpace: vec3,
     normal: vec3,
+
+    // cached pre-transformed data
+    _pointInNoclipSpace: vec3,
     _normalInNoclipSpace: vec3,
 }
 export const SIZEOF_CHUNK_PLANE = 0x20;
@@ -350,8 +352,9 @@ export function readChunkPlane(view: DataViewExt): ChunkPlane {
     return {
         count: view.getInt32(0xc),
         point,
-        _pointInNoclipSpace: vec3.transformMat4(vec3.create(), point, noclipSpaceFromRatchetSpace),
         normal,
+
+        _pointInNoclipSpace: vec3.transformMat4(vec3.create(), point, noclipSpaceFromRatchetSpace),
         _normalInNoclipSpace: vec3.transformMat4(vec3.create(), normal, noclipSpaceFromRatchetSpace),
     }
 }
@@ -369,15 +372,18 @@ export function readClassPositionBlock(view: DataViewExt) {
 }
 
 export interface TieInstance {
-    instanceIndex: number,
     oClass: number,
     drawDistance: number,
     occlusionIndex: number,
     matrix: mat4,
-    _matrixInNoclipSpace: mat4,
     ambientRgbas: Uint16Array,
     directionalLights: number[],
     uid: number,
+
+    // the position within the original instance array
+    _i: number,
+    // cached pre-transformed matrix
+    _matrixInNoclipSpace: mat4,
 }
 export const SIZEOF_TIE_INSTANCE = (gn: GN,) => gn === 1 ? 0xe0 : 0x60;
 export function readTieInstance(gn: GN, view: DataViewExt, instanceIndex: number): TieInstance {
@@ -388,15 +394,16 @@ export function readTieInstance(gn: GN, view: DataViewExt, instanceIndex: number
             */
             const matrix = view.getMat4Slice(0x10).slice();
             return {
-                instanceIndex,
                 oClass: view.getInt32(0x0),
                 drawDistance: view.getInt32(0x4),
                 occlusionIndex: view.getInt32(0xc),
                 matrix,
-                _matrixInNoclipSpace: matrixToNoclipSpace(matrix),
                 ambientRgbas: view.subview(0x50, 0x80).getTypedArrayView(Uint16Array), // array of 64 A1BGR5 colors
                 directionalLights: view.getNibbleArray(0xd0, 2),
                 uid: view.getInt32(0xd4),
+
+                _i: instanceIndex,
+                _matrixInNoclipSpace: matrixToNoclipSpace(matrix),
             }
         }
         case 2:
@@ -404,15 +411,16 @@ export function readTieInstance(gn: GN, view: DataViewExt, instanceIndex: number
         case 4: {
             const matrix = view.getMat4Slice(0x10).slice();
             return {
-                instanceIndex,
                 oClass: view.getInt32(0x0),
                 drawDistance: view.getInt32(0x4),
                 occlusionIndex: view.getInt32(0xc),
                 matrix,
-                _matrixInNoclipSpace: matrixToNoclipSpace(matrix),
                 ambientRgbas: new Uint16Array(0x80).fill(0xFFFF), // TODO: remove this
                 directionalLights: view.getNibbleArray(0x50, 2),
                 uid: view.getInt32(0x54),
+
+                _i: instanceIndex,
+                _matrixInNoclipSpace: matrixToNoclipSpace(matrix),
             }
         }
         default: {
@@ -434,6 +442,12 @@ export interface MobyInstance {
     color: { r: number, g: number, b: number },
     directionalLights: number[],
     skipOcclusionCheck: number,
+
+    // the position within the original instance array
+    _i: number,
+    // the position the instance would have in a list of instances with precomputed occlusion enabled
+    _iOccl: number,
+
     [unknown: string]: unknown,
 };
 
@@ -445,7 +459,7 @@ export const SIZEOF_MOBY_INSTANCE = (gn: GN) => {
         case 4: return 0x70;
     };
 }
-export function readMobyInstance(gn: GN, view: DataViewExt): MobyInstance {
+export function readMobyInstance(gn: GN, view: DataViewExt, i: number): MobyInstance {
     switch (gn) {
         case 1: {
             /*
@@ -470,6 +484,9 @@ export function readMobyInstance(gn: GN, view: DataViewExt): MobyInstance {
                 modeBits: view.getInt32(0x60),
                 color: view.getInt32_Rgb(0x64),
                 directionalLights: view.getNibbleArray(0x70, 2),
+
+                _i: i,
+                _iOccl: 0, // populated later
             }
         }
         case 2:
@@ -496,6 +513,9 @@ export function readMobyInstance(gn: GN, view: DataViewExt): MobyInstance {
                 modeBits: view.getInt32(0x70),
                 color: view.getInt32_Rgb(0x74), // wrench calls this lightColor, not sure if different from the color field in rac1
                 directionalLights: view.getNibbleArray(0x80, 2),
+
+                _i: i,
+                _iOccl: 0,
             };
         }
         case 4: {
@@ -518,6 +538,9 @@ export function readMobyInstance(gn: GN, view: DataViewExt): MobyInstance {
                 modeBits: view.getInt32(0x58),
                 color: view.getInt32_Rgb(0x5c),
                 directionalLights: view.getNibbleArray(0x68, 2),
+
+                _i: i,
+                _iOccl: 0,
             };
         }
         default: {
@@ -735,10 +758,15 @@ export function readTieAmbientRgbaBlock(view: DataViewExt): TieAmbientRgbaBlock 
 export interface OcclusionMappings {
     // mappings of occlusion id to occlusion bit
     // some values look like they have the lower 15 bits flipped (?)
-    tieMappings: Map<number, number>,
-    mobyMappings: Map<number, number>,
+    // tieMappings: Map<number, number>,
+    // mobyMappings: Map<number, number>,
     // tfrag mappings are also present but we don't need them
+    tfragMappings: Uint32Array;
+    tieMappings: Uint32Array;
+    mobyMappings: Uint32Array;
 }
+export const SIZEOF_OCCLUSION_MAPPING = 0x8;
+export const OCCLUSION_MAPPING_NONE = 0x1FFFF;
 export function readOcclusionMappings(view: DataViewExt): OcclusionMappings {
     const tfragCount = view.getUint32(0x0);
     const tieCount = view.getUint32(0x4);
@@ -746,31 +774,16 @@ export function readOcclusionMappings(view: DataViewExt): OcclusionMappings {
 
     let ptr = 0x10;
     // don't read the tfrag mappings, we don't need it since we merge all the tfrags
+    const tfragMappings = view.subview(ptr, tfragCount * SIZEOF_OCCLUSION_MAPPING).getTypedArrayView(Uint32Array);
     ptr += tfragCount * SIZEOF_OCCLUSION_MAPPING;
-    const tieMappings = readOcclusionMappingsBlock(view.subview(ptr), tieCount);
+    const tieMappings = view.subview(ptr, tieCount * SIZEOF_OCCLUSION_MAPPING).getTypedArrayView(Uint32Array);
     ptr += tieCount * SIZEOF_OCCLUSION_MAPPING;
-    const mobyMappings = readOcclusionMappingsBlock(view.subview(ptr), mobyCount);
+    const mobyMappings = view.subview(ptr, mobyCount * SIZEOF_OCCLUSION_MAPPING).getTypedArrayView(Uint32Array);
     ptr += mobyCount * SIZEOF_OCCLUSION_MAPPING;
 
     return {
+        tfragMappings,
         tieMappings,
         mobyMappings,
     }
-}
-
-export const SIZEOF_OCCLUSION_MAPPING = 0x8;
-export const OCCLUSION_MAPPING_NONE = 0x1FFFF;
-export function readOcclusionMappingsBlock(view: DataViewExt, count: number) {
-    const arr = new Map<number, number>();
-
-    for (let i = 0; i < count; i++) {
-        const bit = view.getUint16(i * SIZEOF_OCCLUSION_MAPPING + 0x0);
-        if (bit === 0xFFFF) continue; // ??? happens in rac2 siberius
-        assert(bit < 1024);
-        const slot = view.getUint16(i * SIZEOF_OCCLUSION_MAPPING + 0x4);
-        assert(arr.get(slot) === undefined);
-        arr.set(slot, bit);
-    }
-
-    return arr;
 }

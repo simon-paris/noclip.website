@@ -520,24 +520,26 @@ class RatchetAndClankScene implements SceneGfx {
 
         // ties
         const tieRgbaTexture = this.getOrCreateTieRgbaTexture();
-        if (this.settings.enableTies && atlasTextures && tieRgbaTexture) {
+        const tieInstancesByOClass = this.levelResources.tieInstancesByOClass;
+        if (this.settings.enableTies && tieInstancesByOClass && atlasTextures && tieRgbaTexture) {
             const tieTextureMappings = [...atlasTextures, { gfxTexture: tieRgbaTexture, gfxSampler: this.samplerGeneral }];
-            const tieOClasses = this.levelResources.tieOClasses ?? [];
-            for (let i = 0; i < tieOClasses.length; i++) {
-                const oClass = tieOClasses[i];
+            for (let i = 0; i < tieInstancesByOClass.length; i++) {
+                const tieInstances = tieInstancesByOClass[i];
+                const oClass = tieInstances[0].oClass;
                 const tieClass = this.levelResources.tieClasses?.get(oClass);
                 if (!tieClass) continue;
-                const instances = this.levelResources.tieInstancesByOClass?.get(oClass);
-                if (!instances) continue;
                 const geometriesByLod = this.getOrCreateTieGeometry(oClass);
                 if (!geometriesByLod) continue;
-                this.renderers.tie.renderTie(this.renderInstList, geometriesByLod, tieClass, instances, tieTextureMappings, cameraPosition, occlusionChecker, cameraFrustum, lodSetting, lodBias, this.gn, this.instanceDataBuffer);
+                this.renderers.tie.renderTie(this.renderInstList, geometriesByLod, tieClass, tieInstances, tieTextureMappings, cameraPosition, occlusionChecker, cameraFrustum, lodSetting, lodBias, this.gn, this.instanceDataBuffer);
             }
         }
 
         // mobys
-        if (this.settings.enableMobys && atlasTextures && this.levelResources.mobyInstancesByOClass) {
-            for (const [oClass, mobyInstances] of this.levelResources.mobyInstancesByOClass) {
+        const mobyInstancesByOClass = this.levelResources.mobyInstancesByOClass;
+        if (this.settings.enableMobys && mobyInstancesByOClass && atlasTextures) {
+            for (let i = 0; i < mobyInstancesByOClass.length; i++) {
+                const mobyInstances = mobyInstancesByOClass[i];
+                const oClass = mobyInstances[0].oClass;
                 const mobyClass = this.levelResources.mobyClasses?.get(oClass);
                 if (!mobyClass) continue;
                 const mobyGeometryArr = this.getOrCreateMobyGeometry(oClass);
@@ -545,8 +547,11 @@ class RatchetAndClankScene implements SceneGfx {
                 this.renderers.moby.renderMoby(this.renderInstList, mobyGeometryArr, mobyClass, mobyInstances, atlasTextures, cameraPosition, occlusionChecker, cameraFrustum, lodSetting, lodBias, this.settings.enableBangles, this.settings.mobyMissionFlags, this.instanceDataBuffer);
             }
         }
-        if (this.settings.enableMobys && atlasTextures && this.levelResources.missionMobyInstancesByOClass) {
-            for (const [oClass, mobyInstances] of this.levelResources.missionMobyInstancesByOClass) {
+        const missionMobyInstancesByOClass = this.levelResources.missionMobyInstancesByOClass;
+        if (this.settings.enableMobys && missionMobyInstancesByOClass && atlasTextures) {
+            for (let i = 0; i < missionMobyInstancesByOClass.length; i++) {
+                const mobyInstances = missionMobyInstancesByOClass[i];
+                const oClass = mobyInstances[0].oClass;
                 const mobyClass = this.levelResources.mobyClasses?.get(oClass);
                 if (!mobyClass) continue;
                 const mobyGeometryArr = this.getOrCreateMobyGeometry(oClass);
@@ -556,15 +561,14 @@ class RatchetAndClankScene implements SceneGfx {
         }
 
         // shrubs
-        if (this.settings.enableShrubs && atlasTextures) {
-            const shrubOClasses = this.levelResources.shrubOClasses ?? [];
-            for (let i = 0; i < shrubOClasses.length; i++) {
-                const oClass = shrubOClasses[i];
-                const instances = this.levelResources.shrubInstancesByOClass?.get(oClass);
-                if (!instances) continue;
+        const shrubInstancesByOClass = this.levelResources.shrubInstancesByOClass;
+        if (this.settings.enableShrubs && shrubInstancesByOClass && atlasTextures) {
+            for (let i = 0; i < shrubInstancesByOClass.length; i++) {
+                const shrubInstances = shrubInstancesByOClass[i];
+                const oClass = shrubInstances[0].oClass;
                 const geometry = this.getOrCreateShrubGeometry(oClass);
                 if (!geometry) continue;
-                this.renderers.shrub.renderShrub(this.renderInstList, geometry, instances, atlasTextures, cameraPosition, cameraFrustum, lodSetting, lodBias, this.instanceDataBuffer);
+                this.renderers.shrub.renderShrub(this.renderInstList, geometry, shrubInstances, atlasTextures, cameraPosition, cameraFrustum, lodSetting, lodBias, this.instanceDataBuffer);
             }
         }
 

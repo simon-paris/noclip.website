@@ -31,7 +31,7 @@ export function makeInstanceOClassMap<T extends { oClass: number }>(instances: (
         }
         map.get(inst.oClass)!.push(inst);
     }
-    return map;
+    return Array.from(map.values());
 }
 
 // make map of oClass to texture indices
@@ -105,6 +105,17 @@ export function filterMobyInstancesByChunkPlane(chunkNumber: number | null, inst
     return out;
 }
 
+export function populateMobyOcclusionIndex(instances: MobyInstance[]) {
+    let iOccl = 0;
+    for (let i = 0; i < instances.length; i++) {
+        const inst = instances[i];
+        if (!inst.skipOcclusionCheck) {
+            inst._iOccl = iOccl;
+            iOccl++;
+        }
+    }
+}
+
 // get bits from startBit to endBit (inclusive)
 export function getBits(value: number, startBit: number, endBit: number) {
     return (value >> startBit) & ((1 << (endBit - startBit + 1)) - 1);
@@ -141,11 +152,30 @@ export function readRGB5A1(rgba: number): Color {
 }
 
 export class OcclusionChecker {
-    // 128 byte buffer
-    currentMaskId: number | null = null;
-    currentMask: Uint8Array | null = null;
 
-    constructor(private occlusionGrid: Occlusion, private occlusionMappings: OcclusionMappings) { }
+    // 128 byte buffer
+    public mask: Uint8Array | null = null;
+    private maskId: number | null = null;
+
+    /**
+     * To check visibility:
+     * ```
+     * if (occl.mask) {
+     *   const bit = occl.mappings[i * 2];
+     *   isVisible = (occl.mask[bit >> 3] & (1 << (bit % 8))) === 0;
+     * }
+     * ```
+     * Where i is the index of the instance within the original instance list.
+     */
+    public tfragMappings: Uint32Array;
+    public tieMappings: Uint32Array;
+    public mobyMappings: Uint32Array;
+
+    constructor(private occlusionGrid: Occlusion, private occlusionMappings: OcclusionMappings) {
+        this.tfragMappings = occlusionMappings.tfragMappings;
+        this.tieMappings = occlusionMappings.tieMappings;
+        this.mobyMappings = occlusionMappings.mobyMappings;
+    }
 
     setCameraPosition(pos: vec3) {
         const x = Math.floor(pos[0] / 4);
@@ -153,29 +183,15 @@ export class OcclusionChecker {
         const z = Math.floor(pos[1] / 4);
 
         const nextMaskId = this.occlusionGrid.grid.get(z)?.get(y)?.get(x) ?? null;
-        if (nextMaskId === this.currentMaskId) return;
+        if (nextMaskId === this.maskId) return;
 
         if (nextMaskId === null) {
-            this.currentMaskId = null;
-            this.currentMask = null;
+            this.maskId = null;
+            this.mask = null;
         } else {
-            this.currentMaskId = nextMaskId;
-            this.currentMask = this.occlusionGrid.masks.subview(nextMaskId * 128, 128).getTypedArrayView(Uint8Array);
+            this.maskId = nextMaskId;
+            this.mask = this.occlusionGrid.masks.subview(nextMaskId * 128, 128).getTypedArrayView(Uint8Array);
         }
-    }
-
-    tieVisible(occlusionId: number) {
-        if (!this.currentMask) return true;
-        const bit = this.occlusionMappings.tieMappings.get(occlusionId);
-        if (bit === undefined) return true;
-        return (this.currentMask[bit >> 3] & (1 << (bit % 8))) !== 0
-    }
-
-    mobyVisible(occlusionId: number) {
-        if (!this.currentMask) return true;
-        const bit = this.occlusionMappings.mobyMappings.get(occlusionId);
-        if (bit === undefined) return true;
-        return (this.currentMask[bit >> 3] & (1 << (bit % 8))) !== 0
     }
 }
 

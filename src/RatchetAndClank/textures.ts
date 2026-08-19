@@ -320,7 +320,7 @@ export function createTieRgbaTexture_Rac234(device: GfxDevice, tieInstances: (Ti
 
         const tieInst = tieInstances[row.tieIndex];
         if (!tieInst) continue;
-        assert(row.tieIndex === tieInst.instanceIndex);
+        assert(row.tieIndex === tieInst._i);
         const tieClass = tieClasses.get(tieInst.oClass);
         assert(tieClass !== undefined);
         assert(tieClass.rgbaRemaps !== null);
@@ -366,7 +366,7 @@ export function createTieRgbaTexture_Rac234(device: GfxDevice, tieInstances: (Ti
             }
         }
 
-        let ptr = tieInst.instanceIndex * width * 4;
+        let ptr = tieInst._i * width * 4;
         if (ptr + rowData.byteLength > data.byteLength) {
             console.log(tieInst, row, rgbaRemaps, lod, tieClass); debugger;
         }

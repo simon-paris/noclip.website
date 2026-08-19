@@ -1,7 +1,7 @@
 import { ChunkPlane, MissionGameplayHeader, OcclusionMappings, readClassPositionBlock, readDirectionLightInstance, readGameplayHeader, readGrindPathBlock, readInstanceBlock, readLevelSettings, readMissionGameplayHeader, readMobyInstance, readOcclusionMappings, readPathBlock, readPointLightInstance, readShrubInstance, readTieAmbientRgbaBlock, readTieInstance, ShrubInstance, SIZEOF_DIRECTION_LIGHT_INSTANCE, SIZEOF_MOBY_INSTANCE, SIZEOF_POINT_LIGHT_INSTANCE, SIZEOF_SHRUB_INSTANCE, SIZEOF_TIE_INSTANCE, TieAmbientRgbaBlock, TieInstance } from "./bin-gameplay";
 import { DataViewExt } from "./DataViewExt";
 import { GsRamTableEntry, MobyClass, Occlusion, readCollision, readGsRamTableEntry, readMobyClass, readOcclusion, readShrubClass, readSky, readTfrag, readTfragBlockHeader, readTfragHeader, readTieClass, ShrubClass, SIZEOF_GS_RAM_TABLE_ENTRY, SIZEOF_TFRAG_HEADER, TieClass } from "./bin-core";
-import { filterInstancesByChunkPlane, filterMobyInstancesByChunkPlane, GN, makeClassOClassMap, makeInstanceOClassMap, makeTextureIndicesByOClassMap, noclipSpaceFromRatchetSpace } from "./utils";
+import { filterInstancesByChunkPlane, filterMobyInstancesByChunkPlane, GN, makeClassOClassMap, makeInstanceOClassMap as makeInstancesByOClass, makeTextureIndicesByOClassMap, noclipSpaceFromRatchetSpace, populateMobyOcclusionIndex } from "./utils";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { readPalette8TextureSky, readPalette8TextureWithPaletteInGsRam } from "./textures";
 import { ClassEntry, readClassEntry, readLevelCoreHeader, readTextureEntry, SIZEOF_MOBY_CLASS_ENTRY, SIZEOF_SHRUB_CLASS_ENTRY, SIZEOF_TEXTURE_ENTRY, SIZEOF_TIE_CLASS_ENTRY, TextureEntry } from "./bin-index";
@@ -38,7 +38,7 @@ export interface LevelResources {
     tieClasses: Map<number, TieClass> | null,
     tieClassTextureIndices: Map<number, number[]> | null,
     tieInstances: (TieInstance | null)[] | null, // null means filtered out by the chunk filter
-    tieInstancesByOClass: Map<number, TieInstance[]> | null,
+    tieInstancesByOClass: TieInstance[][] | null,
     tieAmbientRgbas: TieAmbientRgbaBlock | null,
 
     mobyTextures: PaletteTexture[] | null,
@@ -47,19 +47,19 @@ export interface LevelResources {
     mobyClasses: Map<number, MobyClass | null> | null,
     mobyClassTextureIndices: Map<number, number[]> | null,
     mobyInstances: MobyInstance[] | null,
-    mobyInstancesByOClass: Map<number, MobyInstance[]> | null,
+    mobyInstancesByOClass: MobyInstance[][] | null,
     mobyUniqueMissionIds: Set<number> | null,
 
     missionMobyOClasses: number[] | null,
     missionMobyInstances: MobyInstance[] | null,
-    missionMobyInstancesByOClass: Map<number, MobyInstance[]> | null,
+    missionMobyInstancesByOClass: MobyInstance[][] | null,
 
     shrubTextures: PaletteTexture[] | null,
     shrubOClasses: number[] | null,
     shrubClasses: Map<number, ShrubClass> | null,
     shrubClassTextureIndices: Map<number, number[]> | null,
     shrubInstances: (ShrubInstance | null)[] | null,
-    shrubInstancesByOClass: Map<number, ShrubInstance[]> | null,
+    shrubInstancesByOClass: ShrubInstance[][] | null,
 
     sky: Sky | null,
     skyTextures: PaletteTexture[] | null,
@@ -288,24 +288,25 @@ async function loadTieAndShrubInstanceData(gn: GN, out: LevelResources, filterCh
     const tieInstances = readInstanceBlock(srcFile.subview(gameplayHeader.tieInstances), SIZEOF_TIE_INSTANCE(gn), (view, i) => readTieInstance(gn, view, i)).instances;
     const tieInstancesFiltered = filterInstancesByChunkPlane(filterChunk, tieInstances, levelSettings.chunkPlanes);
     out.tieInstances = tieInstancesFiltered;
-    out.tieInstancesByOClass = makeInstanceOClassMap(tieInstancesFiltered);
+    out.tieInstancesByOClass = makeInstancesByOClass(tieInstancesFiltered);
 
     out.shrubOClasses = readClassPositionBlock(srcFile.subview(gameplayHeader.shrubClasses));
     const shrubInstances = readInstanceBlock(srcFile.subview(gameplayHeader.shrubInstances), SIZEOF_SHRUB_INSTANCE, readShrubInstance).instances;
     const shrubInstancesFiltered = filterInstancesByChunkPlane(filterChunk, shrubInstances, levelSettings.chunkPlanes);
     out.shrubInstances = shrubInstancesFiltered;
-    out.shrubInstancesByOClass = makeInstanceOClassMap(shrubInstancesFiltered);
+    out.shrubInstancesByOClass = makeInstancesByOClass(shrubInstancesFiltered);
 }
 
 async function loadMobyInstanceData_Gameplay(gn: GN, out: LevelResources, filterChunk: number | null, gameplayFilePromise: Promise<DataViewExt>, gameplayHeaderPromise: Promise<GameplayHeader>, levelSettingsPromise: Promise<LevelSettings>) {
     const [gameplayHeader, levelSettings, gameplayFile] = await Promise.all([gameplayHeaderPromise, levelSettingsPromise, gameplayFilePromise]);
 
     out.mobyOClasses = readClassPositionBlock(gameplayFile.subview(gameplayHeader.mobyClasses));
-    const mobyInstances = readInstanceBlock(gameplayFile.subview(gameplayHeader.mobyInstances), SIZEOF_MOBY_INSTANCE(gn), (view, i) => readMobyInstance(gn, view)).instances;
+    const mobyInstances = readInstanceBlock(gameplayFile.subview(gameplayHeader.mobyInstances), SIZEOF_MOBY_INSTANCE(gn), (view, i) => readMobyInstance(gn, view, i)).instances;
+    populateMobyOcclusionIndex(mobyInstances);
     out.mobyUniqueMissionIds = new Set();
     for (let i = 0; i < mobyInstances.length; i++) out.mobyUniqueMissionIds.add(mobyInstances[i].mission);
     out.mobyInstances = filterMobyInstancesByChunkPlane(filterChunk, mobyInstances, levelSettings.chunkPlanes);
-    out.mobyInstancesByOClass = makeInstanceOClassMap(out.mobyInstances);
+    out.mobyInstancesByOClass = makeInstancesByOClass(out.mobyInstances);
 }
 
 async function loadMobyInstanceData_Mission(gn: GN, out: LevelResources, filterChunk: number | null, missionGameplayFilePromise: Promise<DataViewExt> | null, levelSettingsPromise: Promise<LevelSettings>, mainMobyPromise: Promise<void>) {
@@ -321,15 +322,16 @@ async function loadMobyInstanceData_Mission(gn: GN, out: LevelResources, filterC
     out.missionGameplayHeader = missionGameplayHeader;
 
     out.missionMobyOClasses = readClassPositionBlock(missionGameplayFile.subview(missionGameplayHeader.mobyClasses));
-    const mobyInstances = readInstanceBlock(missionGameplayFile.subview(missionGameplayHeader.mobyInstances), SIZEOF_MOBY_INSTANCE(gn), (view, i) => readMobyInstance(gn, view)).instances;
+    const mobyInstances = readInstanceBlock(missionGameplayFile.subview(missionGameplayHeader.mobyInstances), SIZEOF_MOBY_INSTANCE(gn), (view, i) => readMobyInstance(gn, view, i)).instances;
+    populateMobyOcclusionIndex(mobyInstances);
     out.missionMobyInstances = filterMobyInstancesByChunkPlane(filterChunk, mobyInstances, levelSettings.chunkPlanes);
-    out.missionMobyInstancesByOClass = makeInstanceOClassMap(out.missionMobyInstances);
+    out.missionMobyInstancesByOClass = makeInstancesByOClass(out.missionMobyInstances);
 
-    for (const m of out.missionMobyInstances) {
-        if (!out.mobyInstancesByOClass!.has(m.oClass)) {
-            console.log("moby", m.oClass, "not found")
-        }
-    }
+    // for (const m of out.missionMobyInstances) {
+    //     if (!out.mobyInstancesByOClass!.has(m.oClass)) {
+    //         console.log("moby", m.oClass, "not found")
+    //     }
+    // }
 }
 
 async function loadTieData(gn: GN, out: LevelResources, coreDataFilePromise: Promise<DataViewExt>, indexDataPromise: Promise<LoadIndexDataResult>) {
