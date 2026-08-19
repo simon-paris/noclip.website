@@ -1,7 +1,7 @@
 import { ChunkPlane, MissionGameplayHeader, OcclusionMappings, readClassPositionBlock, readDirectionLightInstance, readGameplayHeader, readGrindPathBlock, readInstanceBlock, readLevelSettings, readMissionGameplayHeader, readMobyInstance, readOcclusionMappings, readPathBlock, readPointLightInstance, readShrubInstance, readTieAmbientRgbaBlock, readTieInstance, ShrubInstance, SIZEOF_DIRECTION_LIGHT_INSTANCE, SIZEOF_MOBY_INSTANCE, SIZEOF_POINT_LIGHT_INSTANCE, SIZEOF_SHRUB_INSTANCE, SIZEOF_TIE_INSTANCE, TieAmbientRgbaBlock, TieInstance } from "./bin-gameplay";
 import { DataViewExt } from "./DataViewExt";
 import { GsRamTableEntry, MobyClass, Occlusion, readCollision, readGsRamTableEntry, readMobyClass, readOcclusion, readShrubClass, readSky, readTfrag, readTfragBlockHeader, readTfragHeader, readTieClass, ShrubClass, SIZEOF_GS_RAM_TABLE_ENTRY, SIZEOF_TFRAG_HEADER, TieClass } from "./bin-core";
-import { filterInstancesByChunkPlane, filterMobyInstancesByChunkPlane, GN, makeClassOClassMap, makeInstanceOClassMap as makeInstancesByOClass, makeTextureIndicesByOClassMap, noclipSpaceFromRatchetSpace, populateMobyOcclusionIndex, populateTieOcclusionIndex } from "./utils";
+import { filterInstancesByChunkPlane, filterMobyInstancesByChunkPlane, GN, makeClassOClassMap, makeInstanceOClassMap as makeInstancesByOClass, makeTextureIndicesByOClassMap, noclipSpaceFromRatchetSpace, populateMobyOcclusionBits, populateTieOcclusionBits } from "./utils";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { readPalette8TextureSky, readPalette8TextureWithPaletteInGsRam } from "./textures";
 import { ClassEntry, readClassEntry, readLevelCoreHeader, readTextureEntry, SIZEOF_MOBY_CLASS_ENTRY, SIZEOF_SHRUB_CLASS_ENTRY, SIZEOF_TEXTURE_ENTRY, SIZEOF_TIE_CLASS_ENTRY, TextureEntry } from "./bin-index";
@@ -290,7 +290,7 @@ async function loadTieAndShrubInstanceData(gn: GN, out: LevelResources, filterCh
 
     out.tieOClasses = readClassPositionBlock(srcFile.subview(gameplayHeader.tieClasses));
     const tieInstances = readInstanceBlock(srcFile.subview(gameplayHeader.tieInstances), SIZEOF_TIE_INSTANCE(gn), (view, i) => readTieInstance(gn, view, i)).instances;
-    populateTieOcclusionIndex(tieInstances, occlusionMappings);
+    populateTieOcclusionBits(tieInstances, occlusionMappings);
     const tieInstancesFiltered = filterInstancesByChunkPlane(filterChunk, tieInstances, levelSettings.chunkPlanes);
     out.tieInstances = tieInstancesFiltered;
     out.tieInstancesByOClass = makeInstancesByOClass(tieInstancesFiltered);
@@ -307,7 +307,7 @@ async function loadMobyInstanceData_Gameplay(gn: GN, out: LevelResources, filter
 
     out.mobyOClasses = readClassPositionBlock(gameplayFile.subview(gameplayHeader.mobyClasses));
     const mobyInstances = readInstanceBlock(gameplayFile.subview(gameplayHeader.mobyInstances), SIZEOF_MOBY_INSTANCE(gn), (view, i) => readMobyInstance(gn, view, i)).instances;
-    populateMobyOcclusionIndex(mobyInstances, occlusionMappings);
+    populateMobyOcclusionBits(mobyInstances, occlusionMappings);
     out.mobyUniqueMissionIds = new Set();
     for (let i = 0; i < mobyInstances.length; i++) out.mobyUniqueMissionIds.add(mobyInstances[i].mission);
     out.mobyInstances = filterMobyInstancesByChunkPlane(filterChunk, mobyInstances, levelSettings.chunkPlanes);
@@ -328,7 +328,7 @@ async function loadMobyInstanceData_Mission(gn: GN, out: LevelResources, filterC
 
     out.missionMobyOClasses = readClassPositionBlock(missionGameplayFile.subview(missionGameplayHeader.mobyClasses));
     const mobyInstances = readInstanceBlock(missionGameplayFile.subview(missionGameplayHeader.mobyInstances), SIZEOF_MOBY_INSTANCE(gn), (view, i) => readMobyInstance(gn, view, i)).instances;
-    populateMobyOcclusionIndex(mobyInstances, occlusionMappings);
+    populateMobyOcclusionBits(mobyInstances, occlusionMappings);
     out.missionMobyInstances = filterMobyInstancesByChunkPlane(filterChunk, mobyInstances, levelSettings.chunkPlanes);
     out.missionMobyInstancesByOClass = makeInstancesByOClass(out.missionMobyInstances);
 
@@ -473,7 +473,7 @@ async function loadOcclusionMappings(gn: GN, out: LevelResources, gameplayFilePr
     }
 
     if (gameplayHeader.occlusionMappings === 0) return null;
-    if (occlusion === null) return null; // some vidcomics no occlusion grid and nonsense occlusion mappings so do not parse the mappings without the grid.
+    if (occlusion === null) return null; // some vidcomics have no occlusion grid and nonsense occlusion mappings, so do not parse the mappings without the grid
 
     out.occlusionMappings = readOcclusionMappings(srcFile.subview(gameplayHeader.occlusionMappings));
     return out.occlusionMappings;

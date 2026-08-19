@@ -141,7 +141,7 @@ export function readRGB5A1(rgba: number): Color {
 }
 
 // there must be something I'm missing because this is nuts
-export function populateTieOcclusionIndex(instances: TieInstance[], mappings: OcclusionMappings | null) {
+export function populateTieOcclusionBits(instances: TieInstance[], mappings: OcclusionMappings | null) {
     if (!mappings) return;
 
     let safety = 1024;
@@ -181,7 +181,7 @@ export function populateTieOcclusionIndex(instances: TieInstance[], mappings: Oc
     } while (mappingPtr < mappings.tieMappings.length);
 }
 
-export function populateMobyOcclusionIndex(instances: MobyInstance[], mappings: OcclusionMappings | null) {
+export function populateMobyOcclusionBits(instances: MobyInstance[], mappings: OcclusionMappings | null) {
     if (!mappings) return;
 
     // levels with no occludable mobys have garbage mapping arrays
@@ -203,7 +203,7 @@ export function populateMobyOcclusionIndex(instances: MobyInstance[], mappings: 
             const mobyUid = inst.uid;
             const occlusionUid = mappings.mobyMappings[ptr + 1];
             if (mobyUid !== occlusionUid) {
-                // it doesn't match, try jumping to the wherever that uid appears
+                // it doesn't match, try jumping to wherever that uid appears
                 const guess = findMapping(mobyUid);
                 if (guess !== null) {
                     // ok, seek to that uid
