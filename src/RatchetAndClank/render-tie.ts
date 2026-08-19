@@ -14,6 +14,7 @@ import { TieInstance } from "./bin-gameplay";
 import { RatchetShaderLib } from "./shader-lib";
 import { GN, ImaginaryGsCommandType, MegaBuffer, OcclusionChecker } from "./utils";
 import { packRemap, TextureAtlases } from "./textures";
+import { invlerp } from "../MathHelpers";
 
 export class TieProgram extends DeviceProgram {
     public static a_Position = 0;
@@ -340,8 +341,6 @@ export class TieGeometry {
     }
 }
 
-const scratchVec3 = vec3.create();
-
 const bindingLayouts = [
     {
         numSamplers: 6,
@@ -374,20 +373,14 @@ export class TieRenderer {
 
             // occlusion check
             if (occlusionChecker && occlusionChecker.mask) {
-                const bit = occlusionChecker.tieMappings[tieInstance._i * 2];
-                // these pass but I'll turn them off for performance
-                // assert(bit < 1024);
-                // assert(occlusionChecker.tieMappings[tieInstance._i * 2 + 1] === tieInstance.occlusionIndex);
-                if ((occlusionChecker.mask[bit >> 3] & (1 << (bit % 8))) === 0) continue;
+                const bit = tieInstance._occlusionBit;
+                if (bit !== -1 && (occlusionChecker.mask[bit >> 3] & (1 << (bit % 8))) === 0) continue;
             }
 
             // tie instance transform
-            const objectMatrix = tieInstance._matrixInNoclipSpace;
-            let position = scratchVec3;
-            mat4.getTranslation(position, objectMatrix);
-
-            // camera position
-            const distanceToCamera = vec3.distance(position, cameraPosition);
+            const objectMatrix = tieInstance._matrixPretransformed;
+            const position = tieInstance._positionPretransformed;
+            const distanceToCameraSquared = vec3.sqrDist(position, cameraPosition);
 
             // determine LOD level
             const hasLod2 = !!tieGeometriesByLod[2];
@@ -399,12 +392,12 @@ export class TieRenderer {
                 let nearDist = tieClass.nearDist + settingLodBias;
                 let midDist = tieClass.midDist + settingLodBias * 2;
                 let farDist = tieClass.farDist + settingLodBias * 3;
-                if (distanceToCamera < nearDist) {
+                if (distanceToCameraSquared < nearDist ** 2) {
                     smoothLod = 0;
-                } else if (distanceToCamera < midDist) {
-                    smoothLod = (distanceToCamera - nearDist) / (midDist - nearDist);
-                } else if (distanceToCamera < farDist) {
-                    smoothLod = 1 + (distanceToCamera - midDist) / (farDist - midDist);
+                } else if (distanceToCameraSquared < midDist ** 2) {
+                    smoothLod = invlerp(nearDist, midDist, Math.sqrt(distanceToCameraSquared));
+                } else if (distanceToCameraSquared < farDist ** 2) {
+                    smoothLod = 1 + invlerp(midDist, farDist, Math.sqrt(distanceToCameraSquared));
                 } else {
                     smoothLod = 2;
                 }
@@ -415,8 +408,7 @@ export class TieRenderer {
             if (modelLodLevel === 1 && !hasLod1) { modelLodLevel = 0; lodMorphFactor = 0; }
 
             // find bounding sphere and frustum cull
-            const objectScale = Math.hypot(objectMatrix[0], objectMatrix[1], objectMatrix[2]);
-            if (!cameraFrustum.containsSphere(position, 0x7FFF / 1024 * tieClass.scale * objectScale)) {
+            if (!cameraFrustum.containsSphere(position, 32 * tieClass.scale * tieInstance._scalePretransformed)) {
                 continue;
             }
 

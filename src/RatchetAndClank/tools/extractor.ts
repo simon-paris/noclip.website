@@ -214,8 +214,9 @@ for (const levelSectors of tableOfContents.levelSectors) {
 
         // assert every key is populated
         for (const key of Object.keys(resources)) {
-            if (gn === 1 && key === "tieAmbientRgbas") continue; // expected to be mission in rac1
+            if (gn === 1 && key === "tieAmbientRgbas") continue; // not in rac1
             if (missionNumber === null && key.startsWith("mission")) continue; // no mission
+            if (key === "occlusion" || key === "occlusionMappings") continue; // occlusion is optional
             if (!resources[key as keyof typeof resources]) {
                 throw new Error(`Level ${levelNum}: ${key} was not populated`);
             }

@@ -37,6 +37,8 @@ class RatchetAndClankScene implements SceneGfx {
     private samplerGeneral: GfxSampler;
     private samplerSky: GfxSampler;
 
+    private occlusionChecker: OcclusionChecker | null = null;
+
     public textureHolder = new FakeTextureHolder([]);
 
     private missionsPanel: UI.Panel | null = null;
@@ -454,10 +456,9 @@ class RatchetAndClankScene implements SceneGfx {
 
         const occlusion = this.levelResources.occlusion;
         const occlusionMappings = this.levelResources.occlusionMappings;
-        let occlusionChecker: OcclusionChecker | null = null;
         if (occlusion && occlusionMappings) {
-            occlusionChecker = new OcclusionChecker(occlusion, occlusionMappings);
-            occlusionChecker.setCameraPosition(cameraPosition);
+            if (!this.occlusionChecker) this.occlusionChecker = new OcclusionChecker(occlusion, occlusionMappings);
+            this.occlusionChecker.setCameraPosition(cameraPosition);
         }
 
         let lodSetting = this.settings.lodSetting;
@@ -530,7 +531,7 @@ class RatchetAndClankScene implements SceneGfx {
                 if (!tieClass) continue;
                 const geometriesByLod = this.getOrCreateTieGeometry(oClass);
                 if (!geometriesByLod) continue;
-                this.renderers.tie.renderTie(this.renderInstList, geometriesByLod, tieClass, tieInstances, tieTextureMappings, cameraPosition, occlusionChecker, cameraFrustum, lodSetting, lodBias, this.gn, this.instanceDataBuffer);
+                this.renderers.tie.renderTie(this.renderInstList, geometriesByLod, tieClass, tieInstances, tieTextureMappings, cameraPosition, this.occlusionChecker, cameraFrustum, lodSetting, lodBias, this.gn, this.instanceDataBuffer);
             }
         }
 
@@ -544,7 +545,7 @@ class RatchetAndClankScene implements SceneGfx {
                 if (!mobyClass) continue;
                 const mobyGeometryArr = this.getOrCreateMobyGeometry(oClass);
                 if (!mobyGeometryArr) continue;
-                this.renderers.moby.renderMoby(this.renderInstList, mobyGeometryArr, mobyClass, mobyInstances, atlasTextures, cameraPosition, occlusionChecker, cameraFrustum, lodSetting, lodBias, this.settings.enableBangles, this.settings.mobyMissionFlags, this.instanceDataBuffer);
+                this.renderers.moby.renderMoby(this.renderInstList, mobyGeometryArr, mobyClass, mobyInstances, atlasTextures, cameraPosition, this.occlusionChecker, cameraFrustum, lodSetting, lodBias, this.settings.enableBangles, this.settings.mobyMissionFlags, this.instanceDataBuffer);
             }
         }
         const missionMobyInstancesByOClass = this.levelResources.missionMobyInstancesByOClass;
@@ -556,7 +557,7 @@ class RatchetAndClankScene implements SceneGfx {
                 if (!mobyClass) continue;
                 const mobyGeometryArr = this.getOrCreateMobyGeometry(oClass);
                 if (!mobyGeometryArr) continue;
-                this.renderers.moby.renderMoby(this.renderInstList, mobyGeometryArr, mobyClass, mobyInstances, atlasTextures, cameraPosition, occlusionChecker, cameraFrustum, lodSetting, lodBias, this.settings.enableBangles, this.settings.mobyMissionFlags, this.instanceDataBuffer);
+                this.renderers.moby.renderMoby(this.renderInstList, mobyGeometryArr, mobyClass, mobyInstances, atlasTextures, cameraPosition, this.occlusionChecker, cameraFrustum, lodSetting, lodBias, this.settings.enableBangles, this.settings.mobyMissionFlags, this.instanceDataBuffer);
             }
         }
 

@@ -14,6 +14,7 @@ import { MobyInstance } from "./bin-gameplay";
 import { Frustum } from "../Geometry";
 import { assert } from "../util";
 import { packRemap, TextureAtlases } from "./textures";
+import { invlerp, saturate } from "../MathHelpers";
 
 export class MobyProgram extends DeviceProgram {
     public static a_Position = 0;
@@ -405,7 +406,7 @@ export class MobyRenderer {
     }
 
     renderMoby(renderInstList: GfxRenderInstList, mobyGeometriesByLod: (MobyGeometry | null)[], mobyClass: MobyClass, mobyInstances: MobyInstance[], textureMappings: GfxSamplerBinding[], cameraPosition: vec3, occlusionChecker: OcclusionChecker | null, cameraFrustum: Frustum, lodSetting: number, lodBias: number, enableBangles: boolean, completedMissionFlags: number, instanceDataBuffer: MegaBuffer): void {
-        type MobyDrawInstance = { objectMatrix: mat4, rgb: vec3, directionalLights: number[], lodAlpha: number };
+        type MobyDrawInstance = { objectMatrix: mat4, rgb: { r: number, g: number, b: number }, directionalLights: number[], lodAlpha: number };
 
         if (mobyGeometriesByLod[0] === null) return;
         const maxLod = mobyGeometriesByLod[1] ? 1 : 0;
@@ -416,10 +417,7 @@ export class MobyRenderer {
 
             // occlusion check
             if (occlusionChecker && occlusionChecker.mask && !mobyInstance.skipOcclusionCheck) {
-                const bit = occlusionChecker.mobyMappings[mobyInstance._iOccl * 2];
-                // these pass but I'll turn them off for performance
-                // assert(bit < 1024);
-                // assert(occlusionChecker.mobyMappings[mobyInstance._iOccl * 2 + 1] === mobyInstance.uid);
+                const bit = mobyInstance._occlusionBit;
                 if ((occlusionChecker.mask[bit >> 3] & (1 << (bit % 8))) === 0) continue;
             }
 
@@ -430,24 +428,15 @@ export class MobyRenderer {
             }
 
             // moby instance transform
-            const objectMatrix = mat4.create();
-            mat4.fromRotationTranslationScale(objectMatrix,
-                quat.fromEuler(quat.create(), mobyInstance.rotation.x * (180 / Math.PI), mobyInstance.rotation.y * (180 / Math.PI), mobyInstance.rotation.z * (180 / Math.PI)),
-                vec3.fromValues(mobyInstance.position.x, mobyInstance.position.y, mobyInstance.position.z),
-                vec3.fromValues(mobyInstance.scale, mobyInstance.scale, mobyInstance.scale),
-            );
-            mat4.mul(objectMatrix, noclipSpaceFromRatchetSpace, objectMatrix);
+            const objectMatrix = mobyInstance._matrixPretransformed;
+            const position = mobyInstance._positionPretransformed;
+            const distanceToCameraSquared = vec3.sqrDist(position, cameraPosition);
 
             // color
-            const rgb = vec3.fromValues(mobyInstance.color.r * colorScale, mobyInstance.color.g * colorScale, mobyInstance.color.b * colorScale);
+            const rgb = mobyInstance.color;
 
             // lights
             const directionalLights = mobyInstance.directionalLights;
-
-            // distance to camera
-            const position = scratchVec3;
-            mat4.getTranslation(position, objectMatrix);
-            const distanceToCamera = vec3.distance(position, cameraPosition);
 
             let lod: number;
             let lodAlpha = 1.0;
@@ -462,17 +451,16 @@ export class MobyRenderer {
                 if (midDist >= farDist) {
                     farDist = midDist * 1.25;
                 };
-                if (distanceToCamera > farDist) continue;
-                lod = distanceToCamera < midDist ? 0 : 1;
-                lodAlpha = Math.min(1, 1 - (distanceToCamera - midDist) / (farDist - midDist));
+                if (distanceToCameraSquared > farDist ** 2) continue;
+                lod = (distanceToCameraSquared < midDist ** 2) ? 0 : 1;
+                lodAlpha = saturate(1 - invlerp(midDist, farDist, Math.sqrt(distanceToCameraSquared)));
             } else {
                 lod = lodSetting;
             }
             lod = Math.min(lod, maxLod);
 
             // find bounding sphere and frustum cull
-            const objectScale = Math.hypot(objectMatrix[0], objectMatrix[1], objectMatrix[2]);
-            if (!cameraFrustum.containsSphere(position, 0x7FFF / 1024 * mobyClass.header.scale * objectScale)) {
+            if (!cameraFrustum.containsSphere(position, 32 * mobyClass.header.scale * mobyInstance._scalePretransformed)) {
                 continue;
             }
 
@@ -500,7 +488,7 @@ export class MobyRenderer {
                 const inst = mobyInstancesToDraw[i];
                 const color = inst.rgb;
                 instanceDataBuffer.ptr += fillMatrix4x3(instanceDataBuffer.f32View, instanceDataBuffer.ptr, inst.objectMatrix);
-                instanceDataBuffer.ptr += fillVec4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, color[0], color[1], color[2], 1.0);
+                instanceDataBuffer.ptr += fillVec4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, color.r * colorScale, color.g * colorScale, color.b * colorScale, 1.0);
                 instanceDataBuffer.ptr += fillVec4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, inst.directionalLights[0], inst.directionalLights[1], inst.directionalLights[2], inst.directionalLights[3]);
                 instanceDataBuffer.ptr += fillVec4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, inst.lodAlpha, 0, 0, 0);
             }

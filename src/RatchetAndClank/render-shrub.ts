@@ -15,6 +15,7 @@ import { fillMatrix4x3, fillMatrix4x4, fillVec4 } from "../gfx/helpers/UniformBu
 import { ShrubInstance } from "./bin-gameplay";
 import { Frustum } from "../Geometry";
 import { packRemap, TextureAtlases } from "./textures";
+import { invlerp, lerp, saturate } from "../MathHelpers";
 
 export class ShrubProgram extends DeviceProgram {
     public static a_Position = 0;
@@ -290,8 +291,6 @@ export class ShrubGeometry {
     }
 }
 
-const scratchVec3 = vec3.create();
-
 const bindingLayouts = [
     {
         numSamplers: 5,
@@ -320,26 +319,29 @@ export class ShrubRenderer {
             const shrubInstance = shrubInstances[i];
 
             // shrub instance transform
-            const objectMatrix = shrubInstance._matrixInNoclipSpace;
-            const position = scratchVec3;
-            mat4.getTranslation(position, objectMatrix);
-            const distanceToCamera = vec3.distance(position, cameraPosition);
+            const objectMatrix = shrubInstance._matrixPretransformed;
+            const position = shrubInstance._positionPretransformed;
+            const distanceToCameraSquared = vec3.sqrDist(position, cameraPosition);
 
             // lod
             let lodAlpha = settingLodPreset === 0 ? 1 : 0;
             if (settingLodPreset === -1) {
                 const farDist = shrubInstance.drawDistance + settingLodBias * 1.5;
                 if (farDist > 0) {
+                    if (distanceToCameraSquared > farDist ** 2) continue;
                     const nearDist = farDist * 0.5;
-                    lodAlpha = 1 - (distanceToCamera - nearDist) / (farDist - nearDist);
-                    lodAlpha = Math.max(0, Math.min(1, lodAlpha));
+                    if (distanceToCameraSquared < nearDist ** 2) {
+                        lodAlpha = 1;
+                    } else {
+                        lodAlpha = saturate(1 - invlerp(nearDist, farDist, Math.sqrt(distanceToCameraSquared)));
+                    }
                 }
             }
             if (lodAlpha <= 0) continue;
 
             // find bounding sphere and frustum cull
-            const objectScale = Math.hypot(objectMatrix[0], objectMatrix[1], objectMatrix[2]);
-            if (!cameraFrustum.containsSphere(position, 0x7FFF / 1024 * shrubGeometry.shrub.header.scale * objectScale)) {
+            // (32 is the range of a 12.4 fixed point)
+            if (!cameraFrustum.containsSphere(position, 32 * shrubGeometry.shrub.header.scale * shrubInstance._scalePretransformed)) {
                 continue;
             }
 

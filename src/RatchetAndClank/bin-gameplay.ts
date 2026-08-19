@@ -1,4 +1,4 @@
-import { mat4, vec3 } from "gl-matrix";
+import { mat4, quat, vec3 } from "gl-matrix";
 import { DataViewExt } from "./DataViewExt";
 import { GN, matrixToNoclipSpace, noclipSpaceFromRatchetSpace } from "./utils";
 import { assert } from "../util";
@@ -382,8 +382,14 @@ export interface TieInstance {
 
     // the position within the original instance array
     _i: number,
+    // the bit to use for the occlusion check (-1 means disable precomputed occlusion)
+    _occlusionBit: number,
     // cached pre-transformed matrix
-    _matrixInNoclipSpace: mat4,
+    _matrixPretransformed: mat4,
+    // translation of pre-transformed matrix
+    _positionPretransformed: vec3,
+    // instance scale
+    _scalePretransformed: number,
 }
 export const SIZEOF_TIE_INSTANCE = (gn: GN,) => gn === 1 ? 0xe0 : 0x60;
 export function readTieInstance(gn: GN, view: DataViewExt, instanceIndex: number): TieInstance {
@@ -393,6 +399,10 @@ export function readTieInstance(gn: GN, view: DataViewExt, instanceIndex: number
             https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/instancemgr/gameplay_impl_classes.inl#L611
             */
             const matrix = view.getMat4Slice(0x10).slice();
+            const _matrixPretransformed = matrixToNoclipSpace(matrix);
+            const _positionPretransformed = mat4.getTranslation(vec3.create(), _matrixPretransformed);
+            const _scalePretransformed = vec3.length(vec3.fromValues(_matrixPretransformed[0], _matrixPretransformed[1], _matrixPretransformed[2]));
+
             return {
                 oClass: view.getInt32(0x0),
                 drawDistance: view.getInt32(0x4),
@@ -403,13 +413,20 @@ export function readTieInstance(gn: GN, view: DataViewExt, instanceIndex: number
                 uid: view.getInt32(0xd4),
 
                 _i: instanceIndex,
-                _matrixInNoclipSpace: matrixToNoclipSpace(matrix),
+                _occlusionBit: -1, // populated elsewhere
+                _matrixPretransformed,
+                _positionPretransformed,
+                _scalePretransformed
             }
         }
         case 2:
         case 3:
         case 4: {
             const matrix = view.getMat4Slice(0x10).slice();
+            const _matrixPretransformed = matrixToNoclipSpace(matrix);
+            const _positionPretransformed = mat4.getTranslation(vec3.create(), _matrixPretransformed);
+            const _scalePretransformed = vec3.length(vec3.fromValues(_matrixPretransformed[0], _matrixPretransformed[1], _matrixPretransformed[2]));
+
             return {
                 oClass: view.getInt32(0x0),
                 drawDistance: view.getInt32(0x4),
@@ -420,7 +437,10 @@ export function readTieInstance(gn: GN, view: DataViewExt, instanceIndex: number
                 uid: view.getInt32(0x54),
 
                 _i: instanceIndex,
-                _matrixInNoclipSpace: matrixToNoclipSpace(matrix),
+                _occlusionBit: -1, // populated elsewhere
+                _matrixPretransformed,
+                _positionPretransformed,
+                _scalePretransformed
             }
         }
         default: {
@@ -445,8 +465,14 @@ export interface MobyInstance {
 
     // the position within the original instance array
     _i: number,
-    // the position the instance would have in a list of instances with precomputed occlusion enabled
-    _iOccl: number,
+    // the bit to use for the occlusion check (if skipOcclusionCheck=1 then occlusion checks are disabled)
+    _occlusionBit: number,
+    // pre-transformed matrix
+    _matrixPretransformed: mat4,
+    // translation of pre-transformed matrix
+    _positionPretransformed: vec3,
+    // instance scale
+    _scalePretransformed: number,
 
     [unknown: string]: unknown,
 };
@@ -466,16 +492,29 @@ export function readMobyInstance(gn: GN, view: DataViewExt, i: number): MobyInst
             https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/instancemgr/gameplay_impl_classes.inl#L58
             (drawDistance is incorrectly a float in the linked code)
             */
+            const scale = view.getFloat32(0x1c);
+            const position = view.getFloat32_Xyz(0x30);
+            const rotation = view.getFloat32_Xyz(0x3c);
+            const _matrixPretransformed = mat4.create();
+            mat4.fromRotationTranslationScale(_matrixPretransformed,
+                quat.fromEuler(quat.create(), rotation.x * (180 / Math.PI), rotation.y * (180 / Math.PI), rotation.z * (180 / Math.PI)),
+                vec3.fromValues(position.x, position.y, position.z),
+                vec3.fromValues(scale, scale, scale),
+            );
+            mat4.mul(_matrixPretransformed, noclipSpaceFromRatchetSpace, _matrixPretransformed);
+            const _positionPretransformed = mat4.getTranslation(vec3.create(), _matrixPretransformed);
+            const _scalePretransformed = vec3.length(vec3.fromValues(_matrixPretransformed[0], _matrixPretransformed[1], _matrixPretransformed[2]));
+
             return {
                 size: view.getInt32(0x0),
-                mission: view.getInt32(0x4), // guess
-                uid: view.getInt32(0xc), // guess
+                mission: view.getInt32(0x4),
+                uid: view.getInt32(0xc),
                 oClass: view.getInt32(0x18),
-                scale: view.getFloat32(0x1c),
+                scale,
                 drawDistance: view.getInt32(0x20),
                 updateDistance: view.getInt32(0x24),
-                position: view.getFloat32_Xyz(0x30),
-                rotation: view.getFloat32_Xyz(0x3c),
+                position,
+                rotation,
                 group: view.getInt32(0x48),
                 isRooted: view.getInt32(0x4c),
                 rootedDistance: view.getFloat32(0x50),
@@ -486,7 +525,10 @@ export function readMobyInstance(gn: GN, view: DataViewExt, i: number): MobyInst
                 directionalLights: view.getNibbleArray(0x70, 2),
 
                 _i: i,
-                _iOccl: 0, // populated later
+                _occlusionBit: 0, // populated elsewhere
+                _matrixPretransformed,
+                _positionPretransformed,
+                _scalePretransformed,
             }
         }
         case 2:
@@ -494,17 +536,30 @@ export function readMobyInstance(gn: GN, view: DataViewExt, i: number): MobyInst
             /*
             https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/instancemgr/gameplay_impl_classes.inl#L157
             */
+            const scale = view.getFloat32(0x2c);
+            const position = view.getFloat32_Xyz(0x40);
+            const rotation = view.getFloat32_Xyz(0x4c);
+            const _matrixPretransformed = mat4.create();
+            mat4.fromRotationTranslationScale(_matrixPretransformed,
+                quat.fromEuler(quat.create(), rotation.x * (180 / Math.PI), rotation.y * (180 / Math.PI), rotation.z * (180 / Math.PI)),
+                vec3.fromValues(position.x, position.y, position.z),
+                vec3.fromValues(scale, scale, scale),
+            );
+            mat4.mul(_matrixPretransformed, noclipSpaceFromRatchetSpace, _matrixPretransformed);
+            const _positionPretransformed = mat4.getTranslation(vec3.create(), _matrixPretransformed);
+            const _scalePretransformed = vec3.length(vec3.fromValues(_matrixPretransformed[0], _matrixPretransformed[1], _matrixPretransformed[2]));
+
             return {
                 size: view.getInt32(0x0),
                 mission: view.getInt32(0x4),
                 uid: view.getInt32(0x10),
                 bolts: view.getInt32(0x14),
                 oClass: view.getInt32(0x28),
-                scale: view.getFloat32(0x2c),
+                scale,
                 drawDistance: view.getInt32(0x30),
                 updateDistance: view.getInt32(0x34),
-                position: view.getFloat32_Xyz(0x40),
-                rotation: view.getFloat32_Xyz(0x4c),
+                position,
+                rotation,
                 group: view.getInt32(0x58),
                 isRooted: view.getInt32(0x5c),
                 rootedDistance: view.getFloat32(0x60),
@@ -515,21 +570,37 @@ export function readMobyInstance(gn: GN, view: DataViewExt, i: number): MobyInst
                 directionalLights: view.getNibbleArray(0x80, 2),
 
                 _i: i,
-                _iOccl: 0,
+                _occlusionBit: 0, // populated elsewhere
+                _matrixPretransformed,
+                _positionPretransformed,
+                _scalePretransformed,
             };
         }
         case 4: {
+            const scale = view.getFloat32(0x14);
+            const position = view.getFloat32_Xyz(0x28);
+            const rotation = view.getFloat32_Xyz(0x34);
+            const _matrixPretransformed = mat4.create();
+            mat4.fromRotationTranslationScale(_matrixPretransformed,
+                quat.fromEuler(quat.create(), rotation.x * (180 / Math.PI), rotation.y * (180 / Math.PI), rotation.z * (180 / Math.PI)),
+                vec3.fromValues(position.x, position.y, position.z),
+                vec3.fromValues(scale, scale, scale),
+            );
+            mat4.mul(_matrixPretransformed, noclipSpaceFromRatchetSpace, _matrixPretransformed);
+            const _positionPretransformed = mat4.getTranslation(vec3.create(), _matrixPretransformed);
+            const _scalePretransformed = vec3.length(vec3.fromValues(_matrixPretransformed[0], _matrixPretransformed[1], _matrixPretransformed[2]));
+
             return {
                 size: view.getInt32(0x0),
                 mission: view.getInt32(0x4),
                 uid: view.getInt32(0x8),
                 bolts: view.getInt32(0xc),
                 oClass: view.getInt32(0x10),
-                scale: view.getFloat32(0x14),
+                scale,
                 drawDistance: view.getInt32(0x18),
                 updateDistance: view.getInt32(0x1c),
-                position: view.getFloat32_Xyz(0x28),
-                rotation: view.getFloat32_Xyz(0x34),
+                position,
+                rotation,
                 group: view.getInt32(0x40),
                 isRooted: view.getInt32(0x44),
                 rootedDistance: view.getFloat32(0x48),
@@ -540,7 +611,10 @@ export function readMobyInstance(gn: GN, view: DataViewExt, i: number): MobyInst
                 directionalLights: view.getNibbleArray(0x68, 2),
 
                 _i: i,
-                _iOccl: 0,
+                _occlusionBit: 0, // populated elsewhere
+                _matrixPretransformed,
+                _positionPretransformed,
+                _scalePretransformed,
             };
         }
         default: {
@@ -553,9 +627,15 @@ export interface ShrubInstance {
     oClass: number,
     drawDistance: number,
     matrix: mat4,
-    _matrixInNoclipSpace: mat4,
     color: { r: number, g: number, b: number },
     directionalLights: number[],
+
+    // pre-transformed matrix
+    _matrixPretransformed: mat4,
+    // translation of pre-transformed matrix
+    _positionPretransformed: vec3,
+    // instance scale
+    _scalePretransformed: number,
 }
 export const SIZEOF_SHRUB_INSTANCE = 0x70;
 export function readShrubInstance(view: DataViewExt): ShrubInstance {
@@ -564,14 +644,20 @@ export function readShrubInstance(view: DataViewExt): ShrubInstance {
     */
 
     const matrix = view.getMat4Slice(0x10).slice();
+    const _matrixPretransformed = matrixToNoclipSpace(matrix);
+    const _positionPretransformed = mat4.getTranslation(vec3.create(), _matrixPretransformed);
+    const _scalePretransformed = vec3.length(vec3.fromValues(_matrixPretransformed[0], _matrixPretransformed[1], _matrixPretransformed[2]));
 
     return {
         oClass: view.getInt32(0x0),
         drawDistance: view.getFloat32(0x4),
         matrix,
-        _matrixInNoclipSpace: matrixToNoclipSpace(matrix),
         color: view.getInt32_Rgb(0x50),
         directionalLights: view.getNibbleArray(0x60, 2),
+
+        _matrixPretransformed,
+        _positionPretransformed,
+        _scalePretransformed,
     }
 }
 
@@ -756,29 +842,41 @@ export function readTieAmbientRgbaBlock(view: DataViewExt): TieAmbientRgbaBlock 
 }
 
 export interface OcclusionMappings {
-    // mappings of occlusion id to occlusion bit
-    // some values look like they have the lower 15 bits flipped (?)
-    // tieMappings: Map<number, number>,
-    // mobyMappings: Map<number, number>,
-    // tfrag mappings are also present but we don't need them
-    tfragMappings: Uint32Array;
-    tieMappings: Uint32Array;
-    mobyMappings: Uint32Array;
+    tfragMappings: Int32Array;
+    tieMappings: Int32Array;
+    mobyMappings: Int32Array;
 }
 export const SIZEOF_OCCLUSION_MAPPING = 0x8;
 export const OCCLUSION_MAPPING_NONE = 0x1FFFF;
 export function readOcclusionMappings(view: DataViewExt): OcclusionMappings {
+    /*
+    typedef struct {
+        // ! this is signed for some reason !
+        // the bit to check in the occlusion mask
+        int32 bit;
+        // the uid of the object
+        int32 uid;
+    } OcclusionMapping;
+
+    typedef struct {
+        uint32 tfrag_count;
+        uint32 tie_count;
+        uint32 moby_count;
+        OcclusionMapping tfrag_mappings[tfrag_count];
+        OcclusionMapping tie_mappings[tie_count];
+        OcclusionMapping moby_mappings[moby_count];
+    } OcclusionMappings;
+    */
     const tfragCount = view.getUint32(0x0);
     const tieCount = view.getUint32(0x4);
     const mobyCount = view.getUint32(0x8);
 
     let ptr = 0x10;
-    // don't read the tfrag mappings, we don't need it since we merge all the tfrags
-    const tfragMappings = view.subview(ptr, tfragCount * SIZEOF_OCCLUSION_MAPPING).getTypedArrayView(Uint32Array);
+    const tfragMappings = view.subview(ptr, tfragCount * SIZEOF_OCCLUSION_MAPPING).getTypedArrayView(Int32Array);
     ptr += tfragCount * SIZEOF_OCCLUSION_MAPPING;
-    const tieMappings = view.subview(ptr, tieCount * SIZEOF_OCCLUSION_MAPPING).getTypedArrayView(Uint32Array);
+    const tieMappings = view.subview(ptr, tieCount * SIZEOF_OCCLUSION_MAPPING).getTypedArrayView(Int32Array);
     ptr += tieCount * SIZEOF_OCCLUSION_MAPPING;
-    const mobyMappings = view.subview(ptr, mobyCount * SIZEOF_OCCLUSION_MAPPING).getTypedArrayView(Uint32Array);
+    const mobyMappings = view.subview(ptr, mobyCount * SIZEOF_OCCLUSION_MAPPING).getTypedArrayView(Int32Array);
     ptr += mobyCount * SIZEOF_OCCLUSION_MAPPING;
 
     return {
