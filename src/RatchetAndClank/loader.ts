@@ -289,14 +289,14 @@ async function loadTieAndShrubInstanceData(gn: GN, out: LevelResources, filterCh
     }
 
     out.tieOClasses = readClassPositionBlock(srcFile.subview(gameplayHeader.tieClasses));
-    const tieInstances = readInstanceBlock(srcFile.subview(gameplayHeader.tieInstances), SIZEOF_TIE_INSTANCE(gn), (view, i) => readTieInstance(gn, view, i)).instances;
+    const tieInstances = readInstanceBlock(srcFile.subview(gameplayHeader.tieInstances), SIZEOF_TIE_INSTANCE(gn), (view, i) => readTieInstance(gn, view, i));
     populateTieOcclusionBits(tieInstances, occlusionMappings);
     const tieInstancesFiltered = filterInstancesByChunkPlane(filterChunk, tieInstances, levelSettings.chunkPlanes);
     out.tieInstances = tieInstancesFiltered;
     out.tieInstancesByOClass = makeInstancesByOClass(tieInstancesFiltered);
 
     out.shrubOClasses = readClassPositionBlock(srcFile.subview(gameplayHeader.shrubClasses));
-    const shrubInstances = readInstanceBlock(srcFile.subview(gameplayHeader.shrubInstances), SIZEOF_SHRUB_INSTANCE, readShrubInstance).instances;
+    const shrubInstances = readInstanceBlock(srcFile.subview(gameplayHeader.shrubInstances), SIZEOF_SHRUB_INSTANCE, readShrubInstance);
     const shrubInstancesFiltered = filterInstancesByChunkPlane(filterChunk, shrubInstances, levelSettings.chunkPlanes);
     out.shrubInstances = shrubInstancesFiltered;
     out.shrubInstancesByOClass = makeInstancesByOClass(shrubInstancesFiltered);
@@ -306,7 +306,7 @@ async function loadMobyInstanceData_Gameplay(gn: GN, out: LevelResources, filter
     const [gameplayHeader, levelSettings, gameplayFile, occlusionMappings] = await Promise.all([gameplayHeaderPromise, levelSettingsPromise, gameplayFilePromise, occlusionMappingsPromise]);
 
     out.mobyOClasses = readClassPositionBlock(gameplayFile.subview(gameplayHeader.mobyClasses));
-    const mobyInstances = readInstanceBlock(gameplayFile.subview(gameplayHeader.mobyInstances), SIZEOF_MOBY_INSTANCE(gn), (view, i) => readMobyInstance(gn, view, i)).instances;
+    const mobyInstances = readInstanceBlock(gameplayFile.subview(gameplayHeader.mobyInstances), SIZEOF_MOBY_INSTANCE(gn), (view, i) => readMobyInstance(gn, view, i));
     populateMobyOcclusionBits(mobyInstances, occlusionMappings);
     out.mobyUniqueMissionIds = new Set();
     for (let i = 0; i < mobyInstances.length; i++) out.mobyUniqueMissionIds.add(mobyInstances[i].mission);
@@ -327,7 +327,7 @@ async function loadMobyInstanceData_Mission(gn: GN, out: LevelResources, filterC
     out.missionGameplayHeader = missionGameplayHeader;
 
     out.missionMobyOClasses = readClassPositionBlock(missionGameplayFile.subview(missionGameplayHeader.mobyClasses));
-    const mobyInstances = readInstanceBlock(missionGameplayFile.subview(missionGameplayHeader.mobyInstances), SIZEOF_MOBY_INSTANCE(gn), (view, i) => readMobyInstance(gn, view, i)).instances;
+    const mobyInstances = readInstanceBlock(missionGameplayFile.subview(missionGameplayHeader.mobyInstances), SIZEOF_MOBY_INSTANCE(gn), (view, i) => readMobyInstance(gn, view, i));
     populateMobyOcclusionBits(mobyInstances, occlusionMappings);
     out.missionMobyInstances = filterMobyInstancesByChunkPlane(filterChunk, mobyInstances, levelSettings.chunkPlanes);
     out.missionMobyInstancesByOClass = makeInstancesByOClass(out.missionMobyInstances);
@@ -425,13 +425,13 @@ async function loadDirectionLights(gn: GN, out: LevelResources, gameplayFileProm
         }
     }
 
-    out.directionLights = readInstanceBlock(srcFile.subview(gameplayHeader.directionLightInstances), SIZEOF_DIRECTION_LIGHT_INSTANCE, readDirectionLightInstance).instances;
+    out.directionLights = readInstanceBlock(srcFile.subview(gameplayHeader.directionLightInstances), SIZEOF_DIRECTION_LIGHT_INSTANCE, readDirectionLightInstance);
 }
 
 async function loadPointLights(gn: GN, out: LevelResources, gameplayFilePromise: Promise<DataViewExt>, gameplayHeaderPromise: Promise<GameplayHeader>) {
     const [gameplayFile, gameplayHeader] = await Promise.all([gameplayFilePromise, gameplayHeaderPromise]);
 
-    out.pointLights = readInstanceBlock(gameplayFile.subview(gameplayHeader.pointLightInstances), SIZEOF_POINT_LIGHT_INSTANCE, readPointLightInstance).instances;
+    out.pointLights = readInstanceBlock(gameplayFile.subview(gameplayHeader.pointLightInstances), SIZEOF_POINT_LIGHT_INSTANCE, readPointLightInstance);
 }
 
 export async function loadSkyData(gn: GN, out: LevelResources, coreDataFilePromise: Promise<DataViewExt>, indexDataPromise: Promise<LoadIndexDataResult>) {
@@ -473,7 +473,10 @@ async function loadOcclusionMappings(gn: GN, out: LevelResources, gameplayFilePr
     }
 
     if (gameplayHeader.occlusionMappings === 0) return null;
-    if (occlusion === null) return null; // some vidcomics have no occlusion grid and nonsense occlusion mappings, so do not parse the mappings without the grid
+
+    // you think if there's no occlusion grid there'd be no occlusion mappings?
+    // wrong. you get garbage data.
+    if (occlusion === null) return null;
 
     out.occlusionMappings = readOcclusionMappings(srcFile.subview(gameplayHeader.occlusionMappings));
     return out.occlusionMappings;

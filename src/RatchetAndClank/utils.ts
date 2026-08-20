@@ -140,51 +140,12 @@ export function readRGB5A1(rgba: number): Color {
     return { r, g, b, a };
 }
 
-// there must be something I'm missing because this is nuts
-export function populateTieOcclusionBits(instances: TieInstance[], mappings: OcclusionMappings | null) {
-    if (!mappings) return;
-
-    let safety = 1024;
-    let mappingPtr = 0;
-    outer: do {
-        assert(safety-- > 0); // anti infinite loop
-
-        let instancePtr = 0;
-        while (instancePtr < instances.length) {
-            if (mappingPtr >= mappings.tieMappings.length) break outer;
-            const occlusionUid = mappings.tieMappings[mappingPtr + 1];
-            if (occlusionUid === -1) break;
-
-            const inst = instances[instancePtr];
-            const tieUid = inst.occlusionIndex;
-            if (tieUid !== occlusionUid) {
-                // if it doesn't match we skip over the INSTANCE array
-                // (for each instance we skip here there will be one trailing -1 at the end of the array)
-                instancePtr++;
-                continue;
-            }
-
-            // this is a match
-            inst._occlusionBit = mappings.tieMappings[mappingPtr];
-            assert(inst._occlusionBit < 1024);
-            mappingPtr += 2;
-            instancePtr++;
-        }
-
-        while (mappingPtr !== mappings.tieMappings.length && mappings.tieMappings[mappingPtr] === -1) {
-            // consume all the -1s until the end of the list or a non -1
-            mappingPtr += 2;
-        }
-
-        // go back to the start of the instance list and loop over the remaining mappings
-        // (btw this is the first time I've ever found a do while loop useful)
-    } while (mappingPtr < mappings.tieMappings.length);
-}
-
+// i'm calling this algorithm "The Headless Chicken"
 export function populateMobyOcclusionBits(instances: MobyInstance[], mappings: OcclusionMappings | null) {
     if (!mappings) return;
 
-    // levels with no occludable mobys have garbage mapping arrays
+    // you think the list would be empty if there are no occludable mobys?
+    // wrong. you get garbage data.
     if (!instances.find(inst => inst.skipOcclusionCheck === 0)) return;
 
     function findMapping(uid: number) {
@@ -223,6 +184,47 @@ export function populateMobyOcclusionBits(instances: MobyInstance[], mappings: O
     }
 }
 
+// and this one is called "It's not n^2 I swear!"
+export function populateTieOcclusionBits(instances: TieInstance[], mappings: OcclusionMappings | null) {
+    if (!mappings) return;
+
+    let mappingPtr = 0;
+    outer: do {
+        let instancePtr = 0;
+        let prevMappingPtr = mappingPtr;
+
+        while (instancePtr < instances.length) {
+            if (mappingPtr >= mappings.tieMappings.length) break outer;
+            const occlusionUid = mappings.tieMappings[mappingPtr + 1];
+            if (occlusionUid === -1) break;
+
+            const inst = instances[instancePtr];
+            const tieUid = inst.occlusionIndex;
+            if (tieUid !== occlusionUid) {
+                // if it doesn't match we skip over the INSTANCE array
+                // (for each instance we skip here there will be one trailing -1 at the end of the array)
+                instancePtr++;
+                continue;
+            }
+
+            // this is a match
+            inst._occlusionBit = mappings.tieMappings[mappingPtr];
+            assert(inst._occlusionBit < 1024);
+            mappingPtr += 2;
+            instancePtr++;
+        }
+
+        while (mappingPtr !== mappings.tieMappings.length && mappings.tieMappings[mappingPtr] === -1) {
+            // consume all the -1s until the end of the list or a non -1
+            mappingPtr += 2;
+        }
+
+        assert(mappingPtr !== prevMappingPtr); // hope we aren't stuck
+
+        // go back to the start of the instance list and loop over the remaining mappings
+    } while (mappingPtr < mappings.tieMappings.length);
+}
+
 export class OcclusionChecker {
 
     // 128 byte buffer
@@ -232,12 +234,11 @@ export class OcclusionChecker {
     /**
      * To check visibility:
      * ```
-     * if (occl.mask) {
-     *   const bit = occl.mappings[i * 2];
-     *   isVisible = (occl.mask[bit >> 3] & (1 << (bit % 8))) === 0;
+     * if (occlusionChecker.mask) {
+     *   const bit = inst._occlusionBit;
+     *   isVisible = (occlusionChecker.mask[bit >> 3] & (1 << (bit % 8))) === 0;
      * }
      * ```
-     * Where i is the index of the instance within the original instance list.
      */
     public tfragMappings: Int32Array;
     public tieMappings: Int32Array;

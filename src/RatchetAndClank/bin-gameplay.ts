@@ -228,7 +228,7 @@ export function readGameplayHeader(gn: GN, view: DataViewExt, artFileView_rac4: 
                 tieInstances: artFileView_rac4.getInt32(0x8),
                 shrubClasses: artFileView_rac4.getInt32(0x10),
                 shrubInstances: artFileView_rac4.getInt32(0x14),
-                occlusionMappings: view.getInt32(0x1c),
+                occlusionMappings: artFileView_rac4.getInt32(0x1c),
                 tieAmbientRgbas: artFileView_rac4.getInt32(0x20),
             }
         }
@@ -662,12 +662,8 @@ export function readShrubInstance(view: DataViewExt): ShrubInstance {
 }
 
 
-type InstanceBlock<T> = {
-    count: number,
-    instances: T[]
-}
 const SIZEOF_INSTANCE_BLOCK_HEADER = 0x10;
-export function readInstanceBlock<T>(view: DataViewExt, instanceSize: number, readerFn: (buf: DataViewExt, i: number) => T): InstanceBlock<T> {
+export function readInstanceBlock<T>(view: DataViewExt, instanceSize: number, readerFn: (buf: DataViewExt, i: number) => T): T[] {
     /*
     struct InstanceBlockHeader<T> {
         // 0x0
@@ -679,11 +675,7 @@ export function readInstanceBlock<T>(view: DataViewExt, instanceSize: number, re
     }
     */
     const count = view.getInt32(0);
-    const instances = view.subdivide(SIZEOF_INSTANCE_BLOCK_HEADER, count, instanceSize).map((view, i) => readerFn(view, i));
-    return {
-        count,
-        instances,
-    }
+    return view.subdivide(SIZEOF_INSTANCE_BLOCK_HEADER, count, instanceSize).map((view, i) => readerFn(view, i));
 }
 
 export interface DirectionLightInstance {
