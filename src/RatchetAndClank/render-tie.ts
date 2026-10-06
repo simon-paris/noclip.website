@@ -20,17 +20,20 @@ export class TieProgram extends DeviceProgram {
     public static a_Position = 0;
     public static a_ExtraData = 1;
     public static a_ST = 2;
-    public static a_Normal = 3;
-    public static a_LodMorphOffset = 4;
+    public static a_Normal0 = 3;
+    public static a_Normal1 = 4;
+    public static a_Normal2 = 5;
+    public static a_LodMorphOffset = 6;
+    public static a_RgbaIndices = 7;
 
-    public static elementsPerVertex = 14; // position (3), extras(3), st (2), normal (3), morph offset (3) = 14
+    public static elementsPerVertex = 22; // position (3), extras (2), st (2), normals (9), morph offset (3), rgba indices (3)
 
-    public static a_InstanceTransform0 = 5;
-    public static a_InstanceTransform1 = 6;
-    public static a_InstanceTransform2 = 7;
-    public static a_InstanceDirectionLights = 8;
-    public static a_InstanceExtraData = 9;
-    public static a_InstanceExtraData2 = 10;
+    public static a_InstanceTransform0 = 8;
+    public static a_InstanceTransform1 = 9;
+    public static a_InstanceTransform2 = 10;
+    public static a_InstanceDirectionLights = 11;
+    public static a_InstanceExtraData = 12;
+    public static a_InstanceExtraData2 = 13;
 
     public static elementsPerInstance = 24; // transform (12), lights (4), extra (8)
 
@@ -57,10 +60,13 @@ layout(binding = 5) uniform sampler2D u_AmbientRgbaTexture;
     public override vert = `
 
 layout(location = ${TieProgram.a_Position}) in vec3 a_Position;
-layout(location = ${TieProgram.a_ExtraData}) in vec3 a_ExtraData; // x = texture index, y = clamp, z = rgba index
+layout(location = ${TieProgram.a_ExtraData}) in vec2 a_ExtraData; // x = texture index, y = clamp
 layout(location = ${TieProgram.a_ST}) in vec2 a_ST;
-layout(location = ${TieProgram.a_Normal}) in vec3 a_Normal;
+layout(location = ${TieProgram.a_Normal0}) in vec3 a_Normal0;
+layout(location = ${TieProgram.a_Normal1}) in vec3 a_Normal1;
+layout(location = ${TieProgram.a_Normal2}) in vec3 a_Normal2;
 layout(location = ${TieProgram.a_LodMorphOffset}) in vec3 a_LodMorphOffset;
+layout(location = ${TieProgram.a_RgbaIndices}) in vec3 a_RgbaIndices;
 
 layout(location = ${TieProgram.a_InstanceTransform0}) in vec4 a_InstanceTransform0;
 layout(location = ${TieProgram.a_InstanceTransform1}) in vec4 a_InstanceTransform1;
@@ -87,16 +93,27 @@ void main() {
     gl_Position = UnpackMatrix(u_ClipFromWorld) * vec4(positionWorld, 1.0f);
     v_ST = a_ST;
 
-    vec4 rgba = vec4(0.5, 0.5, 0.5, 1.0);
-    if (a_InstanceExtraData.z == 1.0) { // enable/disable vertex colors
-        ivec2 ambientRgbaTexcoord = ivec2(int(a_ExtraData.z), int(a_InstanceExtraData.x));
-        rgba = texelFetch(TEXTURE(u_AmbientRgbaTexture), ambientRgbaTexcoord, 0);
-    }
-    rgba.rgb *= 2.0; // not sure about this
     vec4 lights = a_InstanceDirectionLights;
-    vec3 normal = MulNormalMatrix(instanceTransform, a_Normal);
+    vec3 normals[3] = vec3[3](a_Normal0, a_Normal1, a_Normal2);
+    float rgbaIndices[3] = float[3](a_RgbaIndices.x, a_RgbaIndices.y, a_RgbaIndices.z);
+    vec4 colors[3];
+    for (int i = 0; i < 3; i++) {
+        vec4 rgba = vec4(0.5, 0.5, 0.5, 1.0);
+        if (a_InstanceExtraData.z == 1.0) { // enable/disable vertex colors
+            ivec2 ambientRgbaTexcoord = ivec2(int(rgbaIndices[i]), int(a_InstanceExtraData.x));
+            rgba = texelFetch(TEXTURE(u_AmbientRgbaTexture), ambientRgbaTexcoord, 0);
+        }
+        rgba.rgb *= 2.0;
+        vec3 normal = MulNormalMatrix(instanceTransform, normals[i]);
+        colors[i] = commonVertexLighting(rgba, normal, lights);
+    }
 
-    v_Rgba = commonVertexLighting(rgba, normal, lights);
+    // mix colors[1] and colors[2] always
+    vec4 morphColor = mix(colors[1], colors[2], 0.5);
+
+    // mix morphColor into colors[0] based on lodMorphFactor
+    v_Rgba = mix(colors[0], morphColor, lodMorphFactor);
+    
     v_FogFactor = fogFactor(positionWorld.xyz);
     v_TextureIndex = int(a_ExtraData.x);
     v_Clamp = int(a_ExtraData.y);
@@ -144,10 +161,13 @@ export class TieGeometry {
             vertexAttributeDescriptors: [
                 // per vertex
                 { location: TieProgram.a_Position, format: GfxFormat.F32_RGB, bufferByteOffset: 0, bufferIndex: 0, },
-                { location: TieProgram.a_ExtraData, format: GfxFormat.F32_RGB, bufferByteOffset: 3 * 4, bufferIndex: 0, },
-                { location: TieProgram.a_ST, format: GfxFormat.F32_RG, bufferByteOffset: 6 * 4, bufferIndex: 0, },
-                { location: TieProgram.a_Normal, format: GfxFormat.F32_RGB, bufferByteOffset: 8 * 4, bufferIndex: 0, },
-                { location: TieProgram.a_LodMorphOffset, format: GfxFormat.F32_RGB, bufferByteOffset: 11 * 4, bufferIndex: 0, },
+                { location: TieProgram.a_ExtraData, format: GfxFormat.F32_RG, bufferByteOffset: 3 * 4, bufferIndex: 0, },
+                { location: TieProgram.a_ST, format: GfxFormat.F32_RG, bufferByteOffset: 5 * 4, bufferIndex: 0, },
+                { location: TieProgram.a_Normal0, format: GfxFormat.F32_RGB, bufferByteOffset: 7 * 4, bufferIndex: 0, },
+                { location: TieProgram.a_Normal1, format: GfxFormat.F32_RGB, bufferByteOffset: 10 * 4, bufferIndex: 0, },
+                { location: TieProgram.a_Normal2, format: GfxFormat.F32_RGB, bufferByteOffset: 13 * 4, bufferIndex: 0, },
+                { location: TieProgram.a_LodMorphOffset, format: GfxFormat.F32_RGB, bufferByteOffset: 16 * 4, bufferIndex: 0, },
+                { location: TieProgram.a_RgbaIndices, format: GfxFormat.F32_RGB, bufferByteOffset: 19 * 4, bufferIndex: 0, },
                 // per instance
                 { location: TieProgram.a_InstanceTransform0, format: GfxFormat.F32_RGBA, bufferByteOffset: 0 * 4, bufferIndex: 1, },
                 { location: TieProgram.a_InstanceTransform1, format: GfxFormat.F32_RGBA, bufferByteOffset: 4 * 4, bufferIndex: 1, },
@@ -244,7 +264,7 @@ export class TieGeometry {
                         expectedVertsInStrip--;
 
                         if (this.gn >= 2) {
-                            vert.rgbaIndex = globalVertexIndex;
+                            vert.rgbaIndices = [globalVertexIndex, globalVertexIndex, globalVertexIndex];
                         }
 
                         tri[0] = tri[1];
@@ -261,26 +281,36 @@ export class TieGeometry {
                             for (let i = 0; i < 3; i++) {
                                 const v = tri[i];
                                 assert(v !== null);
-                                const { vertex, normalIndex, rgbaIndex } = v;
+                                const { vertex, normalIndices, rgbaIndices } = v;
                                 const fixedTexcoord = fixedTexcoords[i];
-                                let normal = tie.normalsData[normalIndex];
-                                if (normal === undefined) normal = { x: 1 / normalScale, y: 0, z: 0 }; // FIXME: rac2 normal indices don't work
+                                const defaultNormal = { x: 1 / normalScale, y: 0, z: 0 };
+                                const normal0 = tie.normalsData[normalIndices[0]] ?? defaultNormal;
+                                const normal1 = tie.normalsData[normalIndices[1]] ?? defaultNormal;
+                                const normal2 = tie.normalsData[normalIndices[2]] ?? defaultNormal;
 
                                 vertexArrayBuffer[vertexPtr++] = positionScale * vertex.x;
                                 vertexArrayBuffer[vertexPtr++] = positionScale * vertex.y;
                                 vertexArrayBuffer[vertexPtr++] = positionScale * vertex.z;
                                 vertexArrayBuffer[vertexPtr++] = packRemap(this.textureAtlases.tieTextureRemap[textureIndices[currentMaterial.texture]]);
                                 vertexArrayBuffer[vertexPtr++] = currentMaterial.clamp;
-                                vertexArrayBuffer[vertexPtr++] = rgbaIndex;
                                 vertexArrayBuffer[vertexPtr++] = texcoordScale * fixedTexcoord.s;
                                 vertexArrayBuffer[vertexPtr++] = texcoordScale * fixedTexcoord.t;
                                 assert(vertex.q === 4096);
-                                vertexArrayBuffer[vertexPtr++] = normalScale * normal.x;
-                                vertexArrayBuffer[vertexPtr++] = normalScale * normal.y;
-                                vertexArrayBuffer[vertexPtr++] = normalScale * normal.z;
+                                vertexArrayBuffer[vertexPtr++] = normalScale * normal0.x;
+                                vertexArrayBuffer[vertexPtr++] = normalScale * normal0.y;
+                                vertexArrayBuffer[vertexPtr++] = normalScale * normal0.z;
+                                vertexArrayBuffer[vertexPtr++] = normalScale * normal1.x;
+                                vertexArrayBuffer[vertexPtr++] = normalScale * normal1.y;
+                                vertexArrayBuffer[vertexPtr++] = normalScale * normal1.z;
+                                vertexArrayBuffer[vertexPtr++] = normalScale * normal2.x;
+                                vertexArrayBuffer[vertexPtr++] = normalScale * normal2.y;
+                                vertexArrayBuffer[vertexPtr++] = normalScale * normal2.z;
                                 vertexArrayBuffer[vertexPtr++] = positionScale * vertex.lodMorphOffsetX;
                                 vertexArrayBuffer[vertexPtr++] = positionScale * vertex.lodMorphOffsetY;
                                 vertexArrayBuffer[vertexPtr++] = positionScale * vertex.lodMorphOffsetZ;
+                                vertexArrayBuffer[vertexPtr++] = rgbaIndices[0];
+                                vertexArrayBuffer[vertexPtr++] = rgbaIndices[1];
+                                vertexArrayBuffer[vertexPtr++] = rgbaIndices[2];
                             }
                         }
 
@@ -389,9 +419,9 @@ export class TieRenderer {
             let lodMorphFactor = 0;
             if (settingLodPreset === -1) {
                 let smoothLod = 0;
-                let nearDist = tieClass.nearDist + settingLodBias;
-                let midDist = tieClass.midDist + settingLodBias * 2;
-                let farDist = tieClass.farDist + settingLodBias * 3;
+                let nearDist = Math.max(0, tieClass.nearDist + settingLodBias);
+                let midDist = Math.max(0, tieClass.midDist + settingLodBias * 2);
+                let farDist = Math.max(0, tieClass.farDist + settingLodBias * 3);
                 if (distanceToCameraSquared < nearDist ** 2) {
                     smoothLod = 0;
                 } else if (distanceToCameraSquared < midDist ** 2) {

@@ -439,7 +439,11 @@ export function readTiePacketHeader(view: DataViewExt): TiePacketHeader {
     };
 }
 
-export interface TieVertexWithNormalAndRgba { vertex: TieVertex, normalIndex: number, rgbaIndex: number };
+export interface TieVertexWithNormalAndRgba {
+    vertex: TieVertex,
+    normalIndices: [number, number, number],
+    rgbaIndices: [number, number, number],
+};
 export type TieImaginaryGsCommand = ImaginaryGsCommand<TieStrip, { material: number, clamp: number }, TieVertexWithNormalAndRgba>;
 
 const tieCommandSizes = {
@@ -554,32 +558,46 @@ export function readTiePacketBody(gn: GN, view: DataViewExt, tiePacketHeader: Ti
     // Some are written twice.
     for (let i = 0; i < regularVerts.length; i++) {
         const vertex = regularVerts[i];
-        let normalIndex = 0;
-        let rgbaIndex = 0;
+        let normalIndices: [number, number, number] = [0, 0, 0];
+        let rgbaIndices: [number, number, number] = [0, 0, 0];
         if (gn === 1) {
-            normalIndex = regularNormalIndices[i];
-            rgbaIndex = regularRgbaIndices[i] - 64;
+            normalIndices = [regularNormalIndices[i], regularNormalIndices[i], regularNormalIndices[i]];
+            rgbaIndices = [regularRgbaIndices[i] - 64, regularRgbaIndices[i] - 64, regularRgbaIndices[i] - 64];
         } else {
             // TODO: rgba remaps for rac2
         }
-        imaginaryGsBuffer.writeVertex(vertex.gsPacketWriteOffset, tieCommandSizes.vertex, { vertex, normalIndex, rgbaIndex }, true);
+        const commandValue: TieVertexWithNormalAndRgba = {
+            vertex,
+            normalIndices,
+            rgbaIndices,
+        };
+        imaginaryGsBuffer.writeVertex(vertex.gsPacketWriteOffset, tieCommandSizes.vertex, commandValue, true);
         if (vertex.gsPacketWriteOffset2 !== 0 && vertex.gsPacketWriteOffset !== vertex.gsPacketWriteOffset2) {
-            imaginaryGsBuffer.writeVertex(vertex.gsPacketWriteOffset2, tieCommandSizes.vertex, { vertex, normalIndex, rgbaIndex }, true);
+            imaginaryGsBuffer.writeVertex(vertex.gsPacketWriteOffset2, tieCommandSizes.vertex, commandValue, true);
         }
     }
     for (let i = 0; i < morphingVerts.length; i++) {
         const vertex = morphingVerts[i];
-        let normalIndex = 0;
-        let rgbaIndex = 0;
+        let normalIndices: [number, number, number] = [0, 0, 0];
+        let rgbaIndices: [number, number, number] = [0, 0, 0];
         if (gn === 1) {
-            normalIndex = morphingNormalIndices[i].x; // all 3 components are normal indices, not sure why there are 3, maybe to do with lod morphing
-            rgbaIndex = morphingRgbaIndices[i].x - 64;
+            normalIndices = [
+                morphingNormalIndices[i].x,
+                morphingNormalIndices[i].y,
+                morphingNormalIndices[i].z,
+            ];
+            rgbaIndices = [
+                morphingRgbaIndices[i].x - 64,
+                morphingRgbaIndices[i].y - 64,
+                morphingRgbaIndices[i].z - 64,
+            ];
         } else {
             // TODO: rgba remaps for rac2
         }
-        imaginaryGsBuffer.writeVertex(vertex.gsPacketWriteOffset, tieCommandSizes.vertex, { vertex, normalIndex, rgbaIndex }, true);
+        const commandValue: TieVertexWithNormalAndRgba = { vertex, normalIndices, rgbaIndices };
+        imaginaryGsBuffer.writeVertex(vertex.gsPacketWriteOffset, tieCommandSizes.vertex, commandValue, true);
         if (vertex.gsPacketWriteOffset2 !== 0 && vertex.gsPacketWriteOffset !== vertex.gsPacketWriteOffset2) {
-            imaginaryGsBuffer.writeVertex(vertex.gsPacketWriteOffset2, tieCommandSizes.vertex, { vertex, normalIndex, rgbaIndex }, true);
+            imaginaryGsBuffer.writeVertex(vertex.gsPacketWriteOffset2, tieCommandSizes.vertex, commandValue, true);
         }
     }
 
