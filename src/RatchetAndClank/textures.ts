@@ -5,7 +5,7 @@ import { SkyHeader, SkyTextureEntry, TieClass } from "./bin-core";
 import { TieAmbientRgbaBlock, TieInstance } from "./bin-gameplay";
 import { assert } from "../util";
 import { TextureEntry } from "./bin-index";
-import { GN } from "./utils";
+import { GN, readA1BGR5, readRGB5A1 } from "./utils";
 import { getPixelAddressPSMCT32, getPixelAddressPSMT8 } from "../Common/PS2/GS";
 
 export interface PaletteTexture {
@@ -250,9 +250,7 @@ export function createGfxTextureArrayForPaletteTextures(device: GfxDevice, name:
     return gfxTexture;
 }
 
-const MAGENTA_A1BGR4 = 0b1_11111_00000_11111;
-const TEAL_A1BGR4 = 0b1_11111_11111_00000;
-const BLACK_A1BGR4 = 0b1_00000_00000_00000;
+const BLACK_A1BGR5 = 0b1_00000_00000_00000;
 function a1bgr5ToRgba8(out: Uint8Array, offset: number, a1bgr5: number) {
     out[offset + 0] = ((a1bgr5 >> 0) & 0x1F) << 3;
     out[offset + 1] = ((a1bgr5 >> 5) & 0x1F) << 3;
@@ -329,14 +327,21 @@ export function createTieRgbaTexture_Rac234(device: GfxDevice, tieInstances: (Ti
 
         const rowData = new Uint8Array(4 * 4096);
 
-        // initialize the row with magenta
+        // fill up with grey
         for (let col = 0; col < 4096; col++) {
-            a1bgr5ToRgba8(rowData, col * 4, MAGENTA_A1BGR4);
+            rowData[col * 4 + 0] = 128;
+            rowData[col * 4 + 1] = 128;
+            rowData[col * 4 + 2] = 128;
+            rowData[col * 4 + 3] = 255;
         }
 
-        // copy the data from the rgba block and convert to rgba8
+        // decode and copy the initial cache state
         for (let col = 0; col < row.count; col++) {
-            a1bgr5ToRgba8(rowData, col * 4, row.ambientRgbas[col]);
+            const color = readA1BGR5(row.ambientRgbas[col]);
+            rowData[col * 4 + 0] = row.baseColor.r + (color.r >> row.colorShift);
+            rowData[col * 4 + 1] = row.baseColor.g + (color.g >> row.colorShift);
+            rowData[col * 4 + 2] = row.baseColor.b + (color.b >> row.colorShift);
+            rowData[col * 4 + 3] = 255; // ??
         }
 
         // then for each remap, evaluate the average of the 4 src elements
@@ -354,7 +359,7 @@ export function createTieRgbaTexture_Rac234(device: GfxDevice, tieInstances: (Ti
 
                 if (remap.src === 0) {
                     // write black
-                    a1bgr5ToRgba8(rowData, dest, BLACK_A1BGR4);
+                    a1bgr5ToRgba8(rowData, dest, BLACK_A1BGR5);
                 } else {
                     // write average of 4 inputs
                     rowData[dest + 0] = (rowData[remap.src[0] + 0] + rowData[remap.src[1] + 0] + rowData[remap.src[2] + 0] + rowData[remap.src[3] + 0]) / 4;
@@ -395,11 +400,11 @@ export function createTieRgbaTexture_InitPreview_Rac234(device: GfxDevice, tieRg
         const row = tieRgbasBlock.list[i];
         let ptr = i * tieRgbasBlock.maxCount * 4;
         for (let j = 0; j < tieRgbasBlock.maxCount; j++) {
-            const a1bgr5 = j < row.count ? row.ambientRgbas[j] : 0b1_11111_00000_11111;
-            data[ptr++] = ((a1bgr5 >> 0) & 0x1F) << 3;
-            data[ptr++] = ((a1bgr5 >> 5) & 0x1F) << 3;
-            data[ptr++] = ((a1bgr5 >> 10) & 0x1F) << 3;
-            data[ptr++] = 255;
+            const color = row.ambientRgbas[j] ? readA1BGR5(row.ambientRgbas[j]) : { r: 0, g: 0, b: 0 };
+            data[ptr++] = row.baseColor.r + (color.r >> row.colorShift);
+            data[ptr++] = row.baseColor.g + (color.g >> row.colorShift);
+            data[ptr++] = row.baseColor.b + (color.b >> row.colorShift);
+            data[ptr++] = 255; // ??
         }
     }
 

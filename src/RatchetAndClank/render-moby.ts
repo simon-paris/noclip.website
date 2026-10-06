@@ -380,8 +380,6 @@ export class MobyGeometry {
     }
 }
 
-const scratchVec3 = vec3.create();
-
 const bindingLayouts = [
     {
         numSamplers: 5,
@@ -511,7 +509,6 @@ export class MobyRenderer {
             renderInst.setDrawCount(count, 0);
             renderInst.setInstanceCount(mobyInstancesToDraw.length);
             renderInstList.submitRenderInst(renderInst);
-
         }
     }
 }

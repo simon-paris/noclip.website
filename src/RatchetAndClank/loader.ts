@@ -4,7 +4,7 @@ import { GsRamTableEntry, MobyClass, Occlusion, readCollision, readGsRamTableEnt
 import { filterInstancesByChunkPlane, filterMobyInstancesByChunkPlane, GN, makeClassOClassMap, makeInstanceOClassMap as makeInstancesByOClass, makeTextureIndicesByOClassMap, noclipSpaceFromRatchetSpace, populateMobyOcclusionBits, populateTieOcclusionBits } from "./utils";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { readPalette8TextureSky, readPalette8TextureWithPaletteInGsRam } from "./textures";
-import { ClassEntry, readClassEntry, readLevelCoreHeader, readTextureEntry, SIZEOF_MOBY_CLASS_ENTRY, SIZEOF_SHRUB_CLASS_ENTRY, SIZEOF_TEXTURE_ENTRY, SIZEOF_TIE_CLASS_ENTRY, TextureEntry } from "./bin-index";
+import { ClassEntry, readClassEntry, readLevelCoreHeader, readTextureEntry, readTitleHeader, SIZEOF_MOBY_CLASS_ENTRY, SIZEOF_SHRUB_CLASS_ENTRY, SIZEOF_TEXTURE_ENTRY, SIZEOF_TIE_CLASS_ENTRY, TextureEntry } from "./bin-index";
 import { DirectionLightInstance, GameplayHeader, LevelSettings, MobyInstance, PointLightInstance, Spline } from "./bin-gameplay";
 import { PaletteTexture } from "./textures";
 import { Collision, Sky, Tfrag } from "./bin-core";
@@ -130,10 +130,14 @@ export function loadMissionFileFromNetworkOnly(dataFetcher: DataFetcher, basePat
         gameplayMissionFilePromise: missionNumber !== null ? toDataViewExt(dataFetcher.fetchData(`${basePath}_gameplay_mission_${missionNumber}.bin`)) : null,
     }
 }
+export function loadTitleFileFromNetwork(dataFetcher: DataFetcher, basePath: string): { titleFilePromise: Promise<DataViewExt> } {
+    return {
+        titleFilePromise: decompress(toDataViewExt(dataFetcher.fetchData(`${basePath}.wad`))),
+    };
+}
 
 export function load(gn: GN, filterChunk: number | null, out: LevelResources, filePromises: FilePromises) {
     const { metadataFilePromise, coreDataFilePromise, gameplayFilePromise, gameplayArtFilePromise, gameplayMissionFilePromise, coreIndexFilePromise, gsRamFilePromise, chunkTfragFilePromise, chunkCollisionFilePromise } = filePromises;
-
 
     // load metadata
     const metadataPromise = loadMetadata(gn, out, metadataFilePromise);
@@ -225,12 +229,28 @@ type LoadIndexDataResult = {
     tieTextureEntries: TextureEntry[],
     mobyTextureEntries: TextureEntry[],
     shrubTextureEntries: TextureEntry[],
+    gsTable: GsRamTableEntry[],
+    mobyGsStashList: number[],
+    tieClassTextureIndices: Map<number, number[]>,
+    mobyClassTextureIndices: Map<number, number[]>,
+    shrubClassTextureIndices: Map<number, number[]>,
 };
 export async function loadIndexData(gn: GN, out: LevelResources, coreIndexFilePromise: Promise<DataViewExt>): Promise<LoadIndexDataResult> {
     const coreIndexFile = await coreIndexFilePromise;
 
     const levelCoreHeader = readLevelCoreHeader(coreIndexFile);
     out.levelCoreHeader = levelCoreHeader;
+
+    const indexData = readIndexData(gn, coreIndexFile, levelCoreHeader);
+    out.gsTable = indexData.gsTable;
+    out.mobyGsStashList = indexData.mobyGsStashList;
+    out.tieClassTextureIndices = indexData.tieClassTextureIndices;
+    out.mobyClassTextureIndices = indexData.mobyClassTextureIndices;
+    out.shrubClassTextureIndices = indexData.shrubClassTextureIndices;
+    return indexData;
+}
+
+function readIndexData(gn: GN, coreIndexFile: DataViewExt, levelCoreHeader: LevelCoreHeader): LoadIndexDataResult {
 
     const tieClassEntries = coreIndexFile.subdivide(levelCoreHeader.tieClasses.offset, levelCoreHeader.tieClasses.count, SIZEOF_TIE_CLASS_ENTRY).map(readClassEntry);
     const mobyClassEntries = coreIndexFile.subdivide(levelCoreHeader.mobyClasses.offset, levelCoreHeader.mobyClasses.count, SIZEOF_MOBY_CLASS_ENTRY).map(readClassEntry);
@@ -242,12 +262,12 @@ export async function loadIndexData(gn: GN, out: LevelResources, coreIndexFilePr
     const shrubTextureEntries = coreIndexFile.subdivide(levelCoreHeader.shrubTextures.offset, levelCoreHeader.shrubTextures.count, SIZEOF_TEXTURE_ENTRY).map(readTextureEntry);
 
     const mobyStashCount = gn === 1 ? 0 : levelCoreHeader.gadgetOffsetOrMobyStashCount;
-    out.gsTable = coreIndexFile.subdivide(levelCoreHeader.gsRam.offset, levelCoreHeader.gsRam.count + mobyStashCount, SIZEOF_GS_RAM_TABLE_ENTRY).map(view => readGsRamTableEntry(view));
-    out.mobyGsStashList = coreIndexFile.subdivide(levelCoreHeader.mobyGsStashList, mobyStashCount, 2).map(view => view.getUint16(0)).filter(oClass => !(oClass & 0x8000));
+    const gsTable = coreIndexFile.subdivide(levelCoreHeader.gsRam.offset, levelCoreHeader.gsRam.count + mobyStashCount, SIZEOF_GS_RAM_TABLE_ENTRY).map(readGsRamTableEntry);
+    const mobyGsStashList = coreIndexFile.subdivide(levelCoreHeader.mobyGsStashList, mobyStashCount, 2).map(view => view.getUint16(0)).filter(oClass => !(oClass & 0x8000));
 
-    out.tieClassTextureIndices = makeTextureIndicesByOClassMap(tieClassEntries);
-    out.mobyClassTextureIndices = makeTextureIndicesByOClassMap(mobyClassEntries);
-    out.shrubClassTextureIndices = makeTextureIndicesByOClassMap(shrubClassEntries);
+    const tieClassTextureIndices = makeTextureIndicesByOClassMap(tieClassEntries);
+    const mobyClassTextureIndices = makeTextureIndicesByOClassMap(mobyClassEntries);
+    const shrubClassTextureIndices = makeTextureIndicesByOClassMap(shrubClassEntries);
 
     return {
         levelCoreHeader,
@@ -258,7 +278,84 @@ export async function loadIndexData(gn: GN, out: LevelResources, coreIndexFilePr
         tieTextureEntries,
         mobyTextureEntries,
         shrubTextureEntries,
+        gsTable,
+        mobyGsStashList,
+        tieClassTextureIndices,
+        mobyClassTextureIndices,
+        shrubClassTextureIndices,
     };
+}
+
+export async function loadTitleFile(out: LevelResources, titleFilePromise: Promise<DataViewExt>): Promise<void> {
+    const gn: GN = 1;
+    const file = await titleFilePromise;
+    const header = readTitleHeader(file);
+    out.levelCoreHeader = header;
+    assert(header.titleLevelData_rac1 !== null);
+
+    const { gsRam: gsRamOffset, coreData: coreDataOffset, gameplay: gameplayOffset } = header.titleLevelData_rac1;
+    const titleGsRam = file.subview(gsRamOffset);
+    const titleCoreData = file.subview(coreDataOffset);
+    const gameplayHeaderFile = file.subview(coreDataOffset + gameplayOffset);
+
+    const indexData = readIndexData(gn, file, header);
+    out.gsTable = indexData.gsTable;
+    out.mobyGsStashList = indexData.mobyGsStashList;
+    out.tieClassTextureIndices = indexData.tieClassTextureIndices;
+    out.mobyClassTextureIndices = indexData.mobyClassTextureIndices;
+    out.shrubClassTextureIndices = indexData.shrubClassTextureIndices;
+
+    const textureData = titleCoreData.subview(header.texturesBaseOffset);
+    out.tfragTextures = indexData.tfragTextureEntries.map((entry, i) => readPalette8TextureWithPaletteInGsRam(gn, entry, textureData, titleGsRam, "Tfrag", i));
+    out.tieTextures = indexData.tieTextureEntries.map((entry, i) => readPalette8TextureWithPaletteInGsRam(gn, entry, textureData, titleGsRam, "Tie", i));
+    out.mobyTextures = indexData.mobyTextureEntries.map((entry, i) => readPalette8TextureWithPaletteInGsRam(gn, entry, textureData, titleGsRam, "Moby", i));
+    out.shrubTextures = indexData.shrubTextureEntries.map((entry, i) => readPalette8TextureWithPaletteInGsRam(gn, entry, textureData, titleGsRam, "Shrub", i));
+
+    const gameplayHeader = readGameplayHeader(1, gameplayHeaderFile, null);
+    out.gameplayHeader = gameplayHeader;
+    const levelSettings = readLevelSettings(gn, gameplayHeaderFile.subview(gameplayHeader.levelSettings));
+    out.levelSettings = levelSettings;
+
+    out.paths = readPathBlock(gameplayHeaderFile.subview(gameplayHeader.paths));
+    out.grindPaths = readGrindPathBlock(gameplayHeaderFile.subview(gameplayHeader.grindPaths));
+    out.directionLights = readInstanceBlock(gameplayHeaderFile.subview(gameplayHeader.directionLightInstances), SIZEOF_DIRECTION_LIGHT_INSTANCE, readDirectionLightInstance);
+    out.pointLights = readInstanceBlock(gameplayHeaderFile.subview(gameplayHeader.pointLightInstances), SIZEOF_POINT_LIGHT_INSTANCE, readPointLightInstance);
+
+    out.tieOClasses = readClassPositionBlock(gameplayHeaderFile.subview(gameplayHeader.tieClasses));
+    const tieClassInstances = readInstanceBlock(gameplayHeaderFile.subview(gameplayHeader.tieInstances), SIZEOF_TIE_INSTANCE(gn), (view, i) => readTieInstance(gn, view, i));
+    populateTieOcclusionBits(tieClassInstances, null);
+    out.tieInstances = filterInstancesByChunkPlane(null, tieClassInstances, levelSettings.chunkPlanes);
+    out.tieInstancesByOClass = makeInstancesByOClass(out.tieInstances);
+
+    out.shrubOClasses = readClassPositionBlock(gameplayHeaderFile.subview(gameplayHeader.shrubClasses));
+    const shrubClassInstances = readInstanceBlock(gameplayHeaderFile.subview(gameplayHeader.shrubInstances), SIZEOF_SHRUB_INSTANCE, readShrubInstance);
+    out.shrubInstances = filterInstancesByChunkPlane(null, shrubClassInstances, levelSettings.chunkPlanes);
+    out.shrubInstancesByOClass = makeInstancesByOClass(out.shrubInstances);
+
+    out.mobyOClasses = readClassPositionBlock(gameplayHeaderFile.subview(gameplayHeader.mobyClasses));
+    const mobyInstances = readInstanceBlock(gameplayHeaderFile.subview(gameplayHeader.mobyInstances), SIZEOF_MOBY_INSTANCE(gn), (view, i) => readMobyInstance(gn, view, i));
+    populateMobyOcclusionBits(mobyInstances, null);
+    out.mobyUniqueMissionIds = new Set(mobyInstances.map(instance => instance.mission));
+    out.mobyInstances = filterMobyInstancesByChunkPlane(null, mobyInstances, levelSettings.chunkPlanes);
+    out.mobyInstancesByOClass = makeInstancesByOClass(out.mobyInstances);
+
+    out.tieClasses = makeClassOClassMap(indexData.tieClassEntries, indexData.tieClassEntries.map(entry => readTieClass(gn, titleCoreData.subview(entry.offsetInCoreData), entry.oClass)));
+    out.mobyClasses = makeClassOClassMap(indexData.mobyClassEntries, indexData.mobyClassEntries.map(entry => {
+        if (entry.offsetInCoreData === 0) return null;
+        return readMobyClass(gn, titleCoreData.subview(entry.offsetInCoreData), entry.oClass);
+    }));
+    out.shrubClasses = makeClassOClassMap(indexData.shrubClassEntries, indexData.shrubClassEntries.map(entry => readShrubClass(titleCoreData.subview(entry.offsetInCoreData))));
+
+    const tfragBlockHeader = readTfragBlockHeader(titleCoreData.subview(header.tfrags));
+    const tfragHeaders = titleCoreData.subdivide(tfragBlockHeader.tableOffset, tfragBlockHeader.tfragCount, SIZEOF_TFRAG_HEADER).map(readTfragHeader);
+    out.tfrags = tfragHeaders.map((tfragHeader, i) => readTfrag(titleCoreData.subview(tfragBlockHeader.tableOffset + tfragHeader.data), tfragHeader, i));
+
+    assert(header.sky !== 0);
+    const sky = readSky(gn, titleCoreData.subview(header.sky));
+    const skyHeader = sky.header;
+    assert(skyHeader !== null);
+    out.sky = sky;
+    out.skyTextures = sky.textureEntries.map((entry, i) => readPalette8TextureSky(gn, titleCoreData.subview(header.sky), skyHeader, entry, i));
 }
 
 async function loadGameplayHeader(gn: GN, out: LevelResources, gameplayFilePromise: Promise<DataViewExt>, gameplayArtFilePromise: Promise<DataViewExt> | null) {
@@ -492,9 +589,11 @@ export async function loadOcclusionData(gn: GN, out: LevelResources, coreDataFil
 
 export async function loadCollisionData(gn: GN, out: LevelResources, coreDataFilePromise: Promise<DataViewExt>, indexDataPromise: Promise<LoadIndexDataResult>) {
     const [coreDataFile, indexData] = await Promise.all([coreDataFilePromise, indexDataPromise]);
+    const collisionOffset = indexData.levelCoreHeader.collision;
+    if (collisionOffset === 0) return;
 
     out.collisionGetter = () => {
-        return readCollision(coreDataFile.subview(indexData.levelCoreHeader.collision));
+        return readCollision(coreDataFile.subview(collisionOffset));
     };
 }
 

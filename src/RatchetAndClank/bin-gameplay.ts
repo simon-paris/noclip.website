@@ -804,7 +804,8 @@ export type TieAmbientRgbaBlock = {
     list: {
         tieIndex: number,
         count: number,
-        unknown: number,
+        baseColor: { r: number, g: number, b: number },
+        colorShift: number,
         ambientRgbas: Uint16Array,
     }[]
 };
@@ -813,7 +814,11 @@ export function readTieAmbientRgbaBlock(view: DataViewExt): TieAmbientRgbaBlock 
     struct TieAmbientRgbaBlock {
         int16 tieIndex;
         uint16 count;
-        uint16 ambientRgbas[count * 2]; // array of A1BGR5 colors
+        uint8 base_r;
+        uint8 base_g;
+        uint8 base_b;
+        uint8 unknown;
+        uint16 ambientRgbas[count - 2]; // array of A1BGR5 colors
     }
     */
     const out: TieAmbientRgbaBlock = { maxCount: 0, list: [] };
@@ -824,8 +829,9 @@ export function readTieAmbientRgbaBlock(view: DataViewExt): TieAmbientRgbaBlock 
         out.list.push({
             tieIndex,
             count,
-            unknown: view.getInt32(0x4),
-            ambientRgbas: view.subview(8, count * 2 - 4).getTypedArrayView(Uint16Array),
+            baseColor: view.getUint8_Rgb(0x4),
+            colorShift: view.getUint8(0x7),
+            ambientRgbas: view.subview(0x8, (count - 2) * 2).getTypedArrayView(Uint16Array),
         });
         out.maxCount = Math.max(out.maxCount, count);
         view = view.subview(4 + count * 2);

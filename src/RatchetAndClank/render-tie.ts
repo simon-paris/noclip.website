@@ -401,6 +401,7 @@ export class TieRenderer {
                 } else {
                     smoothLod = 2;
                 }
+                smoothLod = Math.max(0, smoothLod);
                 modelLodLevel = Math.floor(smoothLod);
                 lodMorphFactor = smoothLod - modelLodLevel;
             }

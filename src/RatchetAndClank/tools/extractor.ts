@@ -57,6 +57,16 @@ if (gn === 1) {
 }
 await fs.writeFile(path.join(outputDir, `global.json`), JSON.stringify(tableOfContents));
 
+// rac1 title scene
+if (tableOfContents.title) {
+    const titleBuffer = await diskFns.readBytes(tableOfContents.title.startSector, tableOfContents.title.sizeInSectors * SECTOR_SIZE);
+    const titleFile = new DataViewExt(titleBuffer, { littleEndian: true });
+    const compressedSize = WadDecompressor.compressedSize(titleFile);
+    const compressedTitleFile = titleFile.subview(0, compressedSize);
+    decompress(compressedTitleFile);
+    await fs.writeFile(path.join(outputDir, `level_title.wad`), new Uint8Array(titleBuffer, 0, compressedSize));
+}
+
 // read levels
 for (const levelSectors of tableOfContents.levelSectors) {
     if (!levelSectors) continue;

@@ -11,7 +11,7 @@ import * as UI from "../ui";
 import { FakeTextureHolder } from "../TextureHolder";
 import { TieGeometry, TieProgram, TieRenderer } from "./render-tie";
 import { CameraController } from "../Camera";
-import { FilePromises, LevelResources, load, loadFilesFromNetwork, loadMissionFileFromNetworkOnly, reloadMissionMobys } from "./loader";
+import { FilePromises, LevelResources, load, loadFilesFromNetwork, loadMissionFileFromNetworkOnly, loadTitleFile, loadTitleFileFromNetwork, reloadMissionMobys } from "./loader";
 import { createMegaBuffer, MegaBuffer, noclipSpaceFromRatchetSpace, lineChainToLineSegments, GN, OcclusionChecker } from "./utils";
 import { TfragGeometry, TfragRenderer } from "./render-tfrag";
 import { ShrubGeometry, ShrubRenderer } from "./render-shrub";
@@ -45,7 +45,7 @@ class RatchetAndClankScene implements SceneGfx {
 
     private resourceBasePath: string;
     private filePromises: FilePromises;
-    private loadingPromise: Promise<void>;
+    private loadingPromise: Promise<unknown>;
 
     private settings = {
         lodSetting: -1, // -1 means dynamic
@@ -200,13 +200,22 @@ class RatchetAndClankScene implements SceneGfx {
         this.instanceDataBuffer = createMegaBuffer(cache.device, "Instance Data", 1024 * 1024);
         this.instanceDataBufferCache = new GfxDynamicBufferCache(cache.device);
 
-        this.resourceBasePath = `${pathBase(this.gn)}/level_${this.levelNumber}`;
-        this.filePromises = loadFilesFromNetwork(sceneContext.dataFetcher, this.resourceBasePath, this.gn, this.chunkNumber, this.missionNumber);
-        this.loadingPromise = load(this.gn, this.chunkNumber, this.levelResources, this.filePromises).then(() => {
+        this.resourceBasePath = `${pathBase(this.gn)}/level_${this.levelNumber === TITLE_SCREEN_RAC1 ? "title" : this.levelNumber}`;
+        if (this.levelNumber === TITLE_SCREEN_RAC1) {
+            // load special case title level for rac1
+            const filePromises = loadTitleFileFromNetwork(sceneContext.dataFetcher, this.resourceBasePath);
+            this.loadingPromise = loadTitleFile(this.levelResources, filePromises.titleFilePromise)
+        } else {
+            // load normal level
+            this.filePromises = loadFilesFromNetwork(sceneContext.dataFetcher, this.resourceBasePath, this.gn, this.chunkNumber, this.missionNumber);
+            this.loadingPromise = load(this.gn, this.chunkNumber, this.levelResources, this.filePromises)
+        }
+
+        this.loadingPromise.then(() => {
             if (IS_DEVELOPMENT) console.log(this);
             this.populateMissionsList();
         }).catch((e) => {
-            console.error(`Error loading level:`, e);
+            console.error(`Error loading title level:`, e);
         });
     }
 
@@ -893,6 +902,7 @@ class RatchetAndClankSceneDesc implements SceneDesc {
     }
 }
 
+const TITLE_SCREEN_RAC1 = 9999; // just an arbitrary number that doesn't conflict with any level numbers
 const SPLITSCREEN_RAC3 = 10;
 const SPLITSCREEN_RAC4 = 20;
 
@@ -900,6 +910,7 @@ export const sceneGroup1: SceneGroup = {
     id: "RatchetAndClank1",
     name: "Ratchet & Clank",
     sceneDescs: [
+        "Main Game",
         new RatchetAndClankSceneDesc(1, 0, null, "Veldin (Tutorial)"),
         new RatchetAndClankSceneDesc(1, 1, null, "Novalis"),
         new RatchetAndClankSceneDesc(1, 2, null, "Aridia"),
@@ -919,6 +930,8 @@ export const sceneGroup1: SceneGroup = {
         new RatchetAndClankSceneDesc(1, 16, null, "Kalebo III"),
         new RatchetAndClankSceneDesc(1, 17, null, "Veldin Orbit"),
         new RatchetAndClankSceneDesc(1, 18, null, "Veldin"),
+        "Extras",
+        new RatchetAndClankSceneDesc(1, TITLE_SCREEN_RAC1, null, "Veldin (Title Screen)"),
     ],
 };
 

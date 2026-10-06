@@ -132,11 +132,19 @@ export function truncateTrailing0xFF(arr: number[]): number[] {
     return copy;
 }
 
-export function readRGB5A1(rgba: number): Color {
-    const r = (rgba & 0x1F) << 3;
-    const g = ((rgba >> 5) & 0x1F) << 3;
-    const b = ((rgba >> 10) & 0x1F) << 3;
-    const a = (rgba >> 15) === 1 ? 0xFF : 0x00;
+export function readRGB5A1(rgba5a1: number): Color {
+    const r = (rgba5a1 & 0x1F) << 3;
+    const g = ((rgba5a1 >> 5) & 0x1F) << 3;
+    const b = ((rgba5a1 >> 10) & 0x1F) << 3;
+    const a = (rgba5a1 >> 15) === 1 ? 0xFF : 0x00;
+    return { r, g, b, a };
+}
+
+export function readA1BGR5(a1bgr5: number) {
+    const r = ((a1bgr5 >> 0) & 0x1F) << 3;
+    const g = ((a1bgr5 >> 5) & 0x1F) << 3;
+    const b = ((a1bgr5 >> 10) & 0x1F) << 3;
+    const a = 255;
     return { r, g, b, a };
 }
 
@@ -219,7 +227,10 @@ export function populateTieOcclusionBits(instances: TieInstance[], mappings: Occ
             mappingPtr += 2;
         }
 
-        assert(mappingPtr !== prevMappingPtr); // hope we aren't stuck
+        if (mappingPtr === prevMappingPtr) {
+            // on rac4 dreadzone station, there are wierd mappings where the uid is set to -1 instead of the bit
+            mappingPtr += 2;
+        }
 
         // go back to the start of the instance list and loop over the remaining mappings
     } while (mappingPtr < mappings.tieMappings.length);

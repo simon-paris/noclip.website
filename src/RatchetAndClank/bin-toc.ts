@@ -27,6 +27,7 @@ export const TOC_MAX_SECTORS = 1024;
 export const TOC_MAX_SIZE = TOC_MAX_SECTORS * SECTOR_SIZE;
 
 export interface TableOfContents {
+    title: { startSector: number, sizeInSectors: number } | null,
     levelSectors: { startSector: number, sizeInSectors: number }[],
 };
 export const SIZEOF_TABLE_OF_CONTENTS_RAC1 = 0x2960;
@@ -44,6 +45,7 @@ export async function readTableOfContents_Rac1(view: DataViewExt): Promise<Table
     */
 
     return {
+        title: view.getInt32PairAs(0x14e8, "startSector", "sizeInSectors"),
         levelSectors: view.subdivide(0x28c8, 19, 0x8).map(view => {
             return view.getInt32PairAs(0, "startSector", "sizeInSectors")
         }),
@@ -128,6 +130,7 @@ export async function readTableOfContents_Rac234(gn: GN, diskFns: DiskFns, view:
     }
 
     return {
+        title: null,
         levelSectors,
     }
 }
