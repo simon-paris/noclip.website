@@ -186,6 +186,7 @@ for (const levelSectors of tableOfContents.levelSectors) {
             tieClassTextureIndices: null,
             tieInstances: null,
             tieInstancesByOClass: null,
+            tieGroups: null,
             tieAmbientRgbas: null,
             mobyTextures: null,
             mobyGsStashList: null,
@@ -194,16 +195,19 @@ for (const levelSectors of tableOfContents.levelSectors) {
             mobyClassTextureIndices: null,
             mobyInstances: null,
             mobyInstancesByOClass: null,
+            mobyGroups: null,
             mobyUniqueMissionIds: null,
             missionMobyOClasses: null,
             missionMobyInstances: null,
             missionMobyInstancesByOClass: null,
+            missionMobyGroups: null,
             shrubTextures: null,
             shrubOClasses: null,
             shrubClasses: null,
             shrubClassTextureIndices: null,
             shrubInstances: null,
             shrubInstancesByOClass: null,
+            shrubGroups: null,
             sky: null,
             skyTextures: null,
         };
@@ -225,6 +229,7 @@ for (const levelSectors of tableOfContents.levelSectors) {
         // assert every key is populated
         for (const key of Object.keys(resources)) {
             if (gn === 1 && key === "tieAmbientRgbas") continue; // not in rac1
+            if (gn === 1 && (key === "tieGroups" || key === "shrubGroups")) continue; // not in rac1
             if (missionNumber === null && key.startsWith("mission")) continue; // no mission
             if (key === "occlusion" || key === "occlusionMappings") continue; // occlusion is optional
             if (!resources[key as keyof typeof resources]) {

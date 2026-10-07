@@ -1,7 +1,7 @@
-import { ChunkPlane, MissionGameplayHeader, OcclusionMappings, readClassPositionBlock, readDirectionLightInstance, readGameplayHeader, readGrindPathBlock, readInstanceBlock, readLevelSettings, readMissionGameplayHeader, readMobyInstance, readOcclusionMappings, readPathBlock, readPointLightInstance, readShrubInstance, readTieAmbientRgbaBlock, readTieInstance, ShrubInstance, SIZEOF_DIRECTION_LIGHT_INSTANCE, SIZEOF_MOBY_INSTANCE, SIZEOF_POINT_LIGHT_INSTANCE, SIZEOF_SHRUB_INSTANCE, SIZEOF_TIE_INSTANCE, TieAmbientRgbaBlock, TieInstance } from "./bin-gameplay";
+import { InstanceGroupBlock, MissionGameplayHeader, OcclusionMappings, readClassPositionBlock, readDirectionLightInstance, readGameplayHeader, readGrindPathBlock, readInstanceBlock, readInstanceGroupBlock, readLevelSettings, readMissionGameplayHeader, readMobyInstance, readOcclusionMappings, readPathBlock, readPointLightInstance, readShrubInstance, readTieAmbientRgbaBlock, readTieInstance, ShrubInstance, SIZEOF_DIRECTION_LIGHT_INSTANCE, SIZEOF_MOBY_INSTANCE, SIZEOF_POINT_LIGHT_INSTANCE, SIZEOF_SHRUB_INSTANCE, SIZEOF_TIE_INSTANCE, TieAmbientRgbaBlock, TieInstance } from "./bin-gameplay";
 import { DataViewExt } from "./DataViewExt";
 import { GsRamTableEntry, MobyClass, Occlusion, readCollision, readGsRamTableEntry, readMobyClass, readOcclusion, readShrubClass, readSky, readTfrag, readTfragBlockHeader, readTfragHeader, readTieClass, ShrubClass, SIZEOF_GS_RAM_TABLE_ENTRY, SIZEOF_TFRAG_HEADER, TieClass } from "./bin-core";
-import { filterInstancesByChunkPlane, filterMobyInstancesByChunkPlane, GN, makeClassOClassMap, makeInstanceOClassMap as makeInstancesByOClass, makeTextureIndicesByOClassMap, noclipSpaceFromRatchetSpace, populateMobyOcclusionBits, populateTieOcclusionBits } from "./utils";
+import { filterInstancesByChunkPlane, filterMobyInstancesByChunkPlane, GN, makeClassOClassMap, makeInstanceOClassMap as makeInstancesByOClass, makeTextureIndicesByOClassMap, populateMobyOcclusionBits, populateTieOcclusionBits } from "./utils";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { readPalette8TextureSky, readPalette8TextureWithPaletteInGsRam } from "./textures";
 import { ClassEntry, readClassEntry, readLevelCoreHeader, readTextureEntry, readTitleHeader, SIZEOF_MOBY_CLASS_ENTRY, SIZEOF_SHRUB_CLASS_ENTRY, SIZEOF_TEXTURE_ENTRY, SIZEOF_TIE_CLASS_ENTRY, TextureEntry } from "./bin-index";
@@ -39,6 +39,7 @@ export interface LevelResources {
     tieClassTextureIndices: Map<number, number[]> | null,
     tieInstances: (TieInstance | null)[] | null, // null means filtered out by the chunk filter
     tieInstancesByOClass: TieInstance[][] | null,
+    tieGroups: InstanceGroupBlock | null,
     tieAmbientRgbas: TieAmbientRgbaBlock | null,
 
     mobyTextures: PaletteTexture[] | null,
@@ -48,11 +49,13 @@ export interface LevelResources {
     mobyClassTextureIndices: Map<number, number[]> | null,
     mobyInstances: MobyInstance[] | null,
     mobyInstancesByOClass: MobyInstance[][] | null,
+    mobyGroups: InstanceGroupBlock | null,
     mobyUniqueMissionIds: Set<number> | null,
 
     missionMobyOClasses: number[] | null,
     missionMobyInstances: MobyInstance[] | null,
     missionMobyInstancesByOClass: MobyInstance[][] | null,
+    missionMobyGroups: InstanceGroupBlock | null,
 
     shrubTextures: PaletteTexture[] | null,
     shrubOClasses: number[] | null,
@@ -60,6 +63,7 @@ export interface LevelResources {
     shrubClassTextureIndices: Map<number, number[]> | null,
     shrubInstances: (ShrubInstance | null)[] | null,
     shrubInstancesByOClass: ShrubInstance[][] | null,
+    shrubGroups: InstanceGroupBlock | null,
 
     sky: Sky | null,
     skyTextures: PaletteTexture[] | null,
@@ -139,39 +143,20 @@ export function loadTitleFileFromNetwork(dataFetcher: DataFetcher, basePath: str
 export function load(gn: GN, filterChunk: number | null, out: LevelResources, filePromises: FilePromises) {
     const { metadataFilePromise, coreDataFilePromise, gameplayFilePromise, gameplayArtFilePromise, gameplayMissionFilePromise, coreIndexFilePromise, gsRamFilePromise, chunkTfragFilePromise, chunkCollisionFilePromise } = filePromises;
 
-    // load metadata
-    const metadataPromise = loadMetadata(gn, out, metadataFilePromise);
     const gameplayHeaderPromise = loadGameplayHeader(gn, out, gameplayFilePromise, gameplayArtFilePromise);
     const indexDataPromise = loadIndexData(gn, out, coreIndexFilePromise);
     const levelSettingsPromise = loadLevelSettings(gn, out, gameplayFilePromise, gameplayHeaderPromise);
-
-    // load occlusion, (need to block occlusion mappings if this is missing)
     const occlusionPromise = loadOcclusionData(gn, out, coreDataFilePromise, indexDataPromise);
-
-    // load gameplay/art/mission data
-    const pathsPromise = loadPathData(gn, out, gameplayFilePromise, gameplayHeaderPromise);
-    const directionLightsPromise = loadDirectionLights(gn, out, gameplayFilePromise, gameplayArtFilePromise, gameplayHeaderPromise);
-    const pointLightsPromise = loadPointLights(gn, out, gameplayFilePromise, gameplayHeaderPromise);
     const occlusionMappingsPromise = loadOcclusionMappings(gn, out, gameplayFilePromise, gameplayArtFilePromise, gameplayHeaderPromise, occlusionPromise);
-    const tieAndShrubInstanceDataPromise = loadTieAndShrubInstanceData(gn, out, filterChunk, gameplayFilePromise, gameplayArtFilePromise, gameplayHeaderPromise, levelSettingsPromise, occlusionMappingsPromise);
     const mobyInstanceDataMainPromise = loadMobyInstanceData_Gameplay(gn, out, filterChunk, gameplayFilePromise, gameplayHeaderPromise, levelSettingsPromise, occlusionMappingsPromise);
-    const mobyInstanceDataMissionPromise = loadMobyInstanceData_Mission(gn, out, filterChunk, gameplayMissionFilePromise, levelSettingsPromise, mobyInstanceDataMainPromise, occlusionMappingsPromise);
 
-    // load assets
-    const tieDataPromise = loadTieData(gn, out, coreDataFilePromise, indexDataPromise);
-    const tieAmbientRgbasPromise = loadTieAmbientRgbas(gn, out, gameplayFilePromise, gameplayArtFilePromise, gameplayHeaderPromise);
-    const mobyDataPromise = loadMobyData(gn, out, coreDataFilePromise, indexDataPromise);
-    const shrubDataPromise = loadShrubData(gn, out, coreDataFilePromise, indexDataPromise);
-    const textureDataPromise = loadTextureData(gn, out, coreDataFilePromise, gsRamFilePromise, indexDataPromise);
-    const skyDataPromise = loadSkyData(gn, out, coreDataFilePromise, indexDataPromise);
-
-    // load assets (maybe from chunk file)
     let tfragDataPromise: Promise<void>;
     if (chunkTfragFilePromise) {
         tfragDataPromise = loadChunkTfragData(gn, out, chunkTfragFilePromise);
     } else {
         tfragDataPromise = loadTfragData(gn, out, coreDataFilePromise, indexDataPromise);
     }
+
     let collisionDataPromise: Promise<void>;
     if (chunkCollisionFilePromise) {
         collisionDataPromise = loadChunkCollisionData(gn, out, chunkCollisionFilePromise);
@@ -180,23 +165,23 @@ export function load(gn: GN, filterChunk: number | null, out: LevelResources, fi
     }
 
     return Promise.all([
-        metadataPromise,
-        pathsPromise,
-        directionLightsPromise,
-        pointLightsPromise,
+        loadMetadata(gn, out, metadataFilePromise),
+        loadPathData(gn, out, gameplayFilePromise, gameplayHeaderPromise),
+        loadDirectionLights(gn, out, gameplayFilePromise, gameplayArtFilePromise, gameplayHeaderPromise),
+        loadPointLights(gn, out, gameplayFilePromise, gameplayHeaderPromise),
         occlusionPromise,
-        tieAndShrubInstanceDataPromise,
+        loadTieAndShrubInstanceData(gn, out, filterChunk, gameplayFilePromise, gameplayArtFilePromise, gameplayHeaderPromise, levelSettingsPromise, occlusionMappingsPromise),
         mobyInstanceDataMainPromise,
-        mobyInstanceDataMissionPromise,
+        loadMobyInstanceData_Mission(gn, out, filterChunk, gameplayMissionFilePromise, levelSettingsPromise, mobyInstanceDataMainPromise, occlusionMappingsPromise),
         occlusionMappingsPromise,
         tfragDataPromise,
-        tieDataPromise,
-        mobyDataPromise,
-        shrubDataPromise,
-        textureDataPromise,
+        loadTieData(gn, out, coreDataFilePromise, indexDataPromise),
+        loadMobyData(gn, out, coreDataFilePromise, indexDataPromise),
+        loadShrubData(gn, out, coreDataFilePromise, indexDataPromise),
+        loadTextureData(gn, out, coreDataFilePromise, gsRamFilePromise, indexDataPromise),
         collisionDataPromise,
-        skyDataPromise,
-        tieAmbientRgbasPromise,
+        loadSkyData(gn, out, coreDataFilePromise, indexDataPromise),
+        loadTieAmbientRgbas(gn, out, gameplayFilePromise, gameplayArtFilePromise, gameplayHeaderPromise),
     ]);
 }
 
@@ -205,20 +190,14 @@ export async function loadTitle(out: LevelResources, titleFilePromise: Promise<D
     const gn: GN = 1;
     const file = await titleFilePromise;
     const header = readTitleHeader(file);
-    out.levelCoreHeader = header;
     assert(header.titleLevelData_rac1 !== null);
 
     const { gsRam: gsRamOffset, coreData: coreDataOffset, gameplay: gameplayOffset } = header.titleLevelData_rac1;
     const titleGsRam = file.subview(gsRamOffset);
     const titleCoreData = file.subview(coreDataOffset);
-    const gameplayHeaderFile = file.subview(coreDataOffset + gameplayOffset);
+    const gameplayHeaderFile = file.subview(coreDataOffset + gameplayOffset); // this offset is pretty strange but its correct
 
-    const indexData = readIndexData(gn, file, header);
-    out.gsTable = indexData.gsTable;
-    out.mobyGsStashList = indexData.mobyGsStashList;
-    out.tieClassTextureIndices = indexData.tieClassTextureIndices;
-    out.mobyClassTextureIndices = indexData.mobyClassTextureIndices;
-    out.shrubClassTextureIndices = indexData.shrubClassTextureIndices;
+    const indexData = loadIndexDataFromHeader(gn, out, file, header);
 
     const coreDataFilePromise = Promise.resolve(titleCoreData);
     const gsRamFilePromise = Promise.resolve(titleGsRam);
@@ -248,6 +227,7 @@ export async function reloadMissionMobys(gn: GN, filterChunk: number | null, out
     out.missionMobyInstances = null;
     out.missionMobyOClasses = null;
     out.missionMobyInstancesByOClass = null;
+    out.missionMobyGroups = null;
 
     const { gameplayFilePromise, gameplayArtFilePromise, gameplayMissionFilePromise } = filePromises;
     const gameplayHeaderPromise = loadGameplayHeader(gn, out, gameplayFilePromise, gameplayArtFilePromise);
@@ -279,8 +259,11 @@ type LoadIndexDataResult = {
 };
 export async function loadIndexData(gn: GN, out: LevelResources, coreIndexFilePromise: Promise<DataViewExt>): Promise<LoadIndexDataResult> {
     const coreIndexFile = await coreIndexFilePromise;
-
     const levelCoreHeader = readLevelCoreHeader(coreIndexFile);
+    return loadIndexDataFromHeader(gn, out, coreIndexFile, levelCoreHeader);
+}
+
+function loadIndexDataFromHeader(gn: GN, out: LevelResources, coreIndexFile: DataViewExt, levelCoreHeader: LevelCoreHeader): LoadIndexDataResult {
     out.levelCoreHeader = levelCoreHeader;
 
     const indexData = readIndexData(gn, coreIndexFile, levelCoreHeader);
@@ -356,6 +339,9 @@ async function loadTieAndShrubInstanceData(gn: GN, out: LevelResources, filterCh
     }
 
     out.tieOClasses = readClassPositionBlock(srcFile.subview(gameplayHeader.tieClasses));
+    if (gameplayHeader.tieGroups) {
+        out.tieGroups = readInstanceGroupBlock(srcFile.subview(gameplayHeader.tieGroups));
+    }
     const tieInstances = readInstanceBlock(srcFile.subview(gameplayHeader.tieInstances), SIZEOF_TIE_INSTANCE(gn), (view, i) => readTieInstance(gn, view, i));
     populateTieOcclusionBits(tieInstances, occlusionMappings);
     const tieInstancesFiltered = filterInstancesByChunkPlane(filterChunk, tieInstances, levelSettings.chunkPlanes);
@@ -363,6 +349,9 @@ async function loadTieAndShrubInstanceData(gn: GN, out: LevelResources, filterCh
     out.tieInstancesByOClass = makeInstancesByOClass(tieInstancesFiltered);
 
     out.shrubOClasses = readClassPositionBlock(srcFile.subview(gameplayHeader.shrubClasses));
+    if (gameplayHeader.shrubGroups) {
+        out.shrubGroups = readInstanceGroupBlock(srcFile.subview(gameplayHeader.shrubGroups));
+    }
     const shrubInstances = readInstanceBlock(srcFile.subview(gameplayHeader.shrubInstances), SIZEOF_SHRUB_INSTANCE, readShrubInstance);
     const shrubInstancesFiltered = filterInstancesByChunkPlane(filterChunk, shrubInstances, levelSettings.chunkPlanes);
     out.shrubInstances = shrubInstancesFiltered;
@@ -373,6 +362,9 @@ async function loadMobyInstanceData_Gameplay(gn: GN, out: LevelResources, filter
     const [gameplayHeader, levelSettings, gameplayFile, occlusionMappings] = await Promise.all([gameplayHeaderPromise, levelSettingsPromise, gameplayFilePromise, occlusionMappingsPromise]);
 
     out.mobyOClasses = readClassPositionBlock(gameplayFile.subview(gameplayHeader.mobyClasses));
+    if (gameplayHeader.mobyGroups) {
+        out.mobyGroups = readInstanceGroupBlock(gameplayFile.subview(gameplayHeader.mobyGroups));
+    }
     const mobyInstances = readInstanceBlock(gameplayFile.subview(gameplayHeader.mobyInstances), SIZEOF_MOBY_INSTANCE(gn), (view, i) => readMobyInstance(gn, view, i));
     populateMobyOcclusionBits(mobyInstances, occlusionMappings);
     out.mobyUniqueMissionIds = new Set();
@@ -392,6 +384,9 @@ async function loadMobyInstanceData_Mission(gn: GN, out: LevelResources, filterC
 
     const missionGameplayHeader = readMissionGameplayHeader(missionGameplayFile);
     out.missionGameplayHeader = missionGameplayHeader;
+    if (missionGameplayHeader.mobyGroups) {
+        out.missionMobyGroups = readInstanceGroupBlock(missionGameplayFile.subview(missionGameplayHeader.mobyGroups));
+    }
 
     out.missionMobyOClasses = readClassPositionBlock(missionGameplayFile.subview(missionGameplayHeader.mobyClasses));
     const mobyInstances = readInstanceBlock(missionGameplayFile.subview(missionGameplayHeader.mobyInstances), SIZEOF_MOBY_INSTANCE(gn), (view, i) => readMobyInstance(gn, view, i));
@@ -399,11 +394,7 @@ async function loadMobyInstanceData_Mission(gn: GN, out: LevelResources, filterC
     out.missionMobyInstances = filterMobyInstancesByChunkPlane(filterChunk, mobyInstances, levelSettings.chunkPlanes);
     out.missionMobyInstancesByOClass = makeInstancesByOClass(out.missionMobyInstances);
 
-    // for (const m of out.missionMobyInstances) {
-    //     if (!out.mobyInstancesByOClass!.has(m.oClass)) {
-    //         console.log("moby", m.oClass, "not found")
-    //     }
-    // }
+    // TODO: load mission moby class files
 }
 
 async function loadTieData(gn: GN, out: LevelResources, coreDataFilePromise: Promise<DataViewExt>, indexDataPromise: Promise<LoadIndexDataResult>) {

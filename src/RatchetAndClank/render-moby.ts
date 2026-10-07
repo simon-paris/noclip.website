@@ -449,8 +449,8 @@ export class MobyRenderer {
                 if (midDist >= farDist) {
                     farDist = midDist * 1.25;
                 };
-                if (distanceToCameraSquared > farDist ** 2) continue;
-                lod = (distanceToCameraSquared < midDist ** 2) ? 0 : 1;
+                if (distanceToCameraSquared > Math.max(0, farDist ** 2)) continue;
+                lod = (distanceToCameraSquared < Math.max(0, midDist ** 2)) ? 0 : 1;
                 lodAlpha = saturate(1 - invlerp(midDist, farDist, Math.sqrt(distanceToCameraSquared)));
             } else {
                 lod = lodSetting;

@@ -8,10 +8,13 @@ export type GameplayHeader = {
     directionLightInstances: number,
     tieClasses: number,
     tieInstances: number,
+    tieGroups: number,
     shrubClasses: number,
     shrubInstances: number,
+    shrubGroups: number,
     mobyClasses: number,
     mobyInstances: number,
+    mobyGroups: number,
     shapesCuboids: number,
     shapesSpheres: number,
     shapesCylinders: number,
@@ -43,7 +46,7 @@ export function readGameplayHeader(gn: GN, view: DataViewExt, artFileView_rac4: 
                 // 0x40
                 int32 mobyClasses;
                 int32 mobyInstances;
-                int32 mobyGroupInstances;
+                int32 mobyGroups;
                 int32 sharedData;
                 // 0x50
                 int32 pvarMobyLinks;
@@ -72,10 +75,13 @@ export function readGameplayHeader(gn: GN, view: DataViewExt, artFileView_rac4: 
                 directionLightInstances: view.getInt32(0x4),
                 tieClasses: view.getInt32(0x30),
                 tieInstances: view.getInt32(0x34),
+                tieGroups: 0,
                 shrubClasses: view.getInt32(0x38),
                 shrubInstances: view.getInt32(0x3c),
+                shrubGroups: 0,
                 mobyClasses: view.getInt32(0x40),
                 mobyInstances: view.getInt32(0x44),
+                mobyGroups: view.getInt32(0x48),
                 shapesCuboids: view.getInt32(0x60),
                 shapesSpheres: view.getInt32(0x64),
                 shapesCylinders: view.getInt32(0x68),
@@ -141,10 +147,13 @@ export function readGameplayHeader(gn: GN, view: DataViewExt, artFileView_rac4: 
                 directionLightInstances: view.getInt32(0x4),
                 tieClasses: view.getInt32(0x30),
                 tieInstances: view.getInt32(0x34),
+                tieGroups: view.getInt32(0x38),
                 shrubClasses: view.getInt32(0x3c),
                 shrubInstances: view.getInt32(0x40),
+                shrubGroups: view.getInt32(0x44),
                 mobyClasses: view.getInt32(0x48),
                 mobyInstances: view.getInt32(0x4c),
+                mobyGroups: view.getInt32(0x50),
                 shapesCuboids: view.getInt32(0x68),
                 shapesSpheres: view.getInt32(0x6c),
                 shapesCylinders: view.getInt32(0x70),
@@ -214,6 +223,7 @@ export function readGameplayHeader(gn: GN, view: DataViewExt, artFileView_rac4: 
                 levelSettings: view.getInt32(0x0),
                 mobyClasses: view.getInt32(0x2c),
                 mobyInstances: view.getInt32(0x30),
+                mobyGroups: view.getInt32(0x34),
                 shapesCuboids: view.getInt32(0x4c),
                 shapesSpheres: view.getInt32(0x50),
                 shapesCylinders: view.getInt32(0x54),
@@ -226,8 +236,10 @@ export function readGameplayHeader(gn: GN, view: DataViewExt, artFileView_rac4: 
                 directionLightInstances: artFileView_rac4.getInt32(0x0),
                 tieClasses: artFileView_rac4.getInt32(0x4),
                 tieInstances: artFileView_rac4.getInt32(0x8),
+                tieGroups: artFileView_rac4.getInt32(0xc),
                 shrubClasses: artFileView_rac4.getInt32(0x10),
                 shrubInstances: artFileView_rac4.getInt32(0x14),
+                shrubGroups: artFileView_rac4.getInt32(0x18),
                 occlusionMappings: artFileView_rac4.getInt32(0x1c),
                 tieAmbientRgbas: artFileView_rac4.getInt32(0x20),
             }
@@ -241,6 +253,7 @@ export function readGameplayHeader(gn: GN, view: DataViewExt, artFileView_rac4: 
 export interface MissionGameplayHeader {
     mobyClasses: number,
     mobyInstances: number,
+    mobyGroups: number,
 }
 export function readMissionGameplayHeader(view: DataViewExt) {
     /*
@@ -260,6 +273,7 @@ export function readMissionGameplayHeader(view: DataViewExt) {
     return {
         mobyClasses: view.getInt32(0x0),
         mobyInstances: view.getInt32(0x4),
+        mobyGroups: view.getInt32(0x8),
     }
 }
 
@@ -676,6 +690,56 @@ export function readInstanceBlock<T>(view: DataViewExt, instanceSize: number, re
     */
     const count = view.getInt32(0);
     return view.subdivide(SIZEOF_INSTANCE_BLOCK_HEADER, count, instanceSize).map((view, i) => readerFn(view, i));
+}
+
+export interface InstanceGroupBlock {
+    groupCount: number,
+    dataSize: number,
+    pointers: number[],
+    memberData: Uint16Array,
+    groups: InstanceGroup[]
+}
+export interface InstanceGroup {
+    members: number[],
+}
+export function readInstanceGroupBlock(view: DataViewExt): InstanceGroupBlock {
+    /*
+    struct InstanceGroupList {
+        int32 group_count;
+        int32 member_data_size; // in bytes
+        int32 pad[2];
+        int32 pointers[group_count]; // byte pointers into member data, -1 means empty group
+    }
+    // member data follows, list of 16-bit instance indices, high bit indicates last member of group
+    */
+    const groupCount = view.getInt32(0x0);
+    const dataSize = view.getInt32(0x4);
+    const memberDataOffset = 0x10 + groupCount * 4;
+    const pointers = view.subview(0x10, groupCount * 4).getTypedArrayView(Int32Array);
+    const memberData = view.subview(memberDataOffset).getTypedArrayView(Uint16Array);
+
+    const groups = Array.from<number, InstanceGroup>(pointers, startPtr => {
+        if (startPtr < 0) return { members: [] };
+        let ptr = startPtr / 2;
+        const members: number[] = [];
+        while (true) {
+            const member = memberData[ptr];
+            members.push(member & 0x7fff);
+            if (member & 0x8000) break;
+            ptr++;
+        }
+        return {
+            members
+        };
+    });
+
+    return {
+        groupCount,
+        dataSize,
+        pointers: Array.from(pointers),
+        memberData,
+        groups,
+    };
 }
 
 export interface DirectionLightInstance {
