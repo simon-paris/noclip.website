@@ -200,6 +200,48 @@ export function load(gn: GN, filterChunk: number | null, out: LevelResources, fi
     ]);
 }
 
+export async function loadTitle(out: LevelResources, titleFilePromise: Promise<DataViewExt>): Promise<void> {
+    // the title screen is pretty similar to a regular level, but everything is smashed into a single file
+    const gn: GN = 1;
+    const file = await titleFilePromise;
+    const header = readTitleHeader(file);
+    out.levelCoreHeader = header;
+    assert(header.titleLevelData_rac1 !== null);
+
+    const { gsRam: gsRamOffset, coreData: coreDataOffset, gameplay: gameplayOffset } = header.titleLevelData_rac1;
+    const titleGsRam = file.subview(gsRamOffset);
+    const titleCoreData = file.subview(coreDataOffset);
+    const gameplayHeaderFile = file.subview(coreDataOffset + gameplayOffset);
+
+    const indexData = readIndexData(gn, file, header);
+    out.gsTable = indexData.gsTable;
+    out.mobyGsStashList = indexData.mobyGsStashList;
+    out.tieClassTextureIndices = indexData.tieClassTextureIndices;
+    out.mobyClassTextureIndices = indexData.mobyClassTextureIndices;
+    out.shrubClassTextureIndices = indexData.shrubClassTextureIndices;
+
+    const coreDataFilePromise = Promise.resolve(titleCoreData);
+    const gsRamFilePromise = Promise.resolve(titleGsRam);
+    const gameplayFilePromise = Promise.resolve(gameplayHeaderFile);
+    const indexDataPromise = Promise.resolve(indexData);
+    const gameplayHeaderPromise = loadGameplayHeader(gn, out, gameplayFilePromise, null);
+    const levelSettingsPromise = loadLevelSettings(gn, out, gameplayFilePromise, gameplayHeaderPromise);
+    const noOcclusionMappingsPromise = Promise.resolve(null);
+
+    await Promise.all([
+        loadTieData(gn, out, coreDataFilePromise, indexDataPromise),
+        loadMobyData(gn, out, coreDataFilePromise, indexDataPromise),
+        loadShrubData(gn, out, coreDataFilePromise, indexDataPromise),
+        loadTfragData(gn, out, coreDataFilePromise, indexDataPromise),
+        loadTextureData(gn, out, coreDataFilePromise, gsRamFilePromise, indexDataPromise),
+        loadSkyData(gn, out, coreDataFilePromise, indexDataPromise),
+        loadDirectionLights(gn, out, gameplayFilePromise, null, gameplayHeaderPromise),
+        loadPointLights(gn, out, gameplayFilePromise, gameplayHeaderPromise),
+        loadTieAndShrubInstanceData(gn, out, null, gameplayFilePromise, null, gameplayHeaderPromise, levelSettingsPromise, noOcclusionMappingsPromise),
+        loadMobyInstanceData_Gameplay(gn, out, null, gameplayFilePromise, gameplayHeaderPromise, levelSettingsPromise, noOcclusionMappingsPromise),
+    ]);
+}
+
 // clears then reloads mission-related resources
 export async function reloadMissionMobys(gn: GN, filterChunk: number | null, out: LevelResources, filePromises: FilePromises) {
     out.missionGameplayHeader = null;
@@ -284,78 +326,6 @@ function readIndexData(gn: GN, coreIndexFile: DataViewExt, levelCoreHeader: Leve
         mobyClassTextureIndices,
         shrubClassTextureIndices,
     };
-}
-
-export async function loadTitleFile(out: LevelResources, titleFilePromise: Promise<DataViewExt>): Promise<void> {
-    const gn: GN = 1;
-    const file = await titleFilePromise;
-    const header = readTitleHeader(file);
-    out.levelCoreHeader = header;
-    assert(header.titleLevelData_rac1 !== null);
-
-    const { gsRam: gsRamOffset, coreData: coreDataOffset, gameplay: gameplayOffset } = header.titleLevelData_rac1;
-    const titleGsRam = file.subview(gsRamOffset);
-    const titleCoreData = file.subview(coreDataOffset);
-    const gameplayHeaderFile = file.subview(coreDataOffset + gameplayOffset);
-
-    const indexData = readIndexData(gn, file, header);
-    out.gsTable = indexData.gsTable;
-    out.mobyGsStashList = indexData.mobyGsStashList;
-    out.tieClassTextureIndices = indexData.tieClassTextureIndices;
-    out.mobyClassTextureIndices = indexData.mobyClassTextureIndices;
-    out.shrubClassTextureIndices = indexData.shrubClassTextureIndices;
-
-    const textureData = titleCoreData.subview(header.texturesBaseOffset);
-    out.tfragTextures = indexData.tfragTextureEntries.map((entry, i) => readPalette8TextureWithPaletteInGsRam(gn, entry, textureData, titleGsRam, "Tfrag", i));
-    out.tieTextures = indexData.tieTextureEntries.map((entry, i) => readPalette8TextureWithPaletteInGsRam(gn, entry, textureData, titleGsRam, "Tie", i));
-    out.mobyTextures = indexData.mobyTextureEntries.map((entry, i) => readPalette8TextureWithPaletteInGsRam(gn, entry, textureData, titleGsRam, "Moby", i));
-    out.shrubTextures = indexData.shrubTextureEntries.map((entry, i) => readPalette8TextureWithPaletteInGsRam(gn, entry, textureData, titleGsRam, "Shrub", i));
-
-    const gameplayHeader = readGameplayHeader(1, gameplayHeaderFile, null);
-    out.gameplayHeader = gameplayHeader;
-    const levelSettings = readLevelSettings(gn, gameplayHeaderFile.subview(gameplayHeader.levelSettings));
-    out.levelSettings = levelSettings;
-
-    out.paths = readPathBlock(gameplayHeaderFile.subview(gameplayHeader.paths));
-    out.grindPaths = readGrindPathBlock(gameplayHeaderFile.subview(gameplayHeader.grindPaths));
-    out.directionLights = readInstanceBlock(gameplayHeaderFile.subview(gameplayHeader.directionLightInstances), SIZEOF_DIRECTION_LIGHT_INSTANCE, readDirectionLightInstance);
-    out.pointLights = readInstanceBlock(gameplayHeaderFile.subview(gameplayHeader.pointLightInstances), SIZEOF_POINT_LIGHT_INSTANCE, readPointLightInstance);
-
-    out.tieOClasses = readClassPositionBlock(gameplayHeaderFile.subview(gameplayHeader.tieClasses));
-    const tieClassInstances = readInstanceBlock(gameplayHeaderFile.subview(gameplayHeader.tieInstances), SIZEOF_TIE_INSTANCE(gn), (view, i) => readTieInstance(gn, view, i));
-    populateTieOcclusionBits(tieClassInstances, null);
-    out.tieInstances = filterInstancesByChunkPlane(null, tieClassInstances, levelSettings.chunkPlanes);
-    out.tieInstancesByOClass = makeInstancesByOClass(out.tieInstances);
-
-    out.shrubOClasses = readClassPositionBlock(gameplayHeaderFile.subview(gameplayHeader.shrubClasses));
-    const shrubClassInstances = readInstanceBlock(gameplayHeaderFile.subview(gameplayHeader.shrubInstances), SIZEOF_SHRUB_INSTANCE, readShrubInstance);
-    out.shrubInstances = filterInstancesByChunkPlane(null, shrubClassInstances, levelSettings.chunkPlanes);
-    out.shrubInstancesByOClass = makeInstancesByOClass(out.shrubInstances);
-
-    out.mobyOClasses = readClassPositionBlock(gameplayHeaderFile.subview(gameplayHeader.mobyClasses));
-    const mobyInstances = readInstanceBlock(gameplayHeaderFile.subview(gameplayHeader.mobyInstances), SIZEOF_MOBY_INSTANCE(gn), (view, i) => readMobyInstance(gn, view, i));
-    populateMobyOcclusionBits(mobyInstances, null);
-    out.mobyUniqueMissionIds = new Set(mobyInstances.map(instance => instance.mission));
-    out.mobyInstances = filterMobyInstancesByChunkPlane(null, mobyInstances, levelSettings.chunkPlanes);
-    out.mobyInstancesByOClass = makeInstancesByOClass(out.mobyInstances);
-
-    out.tieClasses = makeClassOClassMap(indexData.tieClassEntries, indexData.tieClassEntries.map(entry => readTieClass(gn, titleCoreData.subview(entry.offsetInCoreData), entry.oClass)));
-    out.mobyClasses = makeClassOClassMap(indexData.mobyClassEntries, indexData.mobyClassEntries.map(entry => {
-        if (entry.offsetInCoreData === 0) return null;
-        return readMobyClass(gn, titleCoreData.subview(entry.offsetInCoreData), entry.oClass);
-    }));
-    out.shrubClasses = makeClassOClassMap(indexData.shrubClassEntries, indexData.shrubClassEntries.map(entry => readShrubClass(titleCoreData.subview(entry.offsetInCoreData))));
-
-    const tfragBlockHeader = readTfragBlockHeader(titleCoreData.subview(header.tfrags));
-    const tfragHeaders = titleCoreData.subdivide(tfragBlockHeader.tableOffset, tfragBlockHeader.tfragCount, SIZEOF_TFRAG_HEADER).map(readTfragHeader);
-    out.tfrags = tfragHeaders.map((tfragHeader, i) => readTfrag(titleCoreData.subview(tfragBlockHeader.tableOffset + tfragHeader.data), tfragHeader, i));
-
-    assert(header.sky !== 0);
-    const sky = readSky(gn, titleCoreData.subview(header.sky));
-    const skyHeader = sky.header;
-    assert(skyHeader !== null);
-    out.sky = sky;
-    out.skyTextures = sky.textureEntries.map((entry, i) => readPalette8TextureSky(gn, titleCoreData.subview(header.sky), skyHeader, entry, i));
 }
 
 async function loadGameplayHeader(gn: GN, out: LevelResources, gameplayFilePromise: Promise<DataViewExt>, gameplayArtFilePromise: Promise<DataViewExt> | null) {

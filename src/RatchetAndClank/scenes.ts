@@ -11,7 +11,7 @@ import * as UI from "../ui";
 import { FakeTextureHolder } from "../TextureHolder";
 import { TieGeometry, TieProgram, TieRenderer } from "./render-tie";
 import { CameraController } from "../Camera";
-import { FilePromises, LevelResources, load, loadFilesFromNetwork, loadMissionFileFromNetworkOnly, loadTitleFile, loadTitleFileFromNetwork, reloadMissionMobys } from "./loader";
+import { FilePromises, LevelResources, load, loadFilesFromNetwork, loadMissionFileFromNetworkOnly, loadTitle, loadTitleFileFromNetwork, reloadMissionMobys } from "./loader";
 import { createMegaBuffer, MegaBuffer, noclipSpaceFromRatchetSpace, lineChainToLineSegments, GN, OcclusionChecker } from "./utils";
 import { TfragGeometry, TfragRenderer } from "./render-tfrag";
 import { ShrubGeometry, ShrubRenderer } from "./render-shrub";
@@ -204,7 +204,7 @@ class RatchetAndClankScene implements SceneGfx {
         if (this.levelNumber === TITLE_SCREEN_RAC1) {
             // load special case title level for rac1
             const filePromises = loadTitleFileFromNetwork(sceneContext.dataFetcher, this.resourceBasePath);
-            this.loadingPromise = loadTitleFile(this.levelResources, filePromises.titleFilePromise)
+            this.loadingPromise = loadTitle(this.levelResources, filePromises.titleFilePromise)
         } else {
             // load normal level
             this.filePromises = loadFilesFromNetwork(sceneContext.dataFetcher, this.resourceBasePath, this.gn, this.chunkNumber, this.missionNumber);

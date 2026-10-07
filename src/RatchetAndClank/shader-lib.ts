@@ -61,8 +61,9 @@ vec3 normalFromAzumithElevation(float azimuth, float elevation) {
     );
 }
 
+// light list is terminated by an 0xF or an extra 0
 bool isNullLight(int position, int dirLightIndex) {
-    if (dirLightIndex == 15) return true;
+    if (dirLightIndex == 0xF) return true;
     if (position > 0 && dirLightIndex == 0) return true;
     return false;
 }
@@ -83,7 +84,7 @@ vec4 commonVertexLighting(vec4 rgba, vec3 normal, vec4 dirLightIndices) {
 
     for(int i = 0; i < 4; i++) {
         int dirLightIndex = int(dirLightIndices[i]);
-        if (isNullLight(i, dirLightIndex)) continue;
+        if (isNullLight(i, dirLightIndex)) break;
         light += applyDirectionalLight(normalize(normal), dirLightIndex);
     }
 
