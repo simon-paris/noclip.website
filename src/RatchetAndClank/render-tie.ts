@@ -18,27 +18,31 @@ import { invlerp } from "../MathHelpers";
 
 export class TieProgram extends DeviceProgram {
     public static a_Position = 0;
-    public static a_ExtraData = 1;
-    public static a_ST = 2;
-    public static a_Normal0 = 3;
-    public static a_Normal1 = 4;
-    public static a_Normal2 = 5;
-    public static a_LodMorphOffset = 6;
+    public static a_LodMorphOffset = 1;
+    public static a_ExtraData = 2;
+    public static a_ST = 3;
+    public static a_Normal0 = 4;
+    public static a_Normal1 = 5;
+    public static a_Normal2 = 6;
     public static a_RgbaIndices = 7;
 
-    public static elementsPerVertex = 22; // position (3), extras (2), st (2), normals (9), morph offset (3), rgba indices (3)
+    public static elementsPerVertex(gn: GN): number { return gn === 1 ? 22 : 11; }
 
     public static a_InstanceTransform0 = 8;
     public static a_InstanceTransform1 = 9;
     public static a_InstanceTransform2 = 10;
     public static a_InstanceDirectionLights = 11;
     public static a_InstanceExtraData = 12;
-    public static a_InstanceExtraData2 = 13;
 
-    public static elementsPerInstance = 24; // transform (12), lights (4), extra (8)
+    public static elementsPerInstance = 20; // transform (12), lights (4), extra (4)
 
     public static ub_SceneParams = 0;
     public static ub_TieParams = 1;
+
+    constructor(gn: GN) {
+        super();
+        this.setDefineBool('RAC1', gn === 1);
+    }
 
     public override both = `
 precision highp float;
@@ -53,27 +57,33 @@ layout(binding = 2) uniform sampler2DArray u_Texture_64;
 layout(binding = 3) uniform sampler2DArray u_Texture_128;
 layout(binding = 4) uniform sampler2DArray u_Texture_256;
 
+#ifdef RAC1
 layout(binding = 5) uniform sampler2D u_AmbientRgbaTexture;
+#else
+layout(binding = 5) uniform sampler2DArray u_AmbientRgbaTexture;
+#endif
 
 `;
 
     public override vert = `
 
 layout(location = ${TieProgram.a_Position}) in vec3 a_Position;
+layout(location = ${TieProgram.a_LodMorphOffset}) in vec3 a_LodMorphOffset;
 layout(location = ${TieProgram.a_ExtraData}) in vec2 a_ExtraData; // x = texture index, y = clamp
 layout(location = ${TieProgram.a_ST}) in vec2 a_ST;
+#ifdef RAC1
 layout(location = ${TieProgram.a_Normal0}) in vec3 a_Normal0;
 layout(location = ${TieProgram.a_Normal1}) in vec3 a_Normal1;
 layout(location = ${TieProgram.a_Normal2}) in vec3 a_Normal2;
-layout(location = ${TieProgram.a_LodMorphOffset}) in vec3 a_LodMorphOffset;
 layout(location = ${TieProgram.a_RgbaIndices}) in vec3 a_RgbaIndices;
-
+#else
+layout(location = ${TieProgram.a_RgbaIndices}) in float a_RgbaIndex;
+#endif
 layout(location = ${TieProgram.a_InstanceTransform0}) in vec4 a_InstanceTransform0;
 layout(location = ${TieProgram.a_InstanceTransform1}) in vec4 a_InstanceTransform1;
 layout(location = ${TieProgram.a_InstanceTransform2}) in vec4 a_InstanceTransform2;
 layout(location = ${TieProgram.a_InstanceDirectionLights}) in vec4 a_InstanceDirectionLights;
-layout(location = ${TieProgram.a_InstanceExtraData}) in vec4 a_InstanceExtraData; // x = ambient RGBA row index, y = lod morph factor, z = enable vertex colors
-layout(location = ${TieProgram.a_InstanceExtraData2}) in float a_InstanceExtraData2; // mode bits
+layout(location = ${TieProgram.a_InstanceExtraData}) in vec4 a_InstanceExtraData; // x = ambient row, y = LOD morph, z = mode bits, w = lod level
 out vec2 v_ST;
 out vec4 v_Rgba;
 out float v_FogFactor;
@@ -93,31 +103,50 @@ void main() {
     gl_Position = UnpackMatrix(u_ClipFromWorld) * vec4(positionWorld, 1.0f);
     v_ST = a_ST;
 
+#ifdef RAC1
+
+    /*
+    Rac1 computes lighing on the CPU against a palette of 64 (color,normal) pairs.
+    Then each vertex points to a slot in the palette.
+    Morphing verts additionally point to two extra palette slots which are mixed like: lerp(a, avg(b, c), lodMorphFactor).
+
+    In this implementation, all that is done on the GPU.
+    */
+
     vec4 lights = a_InstanceDirectionLights;
     vec3 normals[3] = vec3[3](a_Normal0, a_Normal1, a_Normal2);
     float rgbaIndices[3] = float[3](a_RgbaIndices.x, a_RgbaIndices.y, a_RgbaIndices.z);
     vec4 colors[3];
     for (int i = 0; i < 3; i++) {
-        vec4 rgba = vec4(0.5, 0.5, 0.5, 1.0);
-        if (a_InstanceExtraData.z == 1.0) { // enable/disable vertex colors
-            ivec2 ambientRgbaTexcoord = ivec2(int(rgbaIndices[i]), int(a_InstanceExtraData.x));
-            rgba = texelFetch(TEXTURE(u_AmbientRgbaTexture), ambientRgbaTexcoord, 0);
-        }
-        rgba.rgb *= 2.0;
+        ivec2 ambientRgbaTexcoord = ivec2(int(rgbaIndices[i]), int(a_InstanceExtraData.x));
+        vec4 rgba = texelFetch(TEXTURE(u_AmbientRgbaTexture), ambientRgbaTexcoord, 0);
+        rgba.rgb /= 128.0 / 255.0;
         vec3 normal = MulNormalMatrix(instanceTransform, normals[i]);
         colors[i] = commonVertexLighting(rgba, normal, lights);
     }
+    // mix colors based on lodMorphFactor
+    v_Rgba = mix(colors[0], mix(colors[1], colors[2], 0.5), lodMorphFactor);
 
-    // mix colors[1] and colors[2] always
-    vec4 morphColor = mix(colors[1], colors[2], 0.5);
+#else
 
-    // mix morphColor into colors[0] based on lodMorphFactor
-    v_Rgba = mix(colors[0], morphColor, lodMorphFactor);
+    /*
+    Rac2+ computes lighting on the CPU against a dynamically sized palette of (color,normal) pairs.
+    Each vertex has a "remap" which describes how to mix items from the palette into a final color. It can reference 4 palette slots and they can be mixed in 6 different ways.
+    Morphing verts don't do anything special.
+
+    In this implementation, all the lighting is done on the CPU and all these colors are pre-lit.
+    */
+
+    ivec3 ambientRgbaTexcoord = ivec3(int(a_RgbaIndex), int(a_InstanceExtraData.x), int(a_InstanceExtraData.w));
+    v_Rgba = texelFetch(TEXTURE(u_AmbientRgbaTexture), ambientRgbaTexcoord, 0);
+    v_Rgba.rgb /= 128.0 / 255.0;
+
+#endif
     
     v_FogFactor = fogFactor(positionWorld.xyz);
     v_TextureIndex = int(a_ExtraData.x);
     v_Clamp = int(a_ExtraData.y);
-    v_ModeBits = int(a_InstanceExtraData2);
+    v_ModeBits = int(a_InstanceExtraData.z);
 }
 
 `;
@@ -157,31 +186,50 @@ export class TieGeometry {
     private vertexCount: number;
 
     constructor(private cache: GfxRenderCache, private gn: GN, private tieOClass: number, private tie: TieClass, private lodLevel: number, private textureIndices: number[], private textureAtlases: TextureAtlases) {
-        this.inputLayout = cache.createInputLayout({
-            vertexAttributeDescriptors: [
-                // per vertex
-                { location: TieProgram.a_Position, format: GfxFormat.F32_RGB, bufferByteOffset: 0, bufferIndex: 0, },
-                { location: TieProgram.a_ExtraData, format: GfxFormat.F32_RG, bufferByteOffset: 3 * 4, bufferIndex: 0, },
-                { location: TieProgram.a_ST, format: GfxFormat.F32_RG, bufferByteOffset: 5 * 4, bufferIndex: 0, },
-                { location: TieProgram.a_Normal0, format: GfxFormat.F32_RGB, bufferByteOffset: 7 * 4, bufferIndex: 0, },
-                { location: TieProgram.a_Normal1, format: GfxFormat.F32_RGB, bufferByteOffset: 10 * 4, bufferIndex: 0, },
-                { location: TieProgram.a_Normal2, format: GfxFormat.F32_RGB, bufferByteOffset: 13 * 4, bufferIndex: 0, },
-                { location: TieProgram.a_LodMorphOffset, format: GfxFormat.F32_RGB, bufferByteOffset: 16 * 4, bufferIndex: 0, },
-                { location: TieProgram.a_RgbaIndices, format: GfxFormat.F32_RGB, bufferByteOffset: 19 * 4, bufferIndex: 0, },
-                // per instance
-                { location: TieProgram.a_InstanceTransform0, format: GfxFormat.F32_RGBA, bufferByteOffset: 0 * 4, bufferIndex: 1, },
-                { location: TieProgram.a_InstanceTransform1, format: GfxFormat.F32_RGBA, bufferByteOffset: 4 * 4, bufferIndex: 1, },
-                { location: TieProgram.a_InstanceTransform2, format: GfxFormat.F32_RGBA, bufferByteOffset: 8 * 4, bufferIndex: 1, },
-                { location: TieProgram.a_InstanceDirectionLights, format: GfxFormat.F32_RGBA, bufferByteOffset: 12 * 4, bufferIndex: 1, },
-                { location: TieProgram.a_InstanceExtraData, format: GfxFormat.F32_RGBA, bufferByteOffset: 16 * 4, bufferIndex: 1, },
-                { location: TieProgram.a_InstanceExtraData2, format: GfxFormat.F32_RGBA, bufferByteOffset: 20 * 4, bufferIndex: 1, },
-            ],
-            vertexBufferDescriptors: [
-                { byteStride: TieProgram.elementsPerVertex * 0x4, frequency: GfxVertexBufferFrequency.PerVertex, },
-                { byteStride: TieProgram.elementsPerInstance * 0x4, frequency: GfxVertexBufferFrequency.PerInstance, },
-            ],
-            indexBufferFormat: null,
-        });
+        if (gn === 1) {
+            this.inputLayout = cache.createInputLayout({
+                vertexAttributeDescriptors: [
+                    { location: TieProgram.a_Position, format: GfxFormat.F32_RGB, bufferByteOffset: 0, bufferIndex: 0, },
+                    { location: TieProgram.a_LodMorphOffset, format: GfxFormat.F32_RGB, bufferByteOffset: 3 * 4, bufferIndex: 0, },
+                    { location: TieProgram.a_ExtraData, format: GfxFormat.F32_RG, bufferByteOffset: 6 * 4, bufferIndex: 0, },
+                    { location: TieProgram.a_ST, format: GfxFormat.F32_RG, bufferByteOffset: 8 * 4, bufferIndex: 0, },
+                    { location: TieProgram.a_Normal0, format: GfxFormat.F32_RGB, bufferByteOffset: 10 * 4, bufferIndex: 0, },
+                    { location: TieProgram.a_Normal1, format: GfxFormat.F32_RGB, bufferByteOffset: 13 * 4, bufferIndex: 0, },
+                    { location: TieProgram.a_Normal2, format: GfxFormat.F32_RGB, bufferByteOffset: 16 * 4, bufferIndex: 0, },
+                    { location: TieProgram.a_RgbaIndices, format: GfxFormat.F32_RGB, bufferByteOffset: 19 * 4, bufferIndex: 0, },
+                    { location: TieProgram.a_InstanceTransform0, format: GfxFormat.F32_RGBA, bufferByteOffset: 0 * 4, bufferIndex: 1, },
+                    { location: TieProgram.a_InstanceTransform1, format: GfxFormat.F32_RGBA, bufferByteOffset: 4 * 4, bufferIndex: 1, },
+                    { location: TieProgram.a_InstanceTransform2, format: GfxFormat.F32_RGBA, bufferByteOffset: 8 * 4, bufferIndex: 1, },
+                    { location: TieProgram.a_InstanceDirectionLights, format: GfxFormat.F32_RGBA, bufferByteOffset: 12 * 4, bufferIndex: 1, },
+                    { location: TieProgram.a_InstanceExtraData, format: GfxFormat.F32_RGBA, bufferByteOffset: 16 * 4, bufferIndex: 1, },
+                ],
+                vertexBufferDescriptors: [
+                    { byteStride: 22 * 4, frequency: GfxVertexBufferFrequency.PerVertex, },
+                    { byteStride: TieProgram.elementsPerInstance * 4, frequency: GfxVertexBufferFrequency.PerInstance, },
+                ],
+                indexBufferFormat: null,
+            });
+        } else {
+            this.inputLayout = cache.createInputLayout({
+                vertexAttributeDescriptors: [
+                    { location: TieProgram.a_Position, format: GfxFormat.F32_RGB, bufferByteOffset: 0, bufferIndex: 0, },
+                    { location: TieProgram.a_LodMorphOffset, format: GfxFormat.F32_RGB, bufferByteOffset: 3 * 4, bufferIndex: 0, },
+                    { location: TieProgram.a_ExtraData, format: GfxFormat.F32_RG, bufferByteOffset: 6 * 4, bufferIndex: 0, },
+                    { location: TieProgram.a_ST, format: GfxFormat.F32_RG, bufferByteOffset: 8 * 4, bufferIndex: 0, },
+                    { location: TieProgram.a_RgbaIndices, format: GfxFormat.F32_R, bufferByteOffset: 10 * 4, bufferIndex: 0, },
+                    { location: TieProgram.a_InstanceTransform0, format: GfxFormat.F32_RGBA, bufferByteOffset: 0 * 4, bufferIndex: 1, },
+                    { location: TieProgram.a_InstanceTransform1, format: GfxFormat.F32_RGBA, bufferByteOffset: 4 * 4, bufferIndex: 1, },
+                    { location: TieProgram.a_InstanceTransform2, format: GfxFormat.F32_RGBA, bufferByteOffset: 8 * 4, bufferIndex: 1, },
+                    { location: TieProgram.a_InstanceDirectionLights, format: GfxFormat.F32_RGBA, bufferByteOffset: 12 * 4, bufferIndex: 1, },
+                    { location: TieProgram.a_InstanceExtraData, format: GfxFormat.F32_RGBA, bufferByteOffset: 16 * 4, bufferIndex: 1, },
+                ],
+                vertexBufferDescriptors: [
+                    { byteStride: 11 * 4, frequency: GfxVertexBufferFrequency.PerVertex, },
+                    { byteStride: TieProgram.elementsPerInstance * 4, frequency: GfxVertexBufferFrequency.PerInstance, },
+                ],
+                indexBufferFormat: null,
+            });
+        }
     }
 
     public getOrCreateVertexBuffer() {
@@ -223,7 +271,8 @@ export class TieGeometry {
             }
         }
 
-        const vertexArrayBuffer = new Float32Array(vertexCount * TieProgram.elementsPerVertex);
+        const elementsPerVertex = TieProgram.elementsPerVertex(this.gn);
+        const vertexArrayBuffer = new Float32Array(vertexCount * elementsPerVertex);
         let vertexPtr = 0;
         let currentMaterial: { texture: number, clamp: number } | undefined;
         let globalVertexIndex = 0;
@@ -264,7 +313,8 @@ export class TieGeometry {
                         expectedVertsInStrip--;
 
                         if (this.gn >= 2) {
-                            vert.rgbaIndices = [globalVertexIndex, globalVertexIndex, globalVertexIndex];
+                            // vert.rgbaIndices = [globalVertexIndex, globalVertexIndex, globalVertexIndex];
+                            vert.rgbaIndices = [vert.writeOrder, vert.writeOrder, vert.writeOrder];
                         }
 
                         tri[0] = tri[1];
@@ -281,36 +331,40 @@ export class TieGeometry {
                             for (let i = 0; i < 3; i++) {
                                 const v = tri[i];
                                 assert(v !== null);
-                                const { vertex, normalIndices, rgbaIndices } = v;
+                                const { vertex, normalIndices, rgbaIndices, writeOrder } = v;
                                 const fixedTexcoord = fixedTexcoords[i];
-                                const defaultNormal = { x: 1 / normalScale, y: 0, z: 0 };
-                                const normal0 = tie.normalsData[normalIndices[0]] ?? defaultNormal;
-                                const normal1 = tie.normalsData[normalIndices[1]] ?? defaultNormal;
-                                const normal2 = tie.normalsData[normalIndices[2]] ?? defaultNormal;
-
                                 vertexArrayBuffer[vertexPtr++] = positionScale * vertex.x;
                                 vertexArrayBuffer[vertexPtr++] = positionScale * vertex.y;
                                 vertexArrayBuffer[vertexPtr++] = positionScale * vertex.z;
+                                vertexArrayBuffer[vertexPtr++] = positionScale * vertex.lodMorphOffsetX;
+                                vertexArrayBuffer[vertexPtr++] = positionScale * vertex.lodMorphOffsetY;
+                                vertexArrayBuffer[vertexPtr++] = positionScale * vertex.lodMorphOffsetZ;
                                 vertexArrayBuffer[vertexPtr++] = packRemap(this.textureAtlases.tieTextureRemap[textureIndices[currentMaterial.texture]]);
                                 vertexArrayBuffer[vertexPtr++] = currentMaterial.clamp;
                                 vertexArrayBuffer[vertexPtr++] = texcoordScale * fixedTexcoord.s;
                                 vertexArrayBuffer[vertexPtr++] = texcoordScale * fixedTexcoord.t;
                                 assert(vertex.q === 4096);
-                                vertexArrayBuffer[vertexPtr++] = normalScale * normal0.x;
-                                vertexArrayBuffer[vertexPtr++] = normalScale * normal0.y;
-                                vertexArrayBuffer[vertexPtr++] = normalScale * normal0.z;
-                                vertexArrayBuffer[vertexPtr++] = normalScale * normal1.x;
-                                vertexArrayBuffer[vertexPtr++] = normalScale * normal1.y;
-                                vertexArrayBuffer[vertexPtr++] = normalScale * normal1.z;
-                                vertexArrayBuffer[vertexPtr++] = normalScale * normal2.x;
-                                vertexArrayBuffer[vertexPtr++] = normalScale * normal2.y;
-                                vertexArrayBuffer[vertexPtr++] = normalScale * normal2.z;
-                                vertexArrayBuffer[vertexPtr++] = positionScale * vertex.lodMorphOffsetX;
-                                vertexArrayBuffer[vertexPtr++] = positionScale * vertex.lodMorphOffsetY;
-                                vertexArrayBuffer[vertexPtr++] = positionScale * vertex.lodMorphOffsetZ;
-                                vertexArrayBuffer[vertexPtr++] = rgbaIndices[0];
-                                vertexArrayBuffer[vertexPtr++] = rgbaIndices[1];
-                                vertexArrayBuffer[vertexPtr++] = rgbaIndices[2];
+                                if (this.gn === 1) {
+                                    const normal0 = tie.normalsData[normalIndices[0]];
+                                    const normal1 = tie.normalsData[normalIndices[1]];
+                                    const normal2 = tie.normalsData[normalIndices[2]];
+                                    vertexArrayBuffer[vertexPtr++] = normalScale * normal0.x;
+                                    vertexArrayBuffer[vertexPtr++] = normalScale * normal0.y;
+                                    vertexArrayBuffer[vertexPtr++] = normalScale * normal0.z;
+                                    vertexArrayBuffer[vertexPtr++] = normalScale * normal1.x;
+                                    vertexArrayBuffer[vertexPtr++] = normalScale * normal1.y;
+                                    vertexArrayBuffer[vertexPtr++] = normalScale * normal1.z;
+                                    vertexArrayBuffer[vertexPtr++] = normalScale * normal2.x;
+                                    vertexArrayBuffer[vertexPtr++] = normalScale * normal2.y;
+                                    vertexArrayBuffer[vertexPtr++] = normalScale * normal2.z;
+                                }
+                                if (this.gn === 1) {
+                                    vertexArrayBuffer[vertexPtr++] = rgbaIndices[0];
+                                    vertexArrayBuffer[vertexPtr++] = rgbaIndices[1];
+                                    vertexArrayBuffer[vertexPtr++] = rgbaIndices[2];
+                                } else {
+                                    vertexArrayBuffer[vertexPtr++] = writeOrder;
+                                }
                             }
                         }
 
@@ -322,7 +376,7 @@ export class TieGeometry {
             assert(expectedVertsInStrip === 0);
         }
 
-        assert(vertexPtr === vertexCount * TieProgram.elementsPerVertex);
+        assert(vertexPtr === vertexCount * elementsPerVertex);
         assert(vertexPtr === vertexArrayBuffer.length);
 
         return { vertexArrayBuffer, vertexCount };
@@ -371,8 +425,8 @@ export class TieGeometry {
     }
 }
 
-const bindingLayouts = [
-    {
+function makeBindingLayouts(gn: GN) {
+    return [{
         numSamplers: 6,
         numUniformBuffers: 2,
         samplerEntries: [
@@ -381,20 +435,21 @@ const bindingLayouts = [
             { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
             { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
             { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-            { dimension: GfxTextureDimension.n2D, formatKind: GfxSamplerFormatKind.Float, },
+            { dimension: gn === 1 ? GfxTextureDimension.n2D : GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
         ],
-    }
-];
+    }];
+}
 
 export class TieRenderer {
     private tieProgram: GfxProgram;
+    private bindingLayouts;
 
-    constructor(private renderHelper: GfxRenderHelper) {
-        this.tieProgram = renderHelper.renderCache.createProgram(new TieProgram());
+    constructor(private renderHelper: GfxRenderHelper, private gn: GN) {
+        this.tieProgram = renderHelper.renderCache.createProgram(new TieProgram(gn));
+        this.bindingLayouts = makeBindingLayouts(gn);
     }
 
-    renderTie(renderInstList: GfxRenderInstList, tieGeometriesByLod: (TieGeometry | null)[], tieClass: TieClass, tieInstanceBatch: TieInstance[], textureMappings: GfxSamplerBinding[], cameraPosition: vec3, occlusionChecker: OcclusionChecker | null, cameraFrustum: Frustum, settingLodPreset: number, settingLodBias: number, gn: GN, instanceDataBuffer: MegaBuffer): void {
-        const enableVertexColors = true; ///gn === 1;
+    renderTie(renderInstList: GfxRenderInstList, tieGeometriesByLod: (TieGeometry | null)[], tieClass: TieClass, tieInstanceBatch: TieInstance[], textureMappings: GfxSamplerBinding[], cameraPosition: vec3, occlusionChecker: OcclusionChecker | null, cameraFrustum: Frustum, settingLodPreset: number, settingLodBias: number, instanceDataBuffer: MegaBuffer): void {
 
         type TieDrawInstance = { objectMatrix: mat4, directionLights: number[], rgbasRow: number, lodMorphFactor: number };
         const tieInstancesToDrawByLod: TieDrawInstance[][] = [[], [], []];
@@ -462,15 +517,14 @@ export class TieRenderer {
 
             const renderInst = this.renderHelper.renderInstManager.newRenderInst();
             renderInst.setGfxProgram(this.tieProgram);
-            renderInst.setBindingLayouts(bindingLayouts);
+            renderInst.setBindingLayouts(this.bindingLayouts);
 
             const instanceDataStartBytes = instanceDataBuffer.ptr * 4;
             for (let i = 0; i < tieInstancesToDraw.length; i++) {
                 const inst = tieInstancesToDraw[i];
                 instanceDataBuffer.ptr += fillMatrix4x3(instanceDataBuffer.f32View, instanceDataBuffer.ptr, inst.objectMatrix);
                 instanceDataBuffer.ptr += fillVec4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, inst.directionLights[0], inst.directionLights[1], inst.directionLights[2], inst.directionLights[3]);
-                instanceDataBuffer.ptr += fillVec4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, inst.rgbasRow, inst.lodMorphFactor, enableVertexColors ? 1 : 0, 0);
-                instanceDataBuffer.ptr += fillVec4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, tieClass.header.modeBits, 0, 0, 0);
+                instanceDataBuffer.ptr += fillVec4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, inst.rgbasRow, inst.lodMorphFactor, tieClass.header.modeBits, lodLevel);
             }
 
             renderInst.setVertexInput(

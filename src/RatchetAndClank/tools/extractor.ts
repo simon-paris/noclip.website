@@ -109,7 +109,7 @@ for (const levelSectors of tableOfContents.levelSectors) {
     }
 
     // level_n_gameplay_mission_n
-    const missions: { missionNumber: number, missionGameplayFile: DataViewExt }[] = [];
+    const missions: { missionNumber: number, missionGameplayFile: DataViewExt, missionDataFile: DataViewExt }[] = [];
     if (levelDescriptor.missions) {
         for (let i = 0; i < 128; i++) {
             if (levelDescriptor.missions.gameplay[i].startSector) {
@@ -117,7 +117,9 @@ for (const levelSectors of tableOfContents.levelSectors) {
                 // the data file seems to be a compressed copy of the gameplay file (???), and audio is not used
                 const missionGameplaySectors = levelDescriptor.missions.gameplay[i];
                 const missionGameplayFile = new DataViewExt(await diskFns.readBytes(levelDescriptor.sector + missionGameplaySectors.startSector, missionGameplaySectors.sizeInSectors * SECTOR_SIZE), { littleEndian: true });
-                missions.push({ missionNumber: i, missionGameplayFile });
+                const missionDataSectors = levelDescriptor.missions.data[i];
+                const missionDataFile = new DataViewExt(await diskFns.readBytes(levelDescriptor.sector + missionDataSectors.startSector, missionDataSectors.sizeInSectors * SECTOR_SIZE), { littleEndian: true });
+                missions.push({ missionNumber: i, missionGameplayFile, missionDataFile });
             }
         }
     }
@@ -150,7 +152,8 @@ for (const levelSectors of tableOfContents.levelSectors) {
     await extractLevelFile(`level_{}_gameplay.wad`, gameplayFile);
     if (artInstancesFile) await extractLevelFile(`level_{}_gameplay_art.wad`, artInstancesFile);
     for (let i = 0; i < missions.length; i++) {
-        await extractLevelFile(`level_{}_gameplay_mission_${missions[i].missionNumber}.bin`, missions[i].missionGameplayFile);
+        await extractLevelFile(`level_{}_mission_${missions[i].missionNumber}_gameplay.bin`, missions[i].missionGameplayFile);
+        await extractLevelFile(`level_{}_mission_${missions[i].missionNumber}_data.bin`, missions[i].missionDataFile);
     }
     await extractLevelFile(`level_{}_core.wad`, levelCoreDataWad);
     await extractLevelFile(`level_{}_index.bin`, levelCoreIndex);

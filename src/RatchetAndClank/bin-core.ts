@@ -56,7 +56,9 @@ export function readTieClass(gn: GN, view: DataViewExt, oClass: number): TieClas
 
     const adGifs = view.subdivide(header.adGifsOffset, header.textureCount, SIZEOF_TIE_AD_GIFS).map(readTieAdGifs);
 
-    const normalsData = view.subdivide(header.normalsOffset, header.normalsCount, 8).map(view => view.getInt16_Xyzw(0));
+    const normalsData = readTieNormalData(gn, view.subview(header.normalsOffset), header.normalsCount);
+
+    const rgbaRemaps: (RgbaRemaps | null)[] = [null, null, null]; // by lod
 
     // there are always 3 lods
     for (let lod = 0; lod < 3; lod++) {
@@ -64,22 +66,22 @@ export function readTieClass(gn: GN, view: DataViewExt, oClass: number): TieClas
         const packetCount = header.packetCounts[lod];
         const packetHeaders = view.subdivide(packetOffset, packetCount, SIZEOF_TIE_PACKET_HEADER).map(readTiePacketHeader);
 
+        // packets
         const packetsInThisLod: TiePacket[] = [];
+        let baseRgbaRemapSlot = 0;
         for (let j = 0; j < packetCount; j++) {
             const packetDataOffset = packetOffset + packetHeaders[j].data;
-            const packetBody = readTiePacketBody(gn, view.subview(packetDataOffset), packetHeaders[j], adGifs, oClass, lod, j);
+            const packetBody = readTiePacketBody(gn, view.subview(packetDataOffset), packetHeaders[j], adGifs, oClass, lod, j, baseRgbaRemapSlot);
             packetsInThisLod.push({
                 header: packetHeaders[j],
                 body: packetBody,
             });
+            baseRgbaRemapSlot += align(packetBody.totalVertexCount, 4); // why align here I have no idea
         }
-
         packets.push(packetsInThisLod);
-    }
 
-    const rgbaRemaps: (RgbaRemaps | null)[] = [null, null, null]; // by lod
-    if (gn >= 2) {
-        for (let lod = 0; lod < 3; lod++) {
+        // rgba remaps
+        if (gn >= 2) {
             const offset = header.rgbaRemapOffsets![lod];
             assert(offset !== 0);
             if (offset === header.adGifsOffset || header.lodHeaders![lod]!.vertCount === 0) continue;
@@ -88,6 +90,7 @@ export function readTieClass(gn: GN, view: DataViewExt, oClass: number): TieClas
             rgbaRemaps[lod] = remaps;
         }
     }
+
 
     const tie: TieClass = {
         header,
@@ -104,33 +107,74 @@ export function readTieClass(gn: GN, view: DataViewExt, oClass: number): TieClas
     return tie;
 }
 
+function readTieNormalData(gn: GN, view: DataViewExt, count: number) {
+    switch (gn) {
+        case 1: {
+            return view.subdivide(0, count, 8).map(view => view.getInt16_Xyzw(0));
+        }
+        case 2:
+        case 3: {
+            return view.subdivide(0, count, 8).map(view => readTieNormalEntry_rac234(view));
+        }
+        case 4: {
+            return view.subdivide(0x10, count, 8).map(view => readTieNormalEntry_rac234(view));
+        }
+    }
+}
+
+function readTieNormalEntry_rac234(view: DataViewExt) {
+    /*
+    struct TieNormalEntry {
+        uint8 x;
+        uint8 y;
+        uint8 z;
+        uint8 w;
+        uint8 unknown5;
+        uint8 scale;
+        uint8 elevation; // xyzw and elevation/azimuth are redundant, idk why, I'll use the second
+        uint8 azimuth;
+    }
+    */
+    const angleScale = 2 * Math.PI / 256;
+    const elevation = view.getUint8(0x6) * angleScale;
+    const azimuth = view.getUint8(0x7) * angleScale;
+
+    const c = Math.cos(elevation);
+
+    return {
+        x: -c * Math.cos(azimuth),
+        y: -c * Math.sin(azimuth),
+        z: -Math.sin(elevation),
+        w: 0,
+    }
+}
+
 export interface RgbaRemap {
     dest: number,
     src: [number, number, number, number] | 0,
-    kind: number,
+    kind: RgbaRemapKind,
+}
+export enum RgbaRemapKind {
+    Zero = 0,
+    AAAA = 1,
+    AABB = 2,
+    AAAB = 3,
+    AABC = 4,
+    ABCD = 5,
 }
 export interface RgbaRemapPacketDescriptor {
-    block1Size: number;
-    block2Size: number;
-    block4Size: number;
-    block5Size: number;
-    block6Size: number;
-    block3Size: number;
+    aaaaSize: number;
+    aabbSize: number;
+    aaabSize: number;
+    aabcSize: number;
+    abcdSize: number;
+    zeroSize: number;
     outputSize: number;
     packetSize: number;
 }
 export interface RgbaRemapPacket {
     outputBase: number,
     remaps: RgbaRemap[],
-    raw: {
-        descriptor: RgbaRemapPacketDescriptor,
-        block1: RgbaRemap[] | null,
-        block2: RgbaRemap[] | null,
-        block3: RgbaRemap[] | null,
-        block4: RgbaRemap[] | null,
-        block5: RgbaRemap[] | null,
-        block6: RgbaRemap[] | null,
-    }
 }
 export interface RgbaRemaps {
     packets: RgbaRemapPacket[],
@@ -150,36 +194,36 @@ export function readTieRgbaRemaps(view: DataViewExt, oClass: number): RgbaRemaps
         if (packetSizeBytes === 0) break;
 
         const descriptor = {
-            block1Size: packetView.getUint16(0x0),
-            block2Size: packetView.getUint16(0x2),
-            block4Size: packetView.getUint16(0x4),
-            block5Size: packetView.getUint16(0x6),
-            block6Size: packetView.getUint16(0x8),
-            block3Size: packetView.getUint16(0xa),
-            outputSize: packetView.getUint16(0xc), // <- probably in units of 0x10
+            aaaaSize: packetView.getUint16(0x0),
+            aabbSize: packetView.getUint16(0x2),
+            aaabSize: packetView.getUint16(0x4),
+            aabcSize: packetView.getUint16(0x6),
+            abcdSize: packetView.getUint16(0x8),
+            zeroSize: packetView.getUint16(0xa),
+            outputSize: packetView.getUint16(0xc), // <- in units of 0x10
             packetSize: packetView.getUint16(0xe), // <- in bytes
         };
 
-        assert(descriptor.block1Size % 4 === 0);
-        assert(descriptor.block2Size % 4 === 0);
-        assert(descriptor.block4Size % 4 === 0);
-        assert(descriptor.block5Size % 8 === 0);
-        assert(descriptor.block6Size % 8 === 0);
+        assert(descriptor.aaaaSize % 4 === 0);
+        assert(descriptor.aabbSize % 4 === 0);
+        assert(descriptor.aaabSize % 4 === 0);
+        assert(descriptor.aabcSize % 8 === 0);
+        assert(descriptor.abcdSize % 8 === 0);
 
         let ptr = 0x10;
 
-        const block1View = descriptor.block1Size ? packetView.subview(ptr, descriptor.block1Size) : EMPTY_VIEW;
-        ptr += descriptor.block1Size;
-        const block2View = descriptor.block2Size ? packetView.subview(ptr, descriptor.block2Size) : EMPTY_VIEW;
-        ptr += descriptor.block2Size;
-        const block4View = descriptor.block4Size ? packetView.subview(ptr, descriptor.block4Size) : EMPTY_VIEW;
-        ptr += descriptor.block4Size;
-        const block5View = descriptor.block5Size ? packetView.subview(ptr, descriptor.block5Size) : EMPTY_VIEW;
-        ptr += descriptor.block5Size;
-        const block6View = descriptor.block6Size ? packetView.subview(ptr, descriptor.block6Size) : EMPTY_VIEW;
-        ptr += descriptor.block6Size;
-        const block3View = descriptor.block3Size ? packetView.subview(ptr, descriptor.block3Size) : EMPTY_VIEW;
-        ptr += descriptor.block3Size;
+        const aaaaView = descriptor.aaaaSize ? packetView.subview(ptr, descriptor.aaaaSize) : EMPTY_VIEW;
+        ptr += descriptor.aaaaSize;
+        const aabbView = descriptor.aabbSize ? packetView.subview(ptr, descriptor.aabbSize) : EMPTY_VIEW;
+        ptr += descriptor.aabbSize;
+        const aaabView = descriptor.aaabSize ? packetView.subview(ptr, descriptor.aaabSize) : EMPTY_VIEW;
+        ptr += descriptor.aaabSize;
+        const aabcView = descriptor.aabcSize ? packetView.subview(ptr, descriptor.aabcSize) : EMPTY_VIEW;
+        ptr += descriptor.aabcSize;
+        const abcdView = descriptor.abcdSize ? packetView.subview(ptr, descriptor.abcdSize) : EMPTY_VIEW;
+        ptr += descriptor.abcdSize;
+        const zeroView = descriptor.zeroSize ? packetView.subview(ptr, descriptor.zeroSize) : EMPTY_VIEW;
+        ptr += descriptor.zeroSize;
         ptr = align(ptr, 0x10);
         assert(ptr === descriptor.packetSize);
         assert(ptr === packetSizeBytes);
@@ -189,36 +233,36 @@ export function readTieRgbaRemaps(view: DataViewExt, oClass: number): RgbaRemaps
         // everything here is an 11-bit int divisible by 4
 
         // AAAA
-        const block1Remaps: RgbaRemap[] = block1View.subdivide(0, 0xFFFF, 4).map((view): RgbaRemap => {
+        const aaaaRemaps: RgbaRemap[] = aaaaView.subdivide(0, 0xFFFF, 4).map((view): RgbaRemap => {
             const a = view.getUint16(0x0) & 0x7FF;
             assert(a % 4 === 0);
             const dest = view.getUint16(0x2);
             assert(dest % 4 === 0);
-            return { dest, src: [a, a, a, a], kind: 1 };
+            return { dest, src: [a, a, a, a], kind: RgbaRemapKind.AAAA };
         });
 
         // AABB
-        const block2Remaps: RgbaRemap[] = block2View.subdivide(0, 0xFFFF, 4).map(view => {
+        const aabbRemaps: RgbaRemap[] = aabbView.subdivide(0, 0xFFFF, 4).map(view => {
             const packed = view.getUint32(0x0);
             const dest = packed & 0x7FF;
             assert(dest % 4 === 0);
             const a = (packed >> 21) & 0x7FC;
             const b = (packed >> 12) & 0x7FC;
-            return { dest, src: [a, a, b, b], kind: 2 };
+            return { dest, src: [a, a, b, b], kind: RgbaRemapKind.AABB };
         });
 
         // AAAB
-        const block4Remaps: RgbaRemap[] = block4View.subdivide(0, 0xFFFF, 4).map(view => {
+        const aaabRemaps: RgbaRemap[] = aaabView.subdivide(0, 0xFFFF, 4).map(view => {
             const packed = view.getUint32(0x0);
             const dest = packed & 0x7FF;
             assert(dest % 4 === 0);
             const a = (packed >> 21) & 0x7FC;
             const b = (packed >> 12) & 0x7FC;
-            return { dest, src: [a, a, a, b], kind: 4 };
+            return { dest, src: [a, a, a, b], kind: RgbaRemapKind.AAAB };
         });
 
         // AABC
-        const block5Remaps: RgbaRemap[] = block5View.subdivide(0, 0xFFFF, 8).map(view => {
+        const aabcRemaps: RgbaRemap[] = aabcView.subdivide(0, 0xFFFF, 8).map(view => {
             const a = view.getUint16(0x0) & 0x7FF;
             assert(a % 4 === 0);
             const b = view.getUint16(0x2) & 0x7FF;
@@ -227,11 +271,11 @@ export function readTieRgbaRemaps(view: DataViewExt, oClass: number): RgbaRemaps
             assert(c % 4 === 0);
             const dest = view.getUint16(0x6) & 0x7FF;
             assert(dest % 4 === 0);
-            return { dest, src: [a, a, b, c], kind: 5 };
+            return { dest, src: [a, a, b, c], kind: RgbaRemapKind.AABC };
         });
 
         // ABCD
-        const block6Remaps: RgbaRemap[] = block6View.subdivide(0, 0xFFFF, 8).map(view => {
+        const abcdRemaps: RgbaRemap[] = abcdView.subdivide(0, 0xFFFF, 8).map(view => {
             const packed = view.getUint32(0x0);
             const a = packed & 0x7FF;
             assert(a % 4 === 0);
@@ -241,35 +285,26 @@ export function readTieRgbaRemaps(view: DataViewExt, oClass: number): RgbaRemaps
             assert(d % 4 === 0);
             const dest = view.getUint16(0x6) & 0x7FF;
             assert(dest % 4 === 0);
-            return { dest, src: [a, b, c, d], kind: 6 };
+            return { dest, src: [a, b, c, d], kind: RgbaRemapKind.ABCD };
         });
 
         // zero
-        const block3Remaps: RgbaRemap[] = block3View.subdivide(0, 0xFFFF, 8).map(view => {
+        const zeroRemaps: RgbaRemap[] = zeroView.subdivide(0, 0xFFFF, 8).map(view => {
             const dest = view.getUint16(0x0) & 0x7FF;
             assert(dest % 4 === 0);
-            return { dest, src: 0, kind: 3 };
+            return { dest, src: 0, kind: RgbaRemapKind.Zero };
         });
 
-        const allRemaps = [block1Remaps, block2Remaps, block4Remaps, block5Remaps, block6Remaps, block3Remaps].flat(1);
+        const allRemaps = [aaaaRemaps, aabbRemaps, aaabRemaps, aabcRemaps, abcdRemaps, zeroRemaps].flat(1);
 
         packets.push({
             outputBase: base,
             remaps: allRemaps,
-            raw: {
-                descriptor,
-                block1: block1Remaps,
-                block2: block2Remaps,
-                block3: block3Remaps,
-                block4: block4Remaps,
-                block5: block5Remaps,
-                block6: block6Remaps,
-            }
         });
 
         packetView = packetView.subview(packetSizeBytes);
 
-        base += descriptor.outputSize * 0x10; // pretty sure about this, the numbers all add up
+        base += descriptor.outputSize * 0x10;
     }
 
     return {
@@ -295,7 +330,7 @@ export type TieClassHeader = {
     /**
      * Seems to affect what the alpha channel does
      * 0x2 = wind effect?
-     * 0x4 = also wind effect?
+     * 0x4 = another wind effect?
      * 0x10 = glow?
      * 0x20 = specular mask?
      * 0x40 = no idea (used on enemy spawners on rac3 veldin)
@@ -306,7 +341,7 @@ export type TieClassHeader = {
     oClass: number,
     tClass: number,
     mipDist: number,
-    glowRgba: number,
+    glowRgba: { r: number, g: number, b: number, a: number },
     bsphere: { x: number, y: number, z: number, w: number },
     lodHeaders: (TieLodHeader | null)[],
     glowRemapOffsets: number[],
@@ -344,7 +379,7 @@ export function readTieClassHeader(gn: GN, view: DataViewExt): TieClassHeader {
                 oClass: 0,
                 tClass: 0,
                 mipDist: 0,
-                glowRgba: 0,
+                glowRgba: { r: 0, g: 0, b: 0, a: 0 },
                 glowRemapOffsets: []
             };
         }
@@ -375,7 +410,7 @@ export function readTieClassHeader(gn: GN, view: DataViewExt): TieClassHeader {
                 oClass: view.getInt16(0x44),
                 tClass: view.getInt16(0x46),
                 mipDist: view.getFloat32(0x48),
-                glowRgba: view.getInt32(0x4c),
+                glowRgba: view.getUint8_Rgba(0x4c),
                 bsphere: view.getFloat32_Xyzw(0x50),
                 lodHeaders: view.subdivide(0x60, 3, SIZEOF_TIE_LOD_HEADER).map(readTieLodHeader),
                 glowRemapOffsets: view.getArrayOfNumbers(0x78, 3, Uint16Array),
@@ -440,6 +475,7 @@ export function readTiePacketHeader(view: DataViewExt): TiePacketHeader {
 }
 
 export interface TieVertexWithNormalAndRgba {
+    writeOrder: number, // the order in which the vertex was copied from the uploaded data to the GS packet buffer
     vertex: TieVertex,
     normalIndices: [number, number, number],
     rgbaIndices: [number, number, number],
@@ -453,7 +489,7 @@ const tieCommandSizes = {
 };
 
 export type TiePacketBody = ReturnType<typeof readTiePacketBody>;
-export function readTiePacketBody(gn: GN, view: DataViewExt, tiePacketHeader: TiePacketHeader, adGifs: TieGifAds[], oClass: number, lod: number, packetIndex: number) {
+export function readTiePacketBody(gn: GN, view: DataViewExt, tiePacketHeader: TiePacketHeader, adGifs: TieGifAds[], oClass: number, lod: number, packetIndex: number, baseRgbaRemapSlot: number) {
     /*
     struct TiePacketBody {
         // 0x0
@@ -554,6 +590,8 @@ export function readTiePacketBody(gn: GN, view: DataViewExt, tiePacketHeader: Ti
     const firstClamp = firstAdGif.clamp.low + (firstAdGif.clamp.high << 2);
     imaginaryGsBuffer.writeSetMaterial(0, tieCommandSizes.setMaterial, { material: firstMaterialId, clamp: firstClamp });
 
+    let vertexWriteOrder = baseRgbaRemapSlot;
+
     // Write verts into command buffer
     // Some are written twice.
     for (let i = 0; i < regularVerts.length; i++) {
@@ -567,6 +605,7 @@ export function readTiePacketBody(gn: GN, view: DataViewExt, tiePacketHeader: Ti
             // TODO: rgba remaps for rac2
         }
         const commandValue: TieVertexWithNormalAndRgba = {
+            writeOrder: vertexWriteOrder++,
             vertex,
             normalIndices,
             rgbaIndices,
@@ -594,7 +633,12 @@ export function readTiePacketBody(gn: GN, view: DataViewExt, tiePacketHeader: Ti
         } else {
             // TODO: rgba remaps for rac2
         }
-        const commandValue: TieVertexWithNormalAndRgba = { vertex, normalIndices, rgbaIndices };
+        const commandValue: TieVertexWithNormalAndRgba = {
+            writeOrder: vertexWriteOrder++,
+            vertex,
+            normalIndices,
+            rgbaIndices,
+        };
         imaginaryGsBuffer.writeVertex(vertex.gsPacketWriteOffset, tieCommandSizes.vertex, commandValue, true);
         if (vertex.gsPacketWriteOffset2 !== 0 && vertex.gsPacketWriteOffset !== vertex.gsPacketWriteOffset2) {
             imaginaryGsBuffer.writeVertex(vertex.gsPacketWriteOffset2, tieCommandSizes.vertex, commandValue, true);
@@ -1514,22 +1558,15 @@ export function readSkyShell(gn: GN, skyView: DataViewExt, skyShellView: DataVie
         const dataView = skyView.subview(clusterHeader.data);
         const vertexBuffer = dataView.subview(clusterHeader.vertexOffset);
         const vertices = vertexBuffer.subdivide(0, clusterHeader.vertexCount, SIZEOF_SKY_VERTEX).map(readSkyVertex);
+
+        // the texcoords and rgbas are the same memory interpreted differently
+        // triangle.texture controls which one is used on a per-triangle basis
         const texcoordsOrRgbaBuffer = dataView.subview(clusterHeader.texcoordsOrRgbasOffset);
-        let texcoords: SkyTexcoord[] = [];
-        let rgbas: SkyRgba[] = [];
-        if (shellHeader.flags.textured) {
-            texcoords = texcoordsOrRgbaBuffer.subdivide(0, clusterHeader.vertexCount, SIZEOF_SKY_TEXCOORD).map(readSkyTexcoord);
-        } else {
-            rgbas = texcoordsOrRgbaBuffer.subdivide(0, clusterHeader.vertexCount, 4).map(view => view.getUint8_Rgba(0));
-        }
+        const texcoords = texcoordsOrRgbaBuffer.subdivide(0, clusterHeader.vertexCount, SIZEOF_SKY_TEXCOORD).map(readSkyTexcoord);
+        const rgbas = texcoordsOrRgbaBuffer.subdivide(0, clusterHeader.vertexCount, 4).map(view => view.getUint8_Rgba(0));
+
         const indicesBuffer = dataView.subview(clusterHeader.triOffset);
         const triangles = indicesBuffer.subdivide(0, clusterHeader.triCount, SIZEOF_SKY_FACE).map(readSkyFace);
-
-        // for (const triangle of triangles) {
-        //     // make sure it's not mixing texcoords and rgbas
-        //     const expectedTexture = shellHeader.flags.textured ? triangle.texture : 0xFF;
-        //     assert(triangle.texture === expectedTexture);
-        // }
 
         skyShells.clusters.push({
             vertices,
@@ -1599,7 +1636,6 @@ export interface SkyShellHeader {
     clusterCount: number,
     flags: {
         textured: boolean,
-        unknownFlag?: boolean,
         bloom: boolean,
     },
     rotation: { x: number, y: number, z: number } | null;
@@ -1627,7 +1663,7 @@ export function readSkyShellHeader(gn: GN, view: DataViewExt, shellIndex: number
             return {
                 clusterCount: view.getInt32(0x0),
                 flags: {
-                    textured: (flags & 0x1) === 0,
+                    textured: flags === 0,
                     bloom: false,
                 },
                 rotation: null,
@@ -1636,14 +1672,13 @@ export function readSkyShellHeader(gn: GN, view: DataViewExt, shellIndex: number
         }
         case 3:
         case 4: {
-            const flags = view.getInt16(0x4);
+            const flags = view.getInt16(0x2);
 
             return {
                 clusterCount: view.getInt16(0x0),
                 flags: {
-                    textured: shellIndex !== 0,
-                    unknownFlag: (flags & 0x1) === 1,
-                    bloom: (flags & 0x2) === 1,
+                    textured: !(flags & 0x1),
+                    bloom: !!(flags & 0x2),
                 },
                 rotation: view.getInt16_Xyz(0x4),
                 angularVelocity: view.getInt16_Xyz(0xa),
@@ -2573,7 +2608,6 @@ export function readOcclusion(view: DataViewExt): Occlusion {
                 const zPos = zStart + z;
                 const yPos = yStart + y;
                 const xPos = xStart + x;
-                if (zPos > 1000 || yPos > 1000 || xPos > 1000) debugger;
 
                 let zCell = grid.get(zPos);
                 if (!zCell) zCell = grid.set(zPos, new Map()).get(zPos)!;

@@ -2,6 +2,7 @@ import { mat4, quat, vec3 } from "gl-matrix";
 import { DataViewExt } from "./DataViewExt";
 import { GN, matrixToNoclipSpace, noclipSpaceFromRatchetSpace } from "./utils";
 import { assert } from "../util";
+import { clamp } from "../MathHelpers";
 
 export type GameplayHeader = {
     levelSettings: number,
@@ -712,8 +713,20 @@ export function readInstanceGroupBlock(view: DataViewExt): InstanceGroupBlock {
     }
     // member data follows, list of 16-bit instance indices, high bit indicates last member of group
     */
+
     const groupCount = view.getInt32(0x0);
     const dataSize = view.getInt32(0x4);
+    if (groupCount === 0 || dataSize === 0) {
+        // in some cases groupCount is 1 but dataSize is 0, dunno what to do there
+        return {
+            groupCount,
+            dataSize,
+            pointers: [],
+            memberData: new Uint16Array(),
+            groups: []
+        };
+    }
+
     const memberDataOffset = 0x10 + groupCount * 4;
     const pointers = view.subview(0x10, groupCount * 4).getTypedArrayView(Int32Array);
     const memberData = view.subview(memberDataOffset).getTypedArrayView(Uint16Array);
@@ -867,10 +880,11 @@ export type TieAmbientRgbaBlock = {
     maxCount: number,
     list: {
         tieIndex: number,
-        count: number,
+        wordCount: number,
         baseColor: { r: number, g: number, b: number },
         colorShift: number,
-        ambientRgbas: Uint16Array,
+        rawColors: Uint16Array,
+        ambientRgbas: { r: number, g: number, b: number }[],
     }[]
 };
 export function readTieAmbientRgbaBlock(view: DataViewExt): TieAmbientRgbaBlock {
@@ -881,7 +895,7 @@ export function readTieAmbientRgbaBlock(view: DataViewExt): TieAmbientRgbaBlock 
         uint8 base_r;
         uint8 base_g;
         uint8 base_b;
-        uint8 unknown;
+        uint8 colorShift;
         uint16 ambientRgbas[count - 2]; // array of A1BGR5 colors
     }
     */
@@ -889,18 +903,41 @@ export function readTieAmbientRgbaBlock(view: DataViewExt): TieAmbientRgbaBlock 
     while (true) {
         const tieIndex = view.getInt16(0x0);
         if (tieIndex === -1) break;
-        const count = view.getUint16(0x2);
+        const wordCount = view.getUint16(0x2);
+        const baseColor = view.getUint8_Rgb(0x4);
+        const colorShift = view.getUint8(0x7);
+        const rawColors = view.subview(0x8, wordCount * 2 - 4);
         out.list.push({
             tieIndex,
-            count,
-            baseColor: view.getUint8_Rgb(0x4),
-            colorShift: view.getUint8(0x7),
-            ambientRgbas: view.subview(0x8, (count - 2) * 2).getTypedArrayView(Uint16Array),
+            wordCount,
+            baseColor,
+            colorShift,
+            rawColors: rawColors.getTypedArrayView(Uint16Array),
+            ambientRgbas: readTieAmbientRgbaBuffer(rawColors, wordCount - 2, baseColor, colorShift),
         });
-        out.maxCount = Math.max(out.maxCount, count);
-        view = view.subview(4 + count * 2);
+        out.maxCount = Math.max(out.maxCount, wordCount);
+        view = view.subview(4 + wordCount * 2);
     }
     return out;
+}
+
+function readTieAmbientRgbaBuffer(view: DataViewExt, count: number, baseColor: { r: number, g: number, b: number }, shift: number): { r: number, g: number, b: number }[] {
+    const out: { r: number, g: number, b: number }[] = [];
+    for (let i = 0; i < count; i++) {
+        const value5 = view.getUint16(i * 2);
+        out.push({
+            r: readTieAmbientRgbaColorComponent(baseColor.r, shift, value5 & 0x1f),
+            g: readTieAmbientRgbaColorComponent(baseColor.g, shift, (value5 >> 5) & 0x1f),
+            b: readTieAmbientRgbaColorComponent(baseColor.b, shift, (value5 >> 10) & 0x1f),
+        });
+    }
+    return out;
+}
+
+export function readTieAmbientRgbaColorComponent(base: number, shift: number, value5: number): number {
+    const expanded = (value5 << 3) | (value5 >> 2);
+    const shifted = shift < 8 ? expanded >> shift : 0;
+    return clamp(base + shifted, 0, 255);
 }
 
 export interface OcclusionMappings {

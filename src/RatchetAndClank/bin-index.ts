@@ -2,10 +2,10 @@ import { DataViewExt } from "./DataViewExt";
 import { truncateTrailing0xFF } from "./utils";
 
 export interface LevelCoreHeader {
-    titleLevelData_rac1: {
+    titleLevelData_Rac1: {
         gsRam: number,
         coreData: number,
-        gameplay: number,
+        coreDataSize: number,
         scene: number,
         logo: number,
     } | null,
@@ -52,7 +52,7 @@ export function readLevelCoreHeader(view: DataViewExt): LevelCoreHeader {
     */
 
     return {
-        titleLevelData_rac1: null,
+        titleLevelData_Rac1: null,
         gsRam: view.getInt32PairAs(0, "count", "offset"),
         tfrags: view.getInt32(0x8),
         occlusion: view.getInt32(0xc),
@@ -93,10 +93,10 @@ export function readLevelCoreHeader(view: DataViewExt): LevelCoreHeader {
 
 export function readTitleHeader(view: DataViewExt): LevelCoreHeader {
     return {
-        titleLevelData_rac1: {
+        titleLevelData_Rac1: {
             gsRam: view.getInt32(0x0),
             coreData: view.getInt32(0x4),
-            gameplay: view.getInt32(0x7c),
+            coreDataSize: view.getInt32(0x7c),
             scene: view.getInt32(0x80),
             logo: view.getInt32(0x84),
         },

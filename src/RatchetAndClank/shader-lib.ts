@@ -113,7 +113,7 @@ float fogFactor(vec3 vertexPosWorld) {
     CommonFragmentShader: `
 ${GfxShaderLibrary.MonochromeNTSCLinear}
 
-const float SATURATION_ADJUST = 1.15;
+const float SATURATION_ADJUST = 1.1;
 
 vec4 commonFragmentShader(vec4 rgba, vec4 textureSample, float fogFactor, float alphaTest) {
     // texture color is multiplied with vertex color immediately

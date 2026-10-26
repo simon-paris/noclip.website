@@ -122,7 +122,7 @@ export function loadFilesFromNetwork(dataFetcher: DataFetcher, basePath: string,
         coreDataFilePromise: decompress(toDataViewExt(dataFetcher.fetchData(`${basePath}_core.wad`))),
         gameplayFilePromise: decompress(toDataViewExt(dataFetcher.fetchData(`${basePath}_gameplay.wad`))),
         gameplayArtFilePromise: gn === 4 ? decompress(toDataViewExt(dataFetcher.fetchData(`${basePath}_gameplay_art.wad`))) : null,
-        gameplayMissionFilePromise: missionNumber !== null ? toDataViewExt(dataFetcher.fetchData(`${basePath}_gameplay_mission_${missionNumber}.bin`)) : null,
+        gameplayMissionFilePromise: missionNumber !== null ? toDataViewExt(dataFetcher.fetchData(`${basePath}_mission_${missionNumber}_gameplay.bin`)) : null,
         coreIndexFilePromise: toDataViewExt(dataFetcher.fetchData(`${basePath}_index.bin`)),
         gsRamFilePromise: toDataViewExt(dataFetcher.fetchData(`${basePath}_gs.bin`)),
         chunkTfragFilePromise: chunkNumber !== null ? decompress(toDataViewExt(dataFetcher.fetchData(`${basePath}_${chunkNumber}_tfrag.wad`))) : null,
@@ -131,7 +131,7 @@ export function loadFilesFromNetwork(dataFetcher: DataFetcher, basePath: string,
 }
 export function loadMissionFileFromNetworkOnly(dataFetcher: DataFetcher, basePath: string, gn: GN, missionNumber: number | null): Pick<FilePromises, "gameplayMissionFilePromise"> {
     return {
-        gameplayMissionFilePromise: missionNumber !== null ? toDataViewExt(dataFetcher.fetchData(`${basePath}_gameplay_mission_${missionNumber}.bin`)) : null,
+        gameplayMissionFilePromise: missionNumber !== null ? toDataViewExt(dataFetcher.fetchData(`${basePath}_mission_${missionNumber}_gameplay.bin`)) : null,
     }
 }
 export function loadTitleFileFromNetwork(dataFetcher: DataFetcher, basePath: string): { titleFilePromise: Promise<DataViewExt> } {
@@ -185,23 +185,23 @@ export function load(gn: GN, filterChunk: number | null, out: LevelResources, fi
     ]);
 }
 
-export async function loadTitle(out: LevelResources, titleFilePromise: Promise<DataViewExt>): Promise<void> {
+export async function load_Rac1TitleLevel(out: LevelResources, titleFilePromise: Promise<DataViewExt>): Promise<void> {
     // the title screen is pretty similar to a regular level, but everything is smashed into a single file
     const gn: GN = 1;
     const file = await titleFilePromise;
     const header = readTitleHeader(file);
-    assert(header.titleLevelData_rac1 !== null);
+    assert(header.titleLevelData_Rac1 !== null);
 
-    const { gsRam: gsRamOffset, coreData: coreDataOffset, gameplay: gameplayOffset } = header.titleLevelData_rac1;
+    const { gsRam: gsRamOffset, coreData: coreDataOffset, coreDataSize } = header.titleLevelData_Rac1;
     const titleGsRam = file.subview(gsRamOffset);
     const titleCoreData = file.subview(coreDataOffset);
-    const gameplayHeaderFile = file.subview(coreDataOffset + gameplayOffset); // this offset is pretty strange but its correct
+    const gameplayFile = file.subview(coreDataOffset + coreDataSize); // from end of core data to end of file
 
     const indexData = loadIndexDataFromHeader(gn, out, file, header);
 
     const coreDataFilePromise = Promise.resolve(titleCoreData);
     const gsRamFilePromise = Promise.resolve(titleGsRam);
-    const gameplayFilePromise = Promise.resolve(gameplayHeaderFile);
+    const gameplayFilePromise = Promise.resolve(gameplayFile);
     const indexDataPromise = Promise.resolve(indexData);
     const gameplayHeaderPromise = loadGameplayHeader(gn, out, gameplayFilePromise, null);
     const levelSettingsPromise = loadLevelSettings(gn, out, gameplayFilePromise, gameplayHeaderPromise);
@@ -326,14 +326,12 @@ async function loadTieAndShrubInstanceData(gn: GN, out: LevelResources, filterCh
         case 1:
         case 2:
         case 3: {
-            const gameplayFile = await gameplayFilePromise;
-            srcFile = gameplayFile;
+            srcFile = await gameplayFilePromise;
             break;
         }
         case 4: {
-            const artFile = await artFilePromise;
-            assert(artFile !== null);
-            srcFile = artFile;
+            assert(artFilePromise !== null);
+            srcFile = await artFilePromise;
             break;
         }
     }
@@ -471,14 +469,12 @@ async function loadDirectionLights(gn: GN, out: LevelResources, gameplayFileProm
         case 1:
         case 2:
         case 3: {
-            const gameplayFile = await gameplayFilePromise;
-            srcFile = gameplayFile;
+            srcFile = await gameplayFilePromise;
             break;
         }
         case 4: {
-            const artFile = await artFilePromise;
-            assert(artFile !== null);
-            srcFile = artFile;
+            assert(artFilePromise !== null);
+            srcFile = await artFilePromise;
             break;
         }
     }
@@ -518,14 +514,12 @@ async function loadOcclusionMappings(gn: GN, out: LevelResources, gameplayFilePr
         case 1:
         case 2:
         case 3: {
-            const gameplayFile = await gameplayFilePromise;
-            srcFile = gameplayFile;
+            srcFile = await gameplayFilePromise;
             break;
         }
         case 4: {
-            const artFile = await artFilePromise;
-            assert(artFile !== null);
-            srcFile = artFile;
+            assert(artFilePromise !== null);
+            srcFile = await artFilePromise;
             break;
         }
     }
@@ -578,14 +572,12 @@ export async function loadTieAmbientRgbas(gn: GN, out: LevelResources, gameplayF
         }
         case 2:
         case 3: {
-            const gameplayFile = await gameplayFilePromise;
-            srcFile = gameplayFile;
+            srcFile = await gameplayFilePromise;
             break;
         }
         case 4: {
-            const artFile = await artFilePromise;
-            assert(artFile !== null);
-            srcFile = artFile;
+            assert(artFilePromise !== null);
+            srcFile = await artFilePromise;
             break;
         }
     }

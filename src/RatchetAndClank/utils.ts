@@ -132,23 +132,7 @@ export function truncateTrailing0xFF(arr: number[]): number[] {
     return copy;
 }
 
-export function readRGB5A1(rgba5a1: number): Color {
-    const r = (rgba5a1 & 0x1F) << 3;
-    const g = ((rgba5a1 >> 5) & 0x1F) << 3;
-    const b = ((rgba5a1 >> 10) & 0x1F) << 3;
-    const a = (rgba5a1 >> 15) === 1 ? 0xFF : 0x00;
-    return { r, g, b, a };
-}
-
-export function readA1BGR5(a1bgr5: number) {
-    const r = ((a1bgr5 >> 0) & 0x1F) << 3;
-    const g = ((a1bgr5 >> 5) & 0x1F) << 3;
-    const b = ((a1bgr5 >> 10) & 0x1F) << 3;
-    const a = 255;
-    return { r, g, b, a };
-}
-
-// i'm calling this algorithm "The Headless Chicken"
+// I call this one "The Headless Chicken"
 export function populateMobyOcclusionBits(instances: MobyInstance[], mappings: OcclusionMappings | null) {
     if (!mappings) return;
 
@@ -184,7 +168,7 @@ export function populateMobyOcclusionBits(instances: MobyInstance[], mappings: O
                 }
             }
 
-            // this is a match
+            // yay
             inst._occlusionBit = mappings.mobyMappings[ptr];
             assert(inst._occlusionBit < 1024);
             ptr += 2;
@@ -192,7 +176,7 @@ export function populateMobyOcclusionBits(instances: MobyInstance[], mappings: O
     }
 }
 
-// and this one is called "It's not n^2 I swear!"
+// And I call this one "Two Headless Chickens"
 export function populateTieOcclusionBits(instances: TieInstance[], mappings: OcclusionMappings | null) {
     if (!mappings) return;
 
@@ -210,12 +194,12 @@ export function populateTieOcclusionBits(instances: TieInstance[], mappings: Occ
             const tieUid = inst.occlusionIndex;
             if (tieUid !== occlusionUid) {
                 // if it doesn't match we skip over the INSTANCE array
-                // (for each instance we skip here there will be one trailing -1 at the end of the array)
+                // (for each instance we skip here there will be one trailing -1 at the end of the array) (usually)
                 instancePtr++;
                 continue;
             }
 
-            // this is a match
+            // yay
             inst._occlusionBit = mappings.tieMappings[mappingPtr];
             assert(inst._occlusionBit < 1024);
             mappingPtr += 2;

@@ -1,4 +1,4 @@
-import { mat4, quat, vec3, vec4 } from "gl-matrix";
+import { mat4, quat, vec3 } from "gl-matrix";
 import { makeBackbufferDescSimple, standardFullClearRenderPassDescriptor } from "../gfx/helpers/RenderGraphHelpers";
 import { fillMatrix4x4, fillVec3v, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
 import { GfxBlendFactor, GfxBlendMode, GfxChannelWriteMask, GfxCullMode, GfxDevice, GfxMipFilterMode, GfxSampler, GfxSamplerBinding, GfxTexFilterMode, GfxTexture, GfxWrapMode } from "../gfx/platform/GfxPlatform";
@@ -11,17 +11,16 @@ import * as UI from "../ui";
 import { FakeTextureHolder } from "../TextureHolder";
 import { TieGeometry, TieProgram, TieRenderer } from "./render-tie";
 import { CameraController } from "../Camera";
-import { FilePromises, LevelResources, load, loadFilesFromNetwork, loadMissionFileFromNetworkOnly, loadTitle, loadTitleFileFromNetwork, reloadMissionMobys } from "./loader";
+import { FilePromises, LevelResources, load, loadFilesFromNetwork, loadMissionFileFromNetworkOnly, load_Rac1TitleLevel, loadTitleFileFromNetwork, reloadMissionMobys } from "./loader";
 import { createMegaBuffer, MegaBuffer, noclipSpaceFromRatchetSpace, lineChainToLineSegments, GN, OcclusionChecker } from "./utils";
 import { TfragGeometry, TfragRenderer } from "./render-tfrag";
 import { ShrubGeometry, ShrubRenderer } from "./render-shrub";
 import { colorNewFromRGBA, OpaqueBlack, White } from "../Color";
 import { SkyAnimationState, SkyGeometry, SkyRenderer } from "./render-sky";
 import { RatchetShaderLib } from "./shader-lib";
-import { createGfxTextureForPaletteTexture, createTextureAtlases, createTieRgbaTexture_InitPreview_Rac234, createTieRgbaTexture_Rac1, createTieRgbaTexture_Rac234, TextureAtlases } from "./textures";
+import { createGfxTextureForPaletteTexture, createTextureAtlases, createTieRgbaTexture_Rac1, createTieRgbaTexture_Rac234, TextureAtlases } from "./textures";
 import { CollisionGeometry, CollisionRenderer } from "./render-collision";
 import { IS_DEVELOPMENT } from "../BuildVersion";
-import { GfxDynamicBufferCache } from "../gfx/render/GfxRenderCache";
 import { MobyGeometry, MobyRenderer } from "./render-moby";
 import { nArray } from "../util";
 import { AABB } from "../Geometry";
@@ -54,7 +53,7 @@ class RatchetAndClankScene implements SceneGfx {
         enableTfrag: true,
         enableTies: true,
         enableMobys: true,
-        enableBangles: false, // disable bangles by default because, bangles representing armour work well but many objects have destructable bits that overlap their main mesh
+        enableBangles: false, // disable bangles by default, there are two use cases for bangles - 1: bits that detach when shot, 2: damaged copy of the mesh. I'd like to have it enabled for the first but not the second but I can't tell them apart.
         enableShrubs: true,
         enableSky: true,
         enableFog: true,
@@ -62,7 +61,7 @@ class RatchetAndClankScene implements SceneGfx {
         showObjectIds: false,
         showPaths: false,
         showOcclusionGrid: false,
-        mobyMissionFlags: 0xFFFFFFFF, // bitmask to despawn mobys on completed missions
+        mobyMissionFlags: 0xFFFFFFFF, // bitmask to toggle mobys by mission
     };
 
     private levelResources: LevelResources;
@@ -96,7 +95,6 @@ class RatchetAndClankScene implements SceneGfx {
     };
 
     private instanceDataBuffer: MegaBuffer;
-    private instanceDataBufferCache: GfxDynamicBufferCache;
 
     public missionNumber: number | null = null;
 
@@ -194,21 +192,20 @@ class RatchetAndClankScene implements SceneGfx {
 
         this.renderers = {
             tfrag: new TfragRenderer(this.renderHelper),
-            tie: new TieRenderer(this.renderHelper),
+            tie: new TieRenderer(this.renderHelper, this.gn),
             moby: new MobyRenderer(this.renderHelper),
             shrub: new ShrubRenderer(this.renderHelper),
-            sky: new SkyRenderer(this.renderHelper),
+            sky: new SkyRenderer(this.renderHelper, this.gn),
             collision: new CollisionRenderer(this.renderHelper),
         };
 
         this.instanceDataBuffer = createMegaBuffer(cache.device, "Instance Data", 1024 * 1024);
-        this.instanceDataBufferCache = new GfxDynamicBufferCache(cache.device);
 
         this.resourceBasePath = `${pathBase(this.gn)}/level_${this.levelNumber === TITLE_SCREEN_RAC1 ? "title" : this.levelNumber}`;
         if (this.levelNumber === TITLE_SCREEN_RAC1) {
             // load special case title level for rac1
             const filePromises = loadTitleFileFromNetwork(sceneContext.dataFetcher, this.resourceBasePath);
-            this.loadingPromise = loadTitle(this.levelResources, filePromises.titleFilePromise)
+            this.loadingPromise = load_Rac1TitleLevel(this.levelResources, filePromises.titleFilePromise)
         } else {
             // load normal level
             this.filePromises = loadFilesFromNetwork(sceneContext.dataFetcher, this.resourceBasePath, this.gn, this.chunkNumber, this.missionNumber);
@@ -359,13 +356,7 @@ class RatchetAndClankScene implements SceneGfx {
             if (!tieClasses) return null;
             if (!tieAmbientRgbas) return null;
 
-            this.textures.tieRgbaTexture = createTieRgbaTexture_Rac234(this.renderHelper.device, tieInstances, tieClasses, tieAmbientRgbas);
-            this.textureHolder.viewerTextures.push({ gfxTexture: this.textures.tieRgbaTexture });
-
-            const debugTexture = createTieRgbaTexture_InitPreview_Rac234(this.renderHelper.device, tieAmbientRgbas);
-            this.textureHolder.viewerTextures.push({ gfxTexture: debugTexture });
-
-            this.textureHolder.onnewtextures();
+            this.textures.tieRgbaTexture = createTieRgbaTexture_Rac234(this.renderHelper.device, tieInstances, tieClasses, tieAmbientRgbas, this.levelResources.directionLights ?? []);
             return this.textures.tieRgbaTexture;
         }
     }
@@ -544,7 +535,7 @@ class RatchetAndClankScene implements SceneGfx {
                 if (!tieClass) continue;
                 const geometriesByLod = this.getOrCreateTieGeometry(oClass);
                 if (!geometriesByLod) continue;
-                this.renderers.tie.renderTie(this.renderInstList, geometriesByLod, tieClass, tieInstances, tieTextureMappings, cameraPosition, this.occlusionChecker, cameraFrustum, lodSetting, lodBias, this.gn, this.instanceDataBuffer);
+                this.renderers.tie.renderTie(this.renderInstList, geometriesByLod, tieClass, tieInstances, tieTextureMappings, cameraPosition, this.occlusionChecker, cameraFrustum, lodSetting, lodBias, this.instanceDataBuffer);
             }
         }
 
@@ -933,7 +924,7 @@ export const sceneGroup1: SceneGroup = {
         new RatchetAndClankSceneDesc(1, 15, null, "Quartu"),
         new RatchetAndClankSceneDesc(1, 16, null, "Kalebo III"),
         new RatchetAndClankSceneDesc(1, 17, null, "Veldin Orbit"),
-        new RatchetAndClankSceneDesc(1, 18, null, "Veldin"),
+        new RatchetAndClankSceneDesc(1, 18, null, "Veldin (Finale)"),
         "Extras",
         new RatchetAndClankSceneDesc(1, TITLE_SCREEN_RAC1, null, "Veldin (Title Screen)"),
     ],
@@ -983,7 +974,7 @@ export const sceneGroup2: SceneGroup = {
         new RatchetAndClankSceneDesc(2, 20, 2, "Yeedil (Boss)"),
 
         "Extras",
-        new RatchetAndClankSceneDesc(2, 30, null, "Insomniac Museum, Burbank"),
+        new RatchetAndClankSceneDesc(2, 30, null, "Insomniac Museum"),
     ],
 };
 

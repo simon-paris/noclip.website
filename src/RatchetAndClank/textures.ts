@@ -1,12 +1,13 @@
+import { mat3, vec3 } from "gl-matrix";
 import { Color } from "../Color";
 import { DataViewExt } from "./DataViewExt";
 import { GfxDevice, GfxFormat, GfxTexture, GfxTextureDimension, GfxTextureUsage, makeTextureDescriptor2D } from "../gfx/platform/GfxPlatform";
-import { SkyHeader, SkyTextureEntry, TieClass } from "./bin-core";
-import { TieAmbientRgbaBlock, TieInstance } from "./bin-gameplay";
+import { RgbaRemapKind, SkyHeader, SkyTextureEntry, TieClass } from "./bin-core";
+import { DirectionLightInstance, TieAmbientRgbaBlock, TieInstance } from "./bin-gameplay";
 import { assert } from "../util";
 import { TextureEntry } from "./bin-index";
-import { GN, readA1BGR5, readRGB5A1 } from "./utils";
-import { getPixelAddressPSMCT32, getPixelAddressPSMT8 } from "../Common/PS2/GS";
+import { GN } from "./utils";
+import { clamp } from "../MathHelpers";
 
 export interface PaletteTexture {
     name: string,
@@ -250,14 +251,6 @@ export function createGfxTextureArrayForPaletteTextures(device: GfxDevice, name:
     return gfxTexture;
 }
 
-const BLACK_A1BGR5 = 0b1_00000_00000_00000;
-function a1bgr5ToRgba8(out: Uint8Array, offset: number, a1bgr5: number) {
-    out[offset + 0] = ((a1bgr5 >> 0) & 0x1F) << 3;
-    out[offset + 1] = ((a1bgr5 >> 5) & 0x1F) << 3;
-    out[offset + 2] = ((a1bgr5 >> 10) & 0x1F) << 3;
-    out[offset + 3] = 255; // ??
-}
-
 // create a 64xN texture, where each row contains the 64-wide vertex color lookup table for one tie instance
 export function createTieRgbaTexture_Rac1(device: GfxDevice, tieInstances: (TieInstance | null)[]): GfxTexture {
     if (tieInstances.length === 0) {
@@ -282,7 +275,10 @@ export function createTieRgbaTexture_Rac1(device: GfxDevice, tieInstances: (TieI
         if (instance) {
             for (let j = 0; j < 64; j++) {
                 const a1bgr5 = instance.ambientRgbas[j];
-                a1bgr5ToRgba8(data, ptr, a1bgr5);
+                data[ptr + 0] = ((a1bgr5 >> 0) & 0x1F) << 3;
+                data[ptr + 1] = ((a1bgr5 >> 5) & 0x1F) << 3;
+                data[ptr + 2] = ((a1bgr5 >> 10) & 0x1F) << 3;
+                data[ptr + 3] = 255; // no alpha in this color format
                 ptr += 4;
             }
         } else {
@@ -295,17 +291,66 @@ export function createTieRgbaTexture_Rac1(device: GfxDevice, tieInstances: (TieI
     return gfxTexture;
 }
 
-export function createTieRgbaTexture_Rac234(device: GfxDevice, tieInstances: (TieInstance | null)[], tieClasses: Map<number, TieClass>, tieRgbasBlock: TieAmbientRgbaBlock): GfxTexture {
-    const lods = 1; // TODO
+const MAGIC_GLOW_IDX = 2044;
+
+const tieNormalScratch = vec3.create();
+const tieDirectionScratch = vec3.create();
+const tieLightColorScratch = vec3.create();
+
+function transformTieNormal(normal: { x: number, y: number, z: number }, inverseTransform: mat3, out: vec3): void {
+    vec3.set(out, normal.x, normal.y, normal.z);
+    vec3.transformMat3(out, out, inverseTransform);
+    vec3.normalize(out, out);
+}
+
+function lightTieColor(
+    color: { r: number, g: number, b: number },
+    normal: { x: number, y: number, z: number },
+    inverseTransform: mat3,
+    tieInstance: TieInstance,
+    directionLights: DirectionLightInstance[],
+    out: vec3,
+): void {
+    transformTieNormal(normal, inverseTransform, tieNormalScratch);
+    vec3.set(out, color.r * 2, color.g * 2, color.b * 2);
+
+    for (let i = 0; i < 4; i++) {
+        const lightIndex = tieInstance.directionalLights[i];
+        if (lightIndex === 0xF || (i > 0 && lightIndex === 0)) break;
+        const light = directionLights[lightIndex];
+        if (!light) continue;
+
+        vec3.set(tieDirectionScratch, light.directionA.x, light.directionA.z, -light.directionA.y);
+        const dotA = vec3.dot(tieNormalScratch, tieDirectionScratch);
+        if (dotA > 0) {
+            vec3.set(tieLightColorScratch, light.colorA.r, light.colorA.g, light.colorA.b);
+            vec3.scaleAndAdd(out, out, tieLightColorScratch, dotA * 255);
+        }
+
+        vec3.set(tieDirectionScratch, light.directionB.x, light.directionB.z, -light.directionB.y);
+        const dotB = vec3.dot(tieNormalScratch, tieDirectionScratch);
+        if (dotB > 0) {
+            vec3.set(tieLightColorScratch, light.colorB.r, light.colorB.g, light.colorB.b);
+            vec3.scaleAndAdd(out, out, tieLightColorScratch, dotB * 255);
+        }
+    }
+
+    out[0] = clamp(Math.round(out[0]), 0, 255);
+    out[1] = clamp(Math.round(out[1]), 0, 255);
+    out[2] = clamp(Math.round(out[2]), 0, 255);
+}
+
+export function createTieRgbaTexture_Rac234(device: GfxDevice, tieInstances: (TieInstance | null)[], tieClasses: Map<number, TieClass>, tieRgbasBlock: TieAmbientRgbaBlock, directionLights: DirectionLightInstance[]): GfxTexture {
+    const lods = 3;
     const width = 4096;
     const height = tieInstances.length;
 
     const gfxTexture = device.createTexture({
-        dimension: GfxTextureDimension.n2D,
+        dimension: GfxTextureDimension.n2DArray,
         pixelFormat: GfxFormat.U8_RGBA_NORM,
         width, // very wasteful
         height,
-        depthOrArrayLayers: 1,
+        depthOrArrayLayers: lods,
         numLevels: 1,
         usage: GfxTextureUsage.Sampled,
     });
@@ -313,7 +358,6 @@ export function createTieRgbaTexture_Rac234(device: GfxDevice, tieInstances: (Ti
 
     const data = new Uint8Array(width * height * 4 * lods);
     for (let i = 0; i < tieRgbasBlock.list.length; i++) {
-        const lod = 0;
         const row = tieRgbasBlock.list[i];
 
         const tieInst = tieInstances[row.tieIndex];
@@ -321,90 +365,95 @@ export function createTieRgbaTexture_Rac234(device: GfxDevice, tieInstances: (Ti
         assert(row.tieIndex === tieInst._i);
         const tieClass = tieClasses.get(tieInst.oClass);
         assert(tieClass !== undefined);
+        assert(row.ambientRgbas.length % 2 === 0);
+        // assert(row.ambientRgbas.length >= tieClass.normalsData.length);
         assert(tieClass.rgbaRemaps !== null);
-        const rgbaRemaps = tieClass.rgbaRemaps[lod];
-        assert(rgbaRemaps !== null);
+        const rgbaRemapsByLod = tieClass.rgbaRemaps;
+        const transform = mat3.fromMat4(mat3.create(), tieInst._matrixPretransformed);
+        const inverseTransform = mat3.invert(mat3.create(), transform);
+        assert(inverseTransform !== null);
+        const inputColors = new Uint8Array(4 * 4096);
+        const litColor = vec3.create();
 
-        const rowData = new Uint8Array(4 * 4096);
+        const glowColor = tieClass.header.glowRgba;
+        const inputGlowColor = glowColor;
+        const scratch = [0, 0, 0];
 
-        // fill up with grey
+        // Fill the input buffer with magenta so missing colors remain visible.
         for (let col = 0; col < 4096; col++) {
-            rowData[col * 4 + 0] = 128;
-            rowData[col * 4 + 1] = 128;
-            rowData[col * 4 + 2] = 128;
-            rowData[col * 4 + 3] = 255;
+            inputColors[col * 4 + 0] = 255;
+            inputColors[col * 4 + 1] = 0;
+            inputColors[col * 4 + 2] = 255;
+            inputColors[col * 4 + 3] = 255;
         }
 
-        // decode and copy the initial cache state
-        for (let col = 0; col < row.count; col++) {
-            const color = readA1BGR5(row.ambientRgbas[col]);
-            rowData[col * 4 + 0] = row.baseColor.r + (color.r >> row.colorShift);
-            rowData[col * 4 + 1] = row.baseColor.g + (color.g >> row.colorShift);
-            rowData[col * 4 + 2] = row.baseColor.b + (color.b >> row.colorShift);
-            rowData[col * 4 + 3] = 255; // ??
+        // decode and copy the initial buffer
+        for (let col = 0; col < row.ambientRgbas.length; col++) {
+            const color = row.ambientRgbas[col];
+            const normal = tieClass.normalsData[col] ?? { x: 0, y: 0, z: 1 }; // its ok for ties to have missing normals, I think this happens when glow verts are at the end of the mesh
+            lightTieColor(color, normal, inverseTransform, tieInst, directionLights, litColor);
+            inputColors[col * 4 + 0] = litColor[0];
+            inputColors[col * 4 + 1] = litColor[1];
+            inputColors[col * 4 + 2] = litColor[2];
+            inputColors[col * 4 + 3] = 255; // no alpha in this color format
         }
 
-        // then for each remap, evaluate the average of the 4 src elements
-        for (let packetIndex = 0; packetIndex < rgbaRemaps.packets.length; packetIndex++) {
-            const packet = rgbaRemaps.packets[packetIndex];
-            for (let remapIndex = 0; remapIndex < packet.remaps.length; remapIndex++) {
-                const remap = packet.remaps[remapIndex];
-                const dest = packet.outputBase + remap.dest;
+        for (let lod = 0; lod < lods; lod++) {
+            const rgbaRemaps = rgbaRemapsByLod[lod];
+            const outputColors = new Uint8Array(4 * 4096);
 
-                if (Array.isArray(remap.src) && remap.src[0] === 2044) {
-                    // 2044 seems to be a macic value for "do nothing"
-                    // (2044 is (9-bit max int) << 2)
-                    continue;
-                }
-
-                if (remap.src === 0) {
-                    // write black
-                    a1bgr5ToRgba8(rowData, dest, BLACK_A1BGR5);
-                } else {
-                    // write average of 4 inputs
-                    rowData[dest + 0] = (rowData[remap.src[0] + 0] + rowData[remap.src[1] + 0] + rowData[remap.src[2] + 0] + rowData[remap.src[3] + 0]) / 4;
-                    rowData[dest + 1] = (rowData[remap.src[0] + 1] + rowData[remap.src[1] + 1] + rowData[remap.src[2] + 1] + rowData[remap.src[3] + 1]) / 4;
-                    rowData[dest + 2] = (rowData[remap.src[0] + 2] + rowData[remap.src[1] + 2] + rowData[remap.src[2] + 2] + rowData[remap.src[3] + 2]) / 4;
-                    rowData[dest + 3] = (rowData[remap.src[0] + 3] + rowData[remap.src[1] + 3] + rowData[remap.src[2] + 3] + rowData[remap.src[3] + 3]) / 4;
-                }
-
+            // Fill each LOD output with magenta so missing remaps remain visible.
+            for (let col = 0; col < 4096; col++) {
+                outputColors[col * 4 + 0] = 255;
+                outputColors[col * 4 + 1] = 0;
+                outputColors[col * 4 + 2] = 255;
+                outputColors[col * 4 + 3] = 255;
             }
-        }
 
-        let ptr = tieInst._i * width * 4;
-        if (ptr + rowData.byteLength > data.byteLength) {
-            console.log(tieInst, row, rgbaRemaps, lod, tieClass); debugger;
-        }
-        data.set(rowData, ptr);
-    }
+            if (rgbaRemaps !== null) {
+                // Evaluate each remap as the average of its four source colors.
+                for (let packetIndex = 0; packetIndex < rgbaRemaps.packets.length; packetIndex++) {
+                    const packet = rgbaRemaps.packets[packetIndex];
+                    for (let remapIndex = 0; remapIndex < packet.remaps.length; remapIndex++) {
+                        const remap = packet.remaps[remapIndex];
+                        const dest = packet.outputBase + remap.dest;
 
-    device.uploadTextureData(gfxTexture, 0, [data]);
+                        if (remap.kind === RgbaRemapKind.Zero) {
+                            assert(remap.src === 0);
+                            outputColors[dest + 0] = 0;
+                            outputColors[dest + 1] = 0;
+                            outputColors[dest + 2] = 0;
+                        } else {
+                            assert(Array.isArray(remap.src));
+                            assert(remap.src.length === 4);
+                            scratch[0] = 0;
+                            scratch[1] = 0;
+                            scratch[2] = 0;
 
-    return gfxTexture;
-}
+                            for (let remapSrcIndex = 0; remapSrcIndex < 4; remapSrcIndex++) {
+                                const src = remap.src[remapSrcIndex];
+                                for (let channel = 0; channel < 3; channel++) {
+                                    if (src === MAGIC_GLOW_IDX) {
+                                        scratch[channel] += channel === 0 ? inputGlowColor.r : channel === 1 ? inputGlowColor.g : inputGlowColor.b;
+                                    } else {
+                                        scratch[channel] += inputColors[src + channel];
+                                    }
+                                }
+                            }
 
-export function createTieRgbaTexture_InitPreview_Rac234(device: GfxDevice, tieRgbasBlock: TieAmbientRgbaBlock): GfxTexture {
-    const gfxTexture = device.createTexture({
-        dimension: GfxTextureDimension.n2D,
-        pixelFormat: GfxFormat.U8_RGBA_NORM,
-        width: tieRgbasBlock.maxCount, // a bit wasteful (usually ~520 columns)
-        height: tieRgbasBlock.list.length,
-        depthOrArrayLayers: 1,
-        numLevels: 1,
-        usage: GfxTextureUsage.Sampled,
-    });
-    device.setResourceName(gfxTexture, `Tie Ambient RGBAs Initial Cache`);
+                            for (let channel = 0; channel < 3; channel++) {
+                                outputColors[dest + channel] = Math.floor(scratch[channel] / 4);
+                            }
+                        }
 
-    const data = new Uint8Array(tieRgbasBlock.maxCount * tieRgbasBlock.list.length * 4);
-    for (let i = 0; i < tieRgbasBlock.list.length; i++) {
-        const row = tieRgbasBlock.list[i];
-        let ptr = i * tieRgbasBlock.maxCount * 4;
-        for (let j = 0; j < tieRgbasBlock.maxCount; j++) {
-            const color = row.ambientRgbas[j] ? readA1BGR5(row.ambientRgbas[j]) : { r: 0, g: 0, b: 0 };
-            data[ptr++] = row.baseColor.r + (color.r >> row.colorShift);
-            data[ptr++] = row.baseColor.g + (color.g >> row.colorShift);
-            data[ptr++] = row.baseColor.b + (color.b >> row.colorShift);
-            data[ptr++] = 255; // ??
+                        outputColors[dest + 3] = 255;
+                    }
+                }
+            }
+
+            const ptr = (lod * height + tieInst._i) * width * 4;
+            assert(ptr + outputColors.byteLength <= data.byteLength);
+            data.set(outputColors, ptr);
         }
     }
 
