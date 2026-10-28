@@ -15,12 +15,13 @@ import { fillMatrix4x3, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
 export class TfragProgram extends DeviceProgram {
     public static a_Position = 0;
     public static a_Normal = 1;
-    public static a_Rgba = 2;
-    public static a_TextureParams = 3;
-    public static a_ST = 4;
-    public static a_DirLightIndices = 5;
+    public static a_AmbientColor = 2;
+    public static a_PrecomputedLitColor = 3;
+    public static a_TextureParams = 4;
+    public static a_ST = 5;
+    public static a_DirectionLightSelector = 6;
 
-    public static elementsPerVertex = 18; // position(3) + normal(3) + rgba(4) + texture(2) + st(2) + lights(4) = 18
+    public static elementsPerVertex = 20; // position(3) + normal(3) + rgba(3) + precomputedLitColor(4) + texture(2) + st(2) + lights(3) = 20
 
     public static ub_SceneParams = 0;
     public static ub_TfragParams = 1;
@@ -49,10 +50,11 @@ layout(binding = 4) uniform sampler2DArray u_Texture_256;
 
 layout(location = ${TfragProgram.a_Position}) in vec3 a_Position;
 layout(location = ${TfragProgram.a_Normal}) in vec3 a_Normal;
-layout(location = ${TfragProgram.a_Rgba}) in vec4 a_Rgba;
+layout(location = ${TfragProgram.a_AmbientColor}) in vec3 a_AmbientColor;
+layout(location = ${TfragProgram.a_PrecomputedLitColor}) in vec4 a_PrecomputedLitColor;
 layout(location = ${TfragProgram.a_TextureParams}) in vec2 a_TextureParams;
 layout(location = ${TfragProgram.a_ST}) in vec2 a_ST;
-layout(location = ${TfragProgram.a_DirLightIndices}) in vec4 a_DirLightIndices;
+layout(location = ${TfragProgram.a_DirectionLightSelector}) in vec3 a_DirectionLightSelector;
 
 out vec4 v_Rgba;
 out vec2 v_ST;
@@ -69,9 +71,9 @@ void main() {
     gl_Position = UnpackMatrix(u_ClipFromWorld) * vec4(t_PositionWorld, 1.0f);
 
     vec3 normal = MulNormalMatrix(worldTransform, a_Normal);
-    vec4 lights = a_DirLightIndices;
+    vec3 lightSelector = a_DirectionLightSelector;
 
-    v_Rgba = commonVertexLighting(a_Rgba, normal, lights);
+    v_Rgba = commonVertexLighting2(vec4(a_AmbientColor, 1.0), normal, lightSelector);
 
     v_ST = a_ST.xy;
     v_FogFactor = fogFactor(t_PositionWorld.xyz);
@@ -115,10 +117,11 @@ export class TfragGeometry {
             vertexAttributeDescriptors: [
                 { location: TfragProgram.a_Position, format: GfxFormat.F32_RGB, bufferByteOffset: 0, bufferIndex: 0, },
                 { location: TfragProgram.a_Normal, format: GfxFormat.F32_RGB, bufferByteOffset: 3 * 0x4, bufferIndex: 0, },
-                { location: TfragProgram.a_Rgba, format: GfxFormat.F32_RGBA, bufferByteOffset: 6 * 0x4, bufferIndex: 0, },
-                { location: TfragProgram.a_TextureParams, format: GfxFormat.F32_RG, bufferByteOffset: 10 * 0x4, bufferIndex: 0, },
-                { location: TfragProgram.a_ST, format: GfxFormat.F32_RG, bufferByteOffset: 12 * 0x4, bufferIndex: 0, },
-                { location: TfragProgram.a_DirLightIndices, format: GfxFormat.F32_RGBA, bufferByteOffset: 14 * 0x4, bufferIndex: 0, },
+                { location: TfragProgram.a_AmbientColor, format: GfxFormat.F32_RGB, bufferByteOffset: 6 * 0x4, bufferIndex: 0, },
+                { location: TfragProgram.a_PrecomputedLitColor, format: GfxFormat.F32_RGBA, bufferByteOffset: 9 * 0x4, bufferIndex: 0, },
+                { location: TfragProgram.a_TextureParams, format: GfxFormat.F32_RG, bufferByteOffset: 13 * 0x4, bufferIndex: 0, },
+                { location: TfragProgram.a_ST, format: GfxFormat.F32_RG, bufferByteOffset: 15 * 0x4, bufferIndex: 0, },
+                { location: TfragProgram.a_DirectionLightSelector, format: GfxFormat.F32_RGB, bufferByteOffset: 17 * 0x4, bufferIndex: 0, },
             ],
             vertexBufferDescriptors: [
                 { byteStride: TfragProgram.elementsPerVertex * 0x4, frequency: GfxVertexBufferFrequency.PerVertex, },
@@ -292,6 +295,9 @@ export class TfragGeometry {
                         vertexArrayBuffer[vertexPtr++] = normal.x;
                         vertexArrayBuffer[vertexPtr++] = normal.y;
                         vertexArrayBuffer[vertexPtr++] = normal.z;
+                        vertexArrayBuffer[vertexPtr++] = colorScale * light.ambientColor.r;
+                        vertexArrayBuffer[vertexPtr++] = colorScale * light.ambientColor.g;
+                        vertexArrayBuffer[vertexPtr++] = colorScale * light.ambientColor.b;
                         vertexArrayBuffer[vertexPtr++] = colorScale * rgba.r;
                         vertexArrayBuffer[vertexPtr++] = colorScale * rgba.g;
                         vertexArrayBuffer[vertexPtr++] = colorScale * rgba.b;
@@ -300,10 +306,9 @@ export class TfragGeometry {
                         vertexArrayBuffer[vertexPtr++] = activeClamp;
                         vertexArrayBuffer[vertexPtr++] = texcoordScale * this.fixTexcoord(vertInfo.s);
                         vertexArrayBuffer[vertexPtr++] = texcoordScale * this.fixTexcoord(vertInfo.t);
-                        vertexArrayBuffer[vertexPtr++] = light.directionalLights[0];
-                        vertexArrayBuffer[vertexPtr++] = light.directionalLights[1];
-                        vertexArrayBuffer[vertexPtr++] = light.directionalLights[2];
-                        vertexArrayBuffer[vertexPtr++] = light.directionalLights[3];
+                        vertexArrayBuffer[vertexPtr++] = light.lightSelector.lightIndices[0];
+                        vertexArrayBuffer[vertexPtr++] = light.lightSelector.lightIndices[1];
+                        vertexArrayBuffer[vertexPtr++] = light.lightSelector.weight;
                     }
                     stripIndicesPtr++;
                 }

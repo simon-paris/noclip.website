@@ -6,6 +6,7 @@ import { IS_DEVELOPMENT } from "../BuildVersion";
 import { ClassEntry } from "./bin-index";
 import { ChunkPlane, MobyInstance, OcclusionMappings, TieInstance } from "./bin-gameplay";
 import { Occlusion } from "./bin-core";
+import { DataViewExt } from "./DataViewExt";
 
 // game number shorthand
 export type GN = 1 | 2 | 3 | 4;
@@ -130,6 +131,15 @@ export function truncateTrailing0xFF(arr: number[]): number[] {
         copy.pop();
     }
     return copy;
+}
+
+export function readA1BGR5(view: DataViewExt): { a: number, r: number, g: number, b: number } {
+    const value = view.getUint16(0x0);
+    const a = ((value >> 15) & 0x1) << 7;
+    const b = ((value >> 10) & 0x1F) << 3;
+    const g = ((value >> 5) & 0x1F) << 3;
+    const r = (value & 0x1F) << 3;
+    return { a, r, g, b };
 }
 
 // I call this one "The Headless Chicken"

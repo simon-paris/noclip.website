@@ -28,7 +28,7 @@ export class MobyProgram extends DeviceProgram {
     public static a_InstanceTransform1 = 5;
     public static a_InstanceTransform2 = 6;
     public static a_InstanceAmbientRgba = 7;
-    public static a_InstanceDirectionLights = 8;
+    public static a_InstanceLightSelector = 8;
     public static a_InstanceExtraData = 9; // x = lod alpha
 
     public static elementsPerInstance = 24; // transform (12), direction lights (4), ambient rgba (4), lod alpha (4)
@@ -62,7 +62,7 @@ layout(location = ${MobyProgram.a_InstanceTransform0}) in vec4 a_InstanceTransfo
 layout(location = ${MobyProgram.a_InstanceTransform1}) in vec4 a_InstanceTransform1;
 layout(location = ${MobyProgram.a_InstanceTransform2}) in vec4 a_InstanceTransform2;
 layout(location = ${MobyProgram.a_InstanceAmbientRgba}) in vec4 a_InstanceAmbientRgba;
-layout(location = ${MobyProgram.a_InstanceDirectionLights}) in vec4 a_InstanceDirectionLights;
+layout(location = ${MobyProgram.a_InstanceLightSelector}) in vec3 a_InstanceLightSelector;
 layout(location = ${MobyProgram.a_InstanceExtraData}) in vec4 a_InstanceExtraData; // x = lod alpha
 
 ${RatchetShaderLib.LightingFunctions}
@@ -84,7 +84,7 @@ void main() {
     normal = MulNormalMatrix(instanceTransform, normal);
 
     float lodAlpha = a_InstanceExtraData.x;
-    vec4 rgba = commonVertexLighting(a_InstanceAmbientRgba, normal, a_InstanceDirectionLights);
+    vec4 rgba = commonVertexLighting2(a_InstanceAmbientRgba, normal, a_InstanceLightSelector);
     rgba.a *= lodAlpha;
 
     gl_Position = UnpackMatrix(u_ClipFromWorld) * vec4(positionWorld, 1.0f);
@@ -121,7 +121,7 @@ void main() {
     if (u_RenderSettings.x == 0.0) { gl_FragColor = vec4(v_Rgba.rgb / 2.0, v_Rgba.a); return; }
     ivec2 texRemap = getTexRemap(v_TextureIndex);
     vec4 textureSample = ratchetSampler(texRemap, v_Clamp, v_ST);
-    gl_FragColor = commonFragmentShader(vec4(v_Rgba.rgb / 2.0, v_Rgba.a), textureSample, v_FogFactor, 0.01);
+    gl_FragColor = commonFragmentShader(vec4(v_Rgba.rgb, v_Rgba.a), textureSample, v_FogFactor, 0.01);
 }
 
 `;
@@ -149,7 +149,7 @@ export class MobyGeometry {
                 { location: MobyProgram.a_InstanceTransform1, format: GfxFormat.F32_RGBA, bufferByteOffset: 4 * 4, bufferIndex: 1, },
                 { location: MobyProgram.a_InstanceTransform2, format: GfxFormat.F32_RGBA, bufferByteOffset: 8 * 4, bufferIndex: 1, },
                 { location: MobyProgram.a_InstanceAmbientRgba, format: GfxFormat.F32_RGBA, bufferByteOffset: 12 * 4, bufferIndex: 1, },
-                { location: MobyProgram.a_InstanceDirectionLights, format: GfxFormat.F32_RGBA, bufferByteOffset: 16 * 4, bufferIndex: 1, },
+                { location: MobyProgram.a_InstanceLightSelector, format: GfxFormat.F32_RGB, bufferByteOffset: 16 * 4, bufferIndex: 1, },
                 { location: MobyProgram.a_InstanceExtraData, format: GfxFormat.F32_RGBA, bufferByteOffset: 20 * 4, bufferIndex: 1, },
             ],
             vertexBufferDescriptors: [
@@ -394,7 +394,7 @@ const bindingLayouts = [
     }
 ];
 
-const colorScale = 1 / 255 * 4;
+const colorScale = 1 / 0x80;
 
 export class MobyRenderer {
     private mobyProgram: GfxProgram;
@@ -404,7 +404,7 @@ export class MobyRenderer {
     }
 
     renderMoby(renderInstList: GfxRenderInstList, mobyGeometriesByLod: (MobyGeometry | null)[], mobyClass: MobyClass, mobyInstances: MobyInstance[], textureMappings: GfxSamplerBinding[], cameraPosition: vec3, occlusionChecker: OcclusionChecker | null, cameraFrustum: Frustum, lodSetting: number, lodBias: number, enableBangles: boolean, completedMissionFlags: number, instanceDataBuffer: MegaBuffer): void {
-        type MobyDrawInstance = { objectMatrix: mat4, rgb: { r: number, g: number, b: number }, directionalLights: number[], lodAlpha: number };
+        type MobyDrawInstance = { objectMatrix: mat4, rgb: { r: number, g: number, b: number }, lightSelector: MobyInstance["lightSelector"], lodAlpha: number };
 
         if (mobyGeometriesByLod[0] === null) return;
         const maxLod = mobyGeometriesByLod[1] ? 1 : 0;
@@ -434,7 +434,7 @@ export class MobyRenderer {
             const rgb = mobyInstance.color;
 
             // lights
-            const directionalLights = mobyInstance.directionalLights;
+            const lightSelector = mobyInstance.lightSelector;
 
             let lod: number;
             let lodAlpha = 1.0;
@@ -465,7 +465,7 @@ export class MobyRenderer {
             mobyInstancesToDrawByLod[lod].push({
                 objectMatrix,
                 rgb,
-                directionalLights,
+                lightSelector,
                 lodAlpha,
             });
         }
@@ -487,7 +487,7 @@ export class MobyRenderer {
                 const color = inst.rgb;
                 instanceDataBuffer.ptr += fillMatrix4x3(instanceDataBuffer.f32View, instanceDataBuffer.ptr, inst.objectMatrix);
                 instanceDataBuffer.ptr += fillVec4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, color.r * colorScale, color.g * colorScale, color.b * colorScale, 1.0);
-                instanceDataBuffer.ptr += fillVec4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, inst.directionalLights[0], inst.directionalLights[1], inst.directionalLights[2], inst.directionalLights[3]);
+                instanceDataBuffer.ptr += fillVec4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, inst.lightSelector.lightIndices[0], inst.lightSelector.lightIndices[1], inst.lightSelector.weight, 0);
                 instanceDataBuffer.ptr += fillVec4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, inst.lodAlpha, 0, 0, 0);
             }
 

@@ -2,9 +2,11 @@ import { IS_DEVELOPMENT } from "../BuildVersion";
 import { GsPrimitiveType } from "../Common/PS2/GS";
 import { DataViewExt, EMPTY_VIEW } from "./DataViewExt";
 import { align, assert } from "../util";
-import { getBits, GN, ImaginaryGsCommand, ImaginaryGsCommandBuffer } from "./utils";
+import { getBits, GN, ImaginaryGsCommand, ImaginaryGsCommandBuffer, readA1BGR5 } from "./utils";
 import { readVifCommandList, VifUnpackReader } from "./vif";
 import { VifUnpackFormat } from "../Common/PS2/VIF";
+import { DirectionLightSelector, readDirectionLightSelector } from "./bin-gameplay";
+import { RAC1_SKY_ANGULAR_VELOCITY, RAC1_SKY_ROTATION } from "./hardcoded";
 
 export interface GsRamTableEntry {
     psm: number,
@@ -38,12 +40,15 @@ export interface TieClass {
     scale: number,
     packets: TiePacket[][], // [lod][packet]
     adGifs: TieGifAds[],
+
+    // the index of this class within the class list
+    _classIndex: number,
 };
 export interface TiePacket {
     header: TiePacketHeader,
     body: TiePacketBody,
 };
-export function readTieClass(gn: GN, view: DataViewExt, oClass: number): TieClass {
+export function readTieClass(gn: GN, view: DataViewExt, oClass: number, classIndex: number): TieClass {
     /*
     https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/tie.h#L37
     */
@@ -103,6 +108,8 @@ export function readTieClass(gn: GN, view: DataViewExt, oClass: number): TieClas
         scale: header.scale,
         packets,
         adGifs,
+
+        _classIndex: classIndex,
     };
     return tie;
 }
@@ -110,7 +117,11 @@ export function readTieClass(gn: GN, view: DataViewExt, oClass: number): TieClas
 function readTieNormalData(gn: GN, view: DataViewExt, count: number) {
     switch (gn) {
         case 1: {
-            return view.subdivide(0, count, 8).map(view => view.getInt16_Xyzw(0));
+            return view.subdivide(0, count, 8).map(view => {
+                const n = view.getInt16_Xyzw(0);
+                const scale = 1 / 0x7FFF;
+                return { x: n.x * scale, y: n.y * scale, z: n.z * scale, w: n.w * scale };
+            });
         }
         case 2:
         case 3: {
@@ -897,30 +908,30 @@ export function readTfragHeader(view: DataViewExt) {
 }
 
 export interface TfragLight {
-    unknown0: number,
+    offset: number,
     azimuth: number,
     elevation: number,
-    brightness: number,
-    directionalLights: number[],
+    ambientColor: { a: number, r: number, g: number, b: number },
+    lightSelector: DirectionLightSelector,
 };
 export const SIZEOF_TFRAG_LIGHT = 0x8;
 export function readTfragLight(view: DataViewExt): TfragLight {
     /*
     struct TfragLight {
-        uint16 unknown0; // looks like a write address. Between 300 and 1400, always increases, usually by 6 at a time, always divisible by 2.
+        uint16 offset; // byte offset into the vertex array, not needed
         int8 azimuth;
         int8 elevation;
-        uint16 brightness; // this looks like light intensity but I don't know why I'd need it
-        uint16 directionalLights; // nibble[4], list of indices into the directional light array
+        uint16 ambientColor;
+        uint16 lightSelector;
     }
     */
 
     return {
-        unknown0: view.getUint16(0x0),
+        offset: view.getUint16(0x0),
         azimuth: view.getInt8(0x2),
         elevation: view.getInt8(0x3),
-        brightness: view.getUint16(0x4),
-        directionalLights: view.getNibbleArray(0x6, 2),
+        ambientColor: readA1BGR5(view.subview(0x4)),
+        lightSelector: readDirectionLightSelector(view.subview(0x6)),
     }
 }
 
@@ -931,8 +942,10 @@ export interface TfragLod {
 
 export interface Tfrag {
     header: TfragHeader,
-    rgbas: { r: number, g: number, b: number, a: number }[],
+    // actual lighting input
     lights: TfragLight[],
+    // precomputed lit colors (should match lighting result)
+    rgbas: { r: number, g: number, b: number, a: number }[],
     dataGroup1: {
         lod2: TfragLod,
     },
@@ -1525,10 +1538,10 @@ export interface Sky {
     textureEntries: SkyTextureEntry[],
     shells: SkyShell[],
 }
-export function readSky(gn: GN, skyView: DataViewExt): Sky {
+export function readSky(gn: GN, levelNumber: number, skyView: DataViewExt): Sky {
     const header = readSkyHeader(skyView);
     const textureEntries = skyView.subdivide(header.textureDefs, header.textureCount, SIZEOF_SKY_TEXTURE_ENTRY).map(readSkyTextureEntry);
-    const shells = header.shells.slice(0, header.shellCount).map((offset, i) => readSkyShell(gn, skyView, skyView.subview(offset), i));
+    const shells = header.shells.slice(0, header.shellCount).map((offset, i) => readSkyShell(gn, levelNumber, skyView, skyView.subview(offset), i));
     return {
         header,
         textureEntries,
@@ -1545,8 +1558,8 @@ export interface SkyShell {
         triangles: SkyFace[],
     }[],
 };
-export function readSkyShell(gn: GN, skyView: DataViewExt, skyShellView: DataViewExt, shellIndex: number): SkyShell {
-    const shellHeader = readSkyShellHeader(gn, skyShellView, shellIndex);
+export function readSkyShell(gn: GN, levelNumber: number, skyView: DataViewExt, skyShellView: DataViewExt, shellIndex: number): SkyShell {
+    const shellHeader = readSkyShellHeader(gn, levelNumber, skyShellView, shellIndex);
     const skyShells: SkyShell = {
         header: shellHeader,
         clusters: [],
@@ -1650,13 +1663,25 @@ export const SIZEOF_SKY_SHELL_HEADER = (gn: GN) => {
     }
     assert(false);
 }
-export function readSkyShellHeader(gn: GN, view: DataViewExt, shellIndex: number): SkyShellHeader {
+export function readSkyShellHeader(gn: GN, levelNumber: number, view: DataViewExt, shellIndex: number): SkyShellHeader {
     /*
     https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/engine/sky.h#L87C15-L87C34
     */
 
     switch (gn) {
-        case 1:
+        case 1: {
+            const flags = view.getInt32(0x4);
+
+            return {
+                clusterCount: view.getInt32(0x0),
+                flags: {
+                    textured: flags === 0,
+                    bloom: false,
+                },
+                rotation: RAC1_SKY_ROTATION.get(levelNumber)?.find(item => item.shell === shellIndex)?.rotation ?? null,
+                angularVelocity: RAC1_SKY_ANGULAR_VELOCITY.get(levelNumber)?.find(item => item.shell === shellIndex)?.angularVelocity ?? null,
+            };
+        }
         case 2: {
             const flags = view.getInt32(0x4);
 

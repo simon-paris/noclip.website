@@ -305,6 +305,7 @@ export function readLevelMissionDescriptor_Rac4(view: DataViewExt): LevelMission
 }
 
 export interface LevelDataHeader {
+    overlay: { offset: number, size: number },
     coreIndex: { offset: number, size: number },
     coreData: { offset: number, size: number },
     gsRam: { offset: number, size: number },

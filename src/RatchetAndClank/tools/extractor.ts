@@ -132,6 +132,9 @@ for (const levelSectors of tableOfContents.levelSectors) {
     const levelCoreDataWad = levelData.subview(levelDataHeader.coreData.offset, levelDataHeader.coreData.size);
     assert(levelCoreDataWad.byteLength === levelCoreHeader.assetsCompressedSize);
 
+    // level_n_overlay
+    const levelOverlayFile = levelData.subview(levelDataHeader.overlay.offset, levelDataHeader.overlay.size);
+
     // level_n_n_tfrag and level_n_n_collision
     const chunkFiles: { tfragFile: DataViewExt, collisionFile: DataViewExt }[] = [];
     for (let chunkNum = 0; chunkNum < levelDescriptor.chunks.chunks.length; chunkNum++) {
@@ -158,6 +161,7 @@ for (const levelSectors of tableOfContents.levelSectors) {
     await extractLevelFile(`level_{}_core.wad`, levelCoreDataWad);
     await extractLevelFile(`level_{}_index.bin`, levelCoreIndex);
     await extractLevelFile(`level_{}_gs.bin`, gsRam);
+    await extractLevelFile(`level_{}_overlay.bin`, levelOverlayFile);
     for (let i = 0; i < chunkFiles.length; i++) {
         await extractLevelFile(`level_{}_${i}_tfrag.wad`, chunkFiles[i].tfragFile);
         await extractLevelFile(`level_{}_${i}_collision.wad`, chunkFiles[i].collisionFile);
@@ -172,6 +176,7 @@ for (const levelSectors of tableOfContents.levelSectors) {
             levelCoreHeader: null,
             gameplayHeader: null,
             missionGameplayHeader: null,
+            overlaySections: null,
             gsTable: null,
             levelSettings: null,
             occlusion: null,
@@ -216,13 +221,14 @@ for (const levelSectors of tableOfContents.levelSectors) {
         };
 
         const testMission = missions.find(m => m.missionNumber === missionNumber) ?? null;
-        await load(gn, chunkNumber, resources, {
+        await load(gn, levelNum, chunkNumber, resources, {
             metadataFilePromise: Promise.resolve(metaFile),
             coreDataFilePromise: Promise.resolve(decompress(levelCoreDataWad)),
             gameplayFilePromise: Promise.resolve(decompress(gameplayFile)),
             gameplayArtFilePromise: artInstancesFile ? Promise.resolve(decompress(artInstancesFile)) : null,
             gameplayMissionFilePromise: testMission ? Promise.resolve(testMission.missionGameplayFile) : null,
             coreIndexFilePromise: Promise.resolve(levelCoreIndex),
+            overlayFilePromise: Promise.resolve(levelOverlayFile),
             gsRamFilePromise: Promise.resolve(gsRam),
             chunkTfragFilePromise: chunkNumber !== null ? Promise.resolve(decompress(chunkFiles[chunkNumber].tfragFile)) : null,
             chunkCollisionFilePromise: chunkNumber !== null ? Promise.resolve(decompress(chunkFiles[chunkNumber].collisionFile)) : null

@@ -29,7 +29,7 @@ export class ShrubProgram extends DeviceProgram {
     public static a_InstanceTransform1 = 5;
     public static a_InstanceTransform2 = 6;
     public static a_InstanceAmbientRgba = 7;
-    public static a_InstanceDirectionLights = 8;
+    public static a_InstanceLightSelector = 8;
     public static a_InstanceLodAlpha = 9;
 
     public static elementsPerInstance = 21; // transform (12), ambient rgba (4), directional lights (4), lod alpha (1)
@@ -63,7 +63,7 @@ layout(location = ${ShrubProgram.a_InstanceTransform0}) in vec4 a_InstanceTransf
 layout(location = ${ShrubProgram.a_InstanceTransform1}) in vec4 a_InstanceTransform1;
 layout(location = ${ShrubProgram.a_InstanceTransform2}) in vec4 a_InstanceTransform2;
 layout(location = ${ShrubProgram.a_InstanceAmbientRgba}) in vec4 a_InstanceAmbientRgba;
-layout(location = ${ShrubProgram.a_InstanceDirectionLights}) in vec4 a_InstanceDirectionLights;
+layout(location = ${ShrubProgram.a_InstanceLightSelector}) in vec3 a_InstanceLightSelector;
 layout(location = ${ShrubProgram.a_InstanceLodAlpha}) in float a_InstanceLodAlpha;
 
 out vec4 v_Rgba;
@@ -83,9 +83,7 @@ void main() {
     vec3 normal = MulNormalMatrix(instanceTransform, a_Normal);
 
     vec4 rgba = a_InstanceAmbientRgba.rgba;
-    vec4 lights = a_InstanceDirectionLights;
-
-    v_Rgba = commonVertexLighting(rgba, normal, lights);
+    v_Rgba = commonVertexLighting2(rgba, normal, a_InstanceLightSelector);
     v_Rgba.a *= a_InstanceLodAlpha;
 
     v_ST = a_ST.xy;
@@ -136,7 +134,7 @@ export class ShrubGeometry {
                 { location: ShrubProgram.a_InstanceTransform1, format: GfxFormat.F32_RGBA, bufferByteOffset: 4 * 4, bufferIndex: 1, },
                 { location: ShrubProgram.a_InstanceTransform2, format: GfxFormat.F32_RGBA, bufferByteOffset: 8 * 4, bufferIndex: 1, },
                 { location: ShrubProgram.a_InstanceAmbientRgba, format: GfxFormat.F32_RGBA, bufferByteOffset: 12 * 4, bufferIndex: 1, },
-                { location: ShrubProgram.a_InstanceDirectionLights, format: GfxFormat.F32_RGBA, bufferByteOffset: 16 * 4, bufferIndex: 1, },
+                { location: ShrubProgram.a_InstanceLightSelector, format: GfxFormat.F32_RGB, bufferByteOffset: 16 * 4, bufferIndex: 1, },
                 { location: ShrubProgram.a_InstanceLodAlpha, format: GfxFormat.F32_R, bufferByteOffset: 20 * 4, bufferIndex: 1, },
             ],
             vertexBufferDescriptors: [
@@ -313,7 +311,7 @@ export class ShrubRenderer {
     }
 
     renderShrub(renderInstList: GfxRenderInstList, shrubGeometry: ShrubGeometry, shrubInstances: ShrubInstance[], textureMappings: GfxSamplerBinding[], cameraPosition: vec3, cameraFrustum: Frustum, settingLodPreset: number, settingLodBias: number, instanceDataBuffer: MegaBuffer): void {
-        type ShrubDrawInstance = { objectMatrix: mat4, directionalLights: number[], rgb: { r: number, g: number, b: number }, lodAlpha: number };
+        type ShrubDrawInstance = { objectMatrix: mat4, lightSelector: ShrubInstance["lightSelector"], rgb: { r: number, g: number, b: number }, lodAlpha: number };
         const shrubInstancesToDraw: ShrubDrawInstance[] = [];
         for (let i = 0; i < shrubInstances.length; i++) {
             const shrubInstance = shrubInstances[i];
@@ -347,7 +345,7 @@ export class ShrubRenderer {
 
             shrubInstancesToDraw.push({
                 objectMatrix,
-                directionalLights: shrubInstance.directionalLights,
+                lightSelector: shrubInstance.lightSelector,
                 rgb: shrubInstance.color,
                 lodAlpha,
             })
@@ -366,7 +364,7 @@ export class ShrubRenderer {
             const color = inst.rgb;
             instanceDataBuffer.ptr += fillMatrix4x3(instanceDataBuffer.f32View, instanceDataBuffer.ptr, inst.objectMatrix);
             instanceDataBuffer.ptr += fillVec4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, color.r / 0x80, color.g / 0x80, color.b / 0x80, 1);
-            instanceDataBuffer.ptr += fillVec4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, inst.directionalLights[0], inst.directionalLights[1], inst.directionalLights[2], inst.directionalLights[3]);
+            instanceDataBuffer.ptr += fillVec4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, inst.lightSelector.lightIndices[0], inst.lightSelector.lightIndices[1], inst.lightSelector.weight, 0);
             instanceDataBuffer.f32View[instanceDataBuffer.ptr++] = inst.lodAlpha;
         }
 

@@ -9,8 +9,8 @@ import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { GfxRenderInstList } from "../gfx/render/GfxRenderInstManager";
 import { DeviceProgram } from "../Program";
 import { assert } from "../util";
-import { TieClass, TieVertexWithNormalAndRgba } from "./bin-core";
-import { TieInstance } from "./bin-gameplay";
+import { RgbaRemapKind, TieClass, TieVertexWithNormalAndRgba } from "./bin-core";
+import { DirectionLightSelector, TieInstance } from "./bin-gameplay";
 import { RatchetShaderLib } from "./shader-lib";
 import { GN, ImaginaryGsCommandType, MegaBuffer, OcclusionChecker } from "./utils";
 import { packRemap, TextureAtlases } from "./textures";
@@ -21,18 +21,17 @@ export class TieProgram extends DeviceProgram {
     public static a_LodMorphOffset = 1;
     public static a_ExtraData = 2;
     public static a_ST = 3;
-    public static a_Normal0 = 4;
-    public static a_Normal1 = 5;
-    public static a_Normal2 = 6;
-    public static a_RgbaIndices = 7;
+    public static a_RgbaIndices = 4;
+    public static a_NormalIndices = 5;
+    public static a_RemapSources = 4;
 
-    public static elementsPerVertex(gn: GN): number { return gn === 1 ? 22 : 11; }
+    public static elementsPerVertex(gn: GN): number { return gn === 1 ? 16 : 14; }
 
-    public static a_InstanceTransform0 = 8;
-    public static a_InstanceTransform1 = 9;
-    public static a_InstanceTransform2 = 10;
-    public static a_InstanceDirectionLights = 11;
-    public static a_InstanceExtraData = 12;
+    public static a_InstanceTransform0 = 6;
+    public static a_InstanceTransform1 = 7;
+    public static a_InstanceTransform2 = 8;
+    public static a_InstanceLightSelector = 9;
+    public static a_InstanceExtraData = 10;
 
     public static elementsPerInstance = 20; // transform (12), lights (4), extra (4)
 
@@ -57,11 +56,8 @@ layout(binding = 2) uniform sampler2DArray u_Texture_64;
 layout(binding = 3) uniform sampler2DArray u_Texture_128;
 layout(binding = 4) uniform sampler2DArray u_Texture_256;
 
-#ifdef RAC1
 layout(binding = 5) uniform sampler2D u_AmbientRgbaTexture;
-#else
-layout(binding = 5) uniform sampler2DArray u_AmbientRgbaTexture;
-#endif
+layout(binding = 6) uniform sampler2D u_TieNormalsTexture;
 
 `;
 
@@ -72,18 +68,18 @@ layout(location = ${TieProgram.a_LodMorphOffset}) in vec3 a_LodMorphOffset;
 layout(location = ${TieProgram.a_ExtraData}) in vec2 a_ExtraData; // x = texture index, y = clamp
 layout(location = ${TieProgram.a_ST}) in vec2 a_ST;
 #ifdef RAC1
-layout(location = ${TieProgram.a_Normal0}) in vec3 a_Normal0;
-layout(location = ${TieProgram.a_Normal1}) in vec3 a_Normal1;
-layout(location = ${TieProgram.a_Normal2}) in vec3 a_Normal2;
 layout(location = ${TieProgram.a_RgbaIndices}) in vec3 a_RgbaIndices;
+layout(location = ${TieProgram.a_NormalIndices}) in vec3 a_NormalIndices;
 #else
-layout(location = ${TieProgram.a_RgbaIndices}) in float a_RgbaIndex;
+layout(location = ${TieProgram.a_RemapSources}) in vec4 a_RemapSources;
 #endif
+
 layout(location = ${TieProgram.a_InstanceTransform0}) in vec4 a_InstanceTransform0;
 layout(location = ${TieProgram.a_InstanceTransform1}) in vec4 a_InstanceTransform1;
 layout(location = ${TieProgram.a_InstanceTransform2}) in vec4 a_InstanceTransform2;
-layout(location = ${TieProgram.a_InstanceDirectionLights}) in vec4 a_InstanceDirectionLights;
-layout(location = ${TieProgram.a_InstanceExtraData}) in vec4 a_InstanceExtraData; // x = ambient row, y = LOD morph, z = mode bits, w = lod level
+layout(location = ${TieProgram.a_InstanceLightSelector}) in vec3 a_InstanceLightSelector;
+layout(location = ${TieProgram.a_InstanceExtraData}) in vec4 a_InstanceExtraData; // x = ambient row, y = LOD morph, z = mode bits, w = class index
+
 out vec2 v_ST;
 out vec4 v_Rgba;
 out float v_FogFactor;
@@ -99,47 +95,63 @@ void main() {
     vec3 morphedPosition = a_Position + a_LodMorphOffset * lodMorphFactor;
     mat4x3 instanceTransform = mat4x3(transpose(mat4(a_InstanceTransform0, a_InstanceTransform1, a_InstanceTransform2, vec4(0, 0, 0, 1))));
     vec3 positionWorld = instanceTransform * vec4(morphedPosition, 1.0f);
-
     gl_Position = UnpackMatrix(u_ClipFromWorld) * vec4(positionWorld, 1.0f);
     v_ST = a_ST;
 
-#ifdef RAC1
-
     /*
-    Rac1 computes lighing on the CPU against a palette of 64 (color,normal) pairs.
+    In the original, lighing is done on the CPU against a palette of (color,normal) pairs.
+    64 on rac1, 512 on rac2+.
     Then each vertex points to a slot in the palette.
-    Morphing verts additionally point to two extra palette slots which are mixed like: lerp(a, avg(b, c), lodMorphFactor).
+    On rac1, morphing verts additionally point to two extra palette slots which are mixed like: lerp(a, avg(b, c), lodMorphFactor).
+    On rac2+, all verts have 4 palette slots which are mixed according to the remap kind.
 
-    In this implementation, all that is done on the GPU.
+    In this implementation, the palette and normals are uploaded as textures and all the lighting is done here.
     */
 
-    vec4 lights = a_InstanceDirectionLights;
-    vec3 normals[3] = vec3[3](a_Normal0, a_Normal1, a_Normal2);
+#ifdef RAC1
+
     float rgbaIndices[3] = float[3](a_RgbaIndices.x, a_RgbaIndices.y, a_RgbaIndices.z);
     vec4 colors[3];
     for (int i = 0; i < 3; i++) {
         ivec2 ambientRgbaTexcoord = ivec2(int(rgbaIndices[i]), int(a_InstanceExtraData.x));
         vec4 rgba = texelFetch(TEXTURE(u_AmbientRgbaTexture), ambientRgbaTexcoord, 0);
         rgba.rgb /= 128.0 / 255.0;
-        vec3 normal = MulNormalMatrix(instanceTransform, normals[i]);
-        colors[i] = commonVertexLighting(rgba, normal, lights);
+        ivec2 normalTexcoord = ivec2(int(a_NormalIndices[i]), int(a_InstanceExtraData.w));
+        vec4 normalTexData = texelFetch(TEXTURE(u_TieNormalsTexture), normalTexcoord, 0);
+        vec3 normal = MulNormalMatrix(instanceTransform, normalTexData.xyz);
+        colors[i] = commonVertexLighting2(rgba, normal, a_InstanceLightSelector);
     }
     // mix colors based on lodMorphFactor
     v_Rgba = mix(colors[0], mix(colors[1], colors[2], 0.5), lodMorphFactor);
 
 #else
 
-    /*
-    Rac2+ computes lighting on the CPU against a dynamically sized palette of (color,normal) pairs.
-    Each vertex has a "remap" which describes how to mix items from the palette into a final color. It can reference 4 palette slots and they can be mixed in 6 different ways.
-    Morphing verts don't do anything special.
-
-    In this implementation, all the lighting is done on the CPU and all these colors are pre-lit.
-    */
-
-    ivec3 ambientRgbaTexcoord = ivec3(int(a_RgbaIndex), int(a_InstanceExtraData.x), int(a_InstanceExtraData.w));
-    v_Rgba = texelFetch(TEXTURE(u_AmbientRgbaTexture), ambientRgbaTexcoord, 0);
-    v_Rgba.rgb /= 128.0 / 255.0;
+    mat3 inverseTransform = inverse(mat3(instanceTransform));
+    vec4 colors[4];
+    for (int i = 0; i < 4; i++) {
+        if (a_RemapSources[i] == -1.0) {
+            // remap says write zeroes
+            colors[i] = vec4(0.0, 0.0, 0.0, 1.0);
+            continue;
+        }
+        if (a_RemapSources[i] == -2.0) {
+            // remap is missing
+            colors[i] = vec4(255.0 / 128.0, 0.0, 255.0 / 128.0, 1.0);
+            continue;
+        }
+        ivec2 ambientRgbaTexcoord = ivec2(int(a_RemapSources[i]), int(a_InstanceExtraData.x));
+        vec4 rgba = texelFetch(TEXTURE(u_AmbientRgbaTexture), ambientRgbaTexcoord, 0);
+        if (a_RemapSources[i] == 511.0) {
+            // last row means emissive
+            colors[i] = rgba;
+            continue;
+        }
+        ivec2 normalTexcoord = ivec2(int(a_RemapSources[i]), int(a_InstanceExtraData.w));
+        vec4 normalTexData = texelFetch(TEXTURE(u_TieNormalsTexture), normalTexcoord, 0);
+        vec3 normal = normalize(inverseTransform * normalTexData.xyz);
+        colors[i] = commonVertexLighting2(rgba, normal, a_InstanceLightSelector);
+    }
+    v_Rgba = (colors[0] + colors[1] + colors[2] + colors[3]) / 4.0;
 
 #endif
     
@@ -179,6 +191,10 @@ void main() {
 
 }
 
+const NO_REMAP_SOURCE: [number, number, number, number] = [-1, -1, -1, -1];
+// no remap entry for this column; shader renders magenta
+const MISSING_REMAP_SOURCE: [number, number, number, number] = [-2, -2, -2, -2];
+
 export class TieGeometry {
     public inputLayout: GfxInputLayout;
 
@@ -193,18 +209,16 @@ export class TieGeometry {
                     { location: TieProgram.a_LodMorphOffset, format: GfxFormat.F32_RGB, bufferByteOffset: 3 * 4, bufferIndex: 0, },
                     { location: TieProgram.a_ExtraData, format: GfxFormat.F32_RG, bufferByteOffset: 6 * 4, bufferIndex: 0, },
                     { location: TieProgram.a_ST, format: GfxFormat.F32_RG, bufferByteOffset: 8 * 4, bufferIndex: 0, },
-                    { location: TieProgram.a_Normal0, format: GfxFormat.F32_RGB, bufferByteOffset: 10 * 4, bufferIndex: 0, },
-                    { location: TieProgram.a_Normal1, format: GfxFormat.F32_RGB, bufferByteOffset: 13 * 4, bufferIndex: 0, },
-                    { location: TieProgram.a_Normal2, format: GfxFormat.F32_RGB, bufferByteOffset: 16 * 4, bufferIndex: 0, },
-                    { location: TieProgram.a_RgbaIndices, format: GfxFormat.F32_RGB, bufferByteOffset: 19 * 4, bufferIndex: 0, },
+                    { location: TieProgram.a_RgbaIndices, format: GfxFormat.F32_RGB, bufferByteOffset: 10 * 4, bufferIndex: 0, },
+                    { location: TieProgram.a_NormalIndices, format: GfxFormat.F32_RGB, bufferByteOffset: 13 * 4, bufferIndex: 0, },
                     { location: TieProgram.a_InstanceTransform0, format: GfxFormat.F32_RGBA, bufferByteOffset: 0 * 4, bufferIndex: 1, },
                     { location: TieProgram.a_InstanceTransform1, format: GfxFormat.F32_RGBA, bufferByteOffset: 4 * 4, bufferIndex: 1, },
                     { location: TieProgram.a_InstanceTransform2, format: GfxFormat.F32_RGBA, bufferByteOffset: 8 * 4, bufferIndex: 1, },
-                    { location: TieProgram.a_InstanceDirectionLights, format: GfxFormat.F32_RGBA, bufferByteOffset: 12 * 4, bufferIndex: 1, },
+                    { location: TieProgram.a_InstanceLightSelector, format: GfxFormat.F32_RGB, bufferByteOffset: 12 * 4, bufferIndex: 1, },
                     { location: TieProgram.a_InstanceExtraData, format: GfxFormat.F32_RGBA, bufferByteOffset: 16 * 4, bufferIndex: 1, },
                 ],
                 vertexBufferDescriptors: [
-                    { byteStride: 22 * 4, frequency: GfxVertexBufferFrequency.PerVertex, },
+                    { byteStride: TieProgram.elementsPerVertex(this.gn) * 4, frequency: GfxVertexBufferFrequency.PerVertex, },
                     { byteStride: TieProgram.elementsPerInstance * 4, frequency: GfxVertexBufferFrequency.PerInstance, },
                 ],
                 indexBufferFormat: null,
@@ -216,15 +230,15 @@ export class TieGeometry {
                     { location: TieProgram.a_LodMorphOffset, format: GfxFormat.F32_RGB, bufferByteOffset: 3 * 4, bufferIndex: 0, },
                     { location: TieProgram.a_ExtraData, format: GfxFormat.F32_RG, bufferByteOffset: 6 * 4, bufferIndex: 0, },
                     { location: TieProgram.a_ST, format: GfxFormat.F32_RG, bufferByteOffset: 8 * 4, bufferIndex: 0, },
-                    { location: TieProgram.a_RgbaIndices, format: GfxFormat.F32_R, bufferByteOffset: 10 * 4, bufferIndex: 0, },
+                    { location: TieProgram.a_RemapSources, format: GfxFormat.F32_RGBA, bufferByteOffset: 10 * 4, bufferIndex: 0, },
                     { location: TieProgram.a_InstanceTransform0, format: GfxFormat.F32_RGBA, bufferByteOffset: 0 * 4, bufferIndex: 1, },
                     { location: TieProgram.a_InstanceTransform1, format: GfxFormat.F32_RGBA, bufferByteOffset: 4 * 4, bufferIndex: 1, },
                     { location: TieProgram.a_InstanceTransform2, format: GfxFormat.F32_RGBA, bufferByteOffset: 8 * 4, bufferIndex: 1, },
-                    { location: TieProgram.a_InstanceDirectionLights, format: GfxFormat.F32_RGBA, bufferByteOffset: 12 * 4, bufferIndex: 1, },
+                    { location: TieProgram.a_InstanceLightSelector, format: GfxFormat.F32_RGB, bufferByteOffset: 12 * 4, bufferIndex: 1, },
                     { location: TieProgram.a_InstanceExtraData, format: GfxFormat.F32_RGBA, bufferByteOffset: 16 * 4, bufferIndex: 1, },
                 ],
                 vertexBufferDescriptors: [
-                    { byteStride: 11 * 4, frequency: GfxVertexBufferFrequency.PerVertex, },
+                    { byteStride: TieProgram.elementsPerVertex(this.gn) * 4, frequency: GfxVertexBufferFrequency.PerVertex, },
                     { byteStride: TieProgram.elementsPerInstance * 4, frequency: GfxVertexBufferFrequency.PerInstance, },
                 ],
                 indexBufferFormat: null,
@@ -253,8 +267,6 @@ export class TieGeometry {
 
         const positionScale = tie.scale * (1 / 1024);
         const texcoordScale = 1 / 4096;
-        const normalScale = 1 / 0x7FFF;
-
         let vertexCount = 0;
 
         for (let packetIndex = 0; packetIndex < tie.packets[lod].length; packetIndex++) {
@@ -274,6 +286,7 @@ export class TieGeometry {
         const elementsPerVertex = TieProgram.elementsPerVertex(this.gn);
         const vertexArrayBuffer = new Float32Array(vertexCount * elementsPerVertex);
         let vertexPtr = 0;
+        const remapSources = this.buildRemapSources();
         let currentMaterial: { texture: number, clamp: number } | undefined;
         let globalVertexIndex = 0;
 
@@ -345,25 +358,18 @@ export class TieGeometry {
                                 vertexArrayBuffer[vertexPtr++] = texcoordScale * fixedTexcoord.t;
                                 assert(vertex.q === 4096);
                                 if (this.gn === 1) {
-                                    const normal0 = tie.normalsData[normalIndices[0]];
-                                    const normal1 = tie.normalsData[normalIndices[1]];
-                                    const normal2 = tie.normalsData[normalIndices[2]];
-                                    vertexArrayBuffer[vertexPtr++] = normalScale * normal0.x;
-                                    vertexArrayBuffer[vertexPtr++] = normalScale * normal0.y;
-                                    vertexArrayBuffer[vertexPtr++] = normalScale * normal0.z;
-                                    vertexArrayBuffer[vertexPtr++] = normalScale * normal1.x;
-                                    vertexArrayBuffer[vertexPtr++] = normalScale * normal1.y;
-                                    vertexArrayBuffer[vertexPtr++] = normalScale * normal1.z;
-                                    vertexArrayBuffer[vertexPtr++] = normalScale * normal2.x;
-                                    vertexArrayBuffer[vertexPtr++] = normalScale * normal2.y;
-                                    vertexArrayBuffer[vertexPtr++] = normalScale * normal2.z;
-                                }
-                                if (this.gn === 1) {
                                     vertexArrayBuffer[vertexPtr++] = rgbaIndices[0];
                                     vertexArrayBuffer[vertexPtr++] = rgbaIndices[1];
                                     vertexArrayBuffer[vertexPtr++] = rgbaIndices[2];
+                                    vertexArrayBuffer[vertexPtr++] = normalIndices[0];
+                                    vertexArrayBuffer[vertexPtr++] = normalIndices[1];
+                                    vertexArrayBuffer[vertexPtr++] = normalIndices[2];
                                 } else {
-                                    vertexArrayBuffer[vertexPtr++] = writeOrder;
+                                    const remapSource = remapSources.get(writeOrder) ?? MISSING_REMAP_SOURCE;
+                                    vertexArrayBuffer[vertexPtr++] = remapSource[0];
+                                    vertexArrayBuffer[vertexPtr++] = remapSource[1];
+                                    vertexArrayBuffer[vertexPtr++] = remapSource[2];
+                                    vertexArrayBuffer[vertexPtr++] = remapSource[3];
                                 }
                             }
                         }
@@ -380,6 +386,30 @@ export class TieGeometry {
         assert(vertexPtr === vertexArrayBuffer.length);
 
         return { vertexArrayBuffer, vertexCount };
+    }
+
+    private buildRemapSources() {
+        // keyed by output column (byte offset / 4), matching the vertex writeOrder
+        const sources = new Map<number, [number, number, number, number]>();
+        const rgbaRemaps = this.tie.rgbaRemaps?.[this.lodLevel];
+        if (!rgbaRemaps) return sources;
+
+        for (let packetIndex = 0; packetIndex < rgbaRemaps.packets.length; packetIndex++) {
+            const packet = rgbaRemaps.packets[packetIndex];
+            for (let remapIndex = 0; remapIndex < packet.remaps.length; remapIndex++) {
+                const remap = packet.remaps[remapIndex];
+                const column = (packet.outputBase + remap.dest) / 4;
+                if (remap.kind === RgbaRemapKind.Zero) {
+                    sources.set(column, NO_REMAP_SOURCE);
+                } else {
+                    assert(Array.isArray(remap.src));
+                    const src = remap.src;
+                    sources.set(column, [src[0] / 4, src[1] / 4, src[2] / 4, src[3] / 4]);
+                }
+            }
+        }
+
+        return sources;
     }
 
     private fixTexcoords(v0: { s: number, t: number }, v1: { s: number, t: number }, v2: { s: number, t: number }) {
@@ -425,33 +455,30 @@ export class TieGeometry {
     }
 }
 
-function makeBindingLayouts(gn: GN) {
-    return [{
-        numSamplers: 6,
-        numUniformBuffers: 2,
-        samplerEntries: [
-            { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-            { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-            { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-            { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-            { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-            { dimension: gn === 1 ? GfxTextureDimension.n2D : GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
-        ],
-    }];
-}
+const bindingLayouts = [{
+    numSamplers: 7,
+    numUniformBuffers: 2,
+    samplerEntries: [
+        { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+        { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+        { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+        { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+        { dimension: GfxTextureDimension.n2DArray, formatKind: GfxSamplerFormatKind.Float, },
+        { dimension: GfxTextureDimension.n2D, formatKind: GfxSamplerFormatKind.Float, },
+        { dimension: GfxTextureDimension.n2D, formatKind: GfxSamplerFormatKind.UnfilterableFloat, },
+    ],
+}];
 
 export class TieRenderer {
     private tieProgram: GfxProgram;
-    private bindingLayouts;
 
     constructor(private renderHelper: GfxRenderHelper, private gn: GN) {
         this.tieProgram = renderHelper.renderCache.createProgram(new TieProgram(gn));
-        this.bindingLayouts = makeBindingLayouts(gn);
     }
 
     renderTie(renderInstList: GfxRenderInstList, tieGeometriesByLod: (TieGeometry | null)[], tieClass: TieClass, tieInstanceBatch: TieInstance[], textureMappings: GfxSamplerBinding[], cameraPosition: vec3, occlusionChecker: OcclusionChecker | null, cameraFrustum: Frustum, settingLodPreset: number, settingLodBias: number, instanceDataBuffer: MegaBuffer): void {
 
-        type TieDrawInstance = { objectMatrix: mat4, directionLights: number[], rgbasRow: number, lodMorphFactor: number };
+        type TieDrawInstance = { objectMatrix: mat4, lightSelector: DirectionLightSelector, rgbasRow: number, lodMorphFactor: number };
         const tieInstancesToDrawByLod: TieDrawInstance[][] = [[], [], []];
         for (let i = 0; i < tieInstanceBatch.length; i++) {
             const tieInstance = tieInstanceBatch[i];
@@ -500,7 +527,7 @@ export class TieRenderer {
 
             tieInstancesToDrawByLod[modelLodLevel].push({
                 objectMatrix,
-                directionLights: tieInstance.directionalLights,
+                lightSelector: tieInstance.lightSelector,
                 lodMorphFactor,
                 rgbasRow: tieInstance._i,
             });
@@ -517,14 +544,14 @@ export class TieRenderer {
 
             const renderInst = this.renderHelper.renderInstManager.newRenderInst();
             renderInst.setGfxProgram(this.tieProgram);
-            renderInst.setBindingLayouts(this.bindingLayouts);
+            renderInst.setBindingLayouts(bindingLayouts);
 
             const instanceDataStartBytes = instanceDataBuffer.ptr * 4;
             for (let i = 0; i < tieInstancesToDraw.length; i++) {
                 const inst = tieInstancesToDraw[i];
                 instanceDataBuffer.ptr += fillMatrix4x3(instanceDataBuffer.f32View, instanceDataBuffer.ptr, inst.objectMatrix);
-                instanceDataBuffer.ptr += fillVec4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, inst.directionLights[0], inst.directionLights[1], inst.directionLights[2], inst.directionLights[3]);
-                instanceDataBuffer.ptr += fillVec4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, inst.rgbasRow, inst.lodMorphFactor, tieClass.header.modeBits, lodLevel);
+                instanceDataBuffer.ptr += fillVec4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, inst.lightSelector.lightIndices[0], inst.lightSelector.lightIndices[1], inst.lightSelector.weight, 0);
+                instanceDataBuffer.ptr += fillVec4(instanceDataBuffer.f32View, instanceDataBuffer.ptr, inst.rgbasRow, inst.lodMorphFactor, tieClass.header.modeBits, tieClass._classIndex);
             }
 
             renderInst.setVertexInput(

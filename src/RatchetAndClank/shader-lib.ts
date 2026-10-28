@@ -61,32 +61,42 @@ vec3 normalFromAzumithElevation(float azimuth, float elevation) {
     );
 }
 
-// light list is terminated by an 0xF or an extra 0
-bool isNullLight(int position, int dirLightIndex) {
-    if (dirLightIndex == 0xF) return true;
-    if (position > 0 && dirLightIndex == 0) return true;
-    return false;
+DirectionLight blendDirectionalLights(vec3 directionLightSelector) {
+    DirectionLight blended = DirectionLight(
+        vec4(0.0), vec4(0.0),
+        vec4(0.0), vec4(0.0)
+    );
+
+    DirectionLight selected_0 = u_DirectionLights[int(directionLightSelector[0])];
+    DirectionLight selected_1 = u_DirectionLights[int(directionLightSelector[1])];
+
+    blended.directionA = mix(selected_0.directionA, selected_1.directionA, directionLightSelector[2]);
+    blended.colorA = mix(selected_0.colorA, selected_1.colorA, directionLightSelector[2]);
+    blended.directionB = mix(selected_0.directionB, selected_1.directionB, directionLightSelector[2]);
+    blended.colorB = mix(selected_0.colorB, selected_1.colorB, directionLightSelector[2]);
+
+    return blended;
 }
 
-vec4 applyDirectionalLight(vec3 normal, int dirLightIndex) {
-    DirectionLight dirlight = u_DirectionLights[dirLightIndex];
-
+vec4 applyDirectionalLight(vec3 normal, DirectionLight dirlight) {
     vec4 light = vec4(0.0);
+
     float nDotL_A = dot(normal, dirlight.directionA.xyz);
-    if (nDotL_A > 0.0) light += nDotL_A * dirlight.colorA;
+    nDotL_A = max(nDotL_A, nDotL_A * dirlight.colorA.a); // alpha controls how much light is applied to backfaces
+    light += nDotL_A * dirlight.colorA;
+
     float nDotL_B = dot(normal, dirlight.directionB.xyz);
-    if (nDotL_B > 0.0) light += nDotL_B * dirlight.colorB;
+    nDotL_B = max(nDotL_B, nDotL_B * dirlight.colorB.a);
+    light += nDotL_B * dirlight.colorB;
+
     return light;
 }
 
-vec4 commonVertexLighting(vec4 rgba, vec3 normal, vec4 dirLightIndices) {
-    vec4 light = rgba;
+vec4 commonVertexLighting2(vec4 ambient, vec3 normal, vec3 directionLightSelector) {
+    vec4 light = ambient;
 
-    for(int i = 0; i < 4; i++) {
-        int dirLightIndex = int(dirLightIndices[i]);
-        if (isNullLight(i, dirLightIndex)) break;
-        light += applyDirectionalLight(normalize(normal), dirLightIndex);
-    }
+    DirectionLight dirlight = blendDirectionalLights(directionLightSelector);
+    light += applyDirectionalLight(normalize(normal), dirlight);
 
     if (rgba.a >= 1.0 && light.a < 1.0) {
         light.a = rgba.a;
@@ -131,7 +141,7 @@ vec4 commonFragmentShader(vec4 rgba, vec4 textureSample, float fogFactor, float 
     if (rgba.a < alphaTest) discard;
 
     // with saturation filter (not authentic but looks washed out without it)
-    rgba.rgb = mix(vec3(MonochromeNTSCLinear(rgba.rgb)), rgba.rgb, SATURATION_ADJUST);
+    // rgba.rgb = mix(vec3(MonochromeNTSCLinear(rgba.rgb)), rgba.rgb, SATURATION_ADJUST);
 
     return rgba;
 }

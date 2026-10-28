@@ -386,13 +386,30 @@ export function readClassPositionBlock(view: DataViewExt) {
     return oClasses;
 }
 
+export interface DirectionLightSelector {
+    lightIndices: [number, number],
+    weight: number,
+}
+export function readDirectionLightSelector(view: DataViewExt): DirectionLightSelector {
+    return {
+        weight: view.getUint8(0x1) / 256,
+        lightIndices: view.getNibbleArray(0x0, 1) as [number, number],
+    };
+}
+export function readInstanceDirectionLightSelector(view: DataViewExt): DirectionLightSelector {
+    return {
+        lightIndices: [view.getUint8(0x0), view.getUint8(0x1)],
+        weight: view.getUint8(0x2) / 256,
+    };
+}
+
 export interface TieInstance {
     oClass: number,
     drawDistance: number,
     occlusionIndex: number,
     matrix: mat4,
     ambientRgbas: Uint16Array,
-    directionalLights: number[],
+    lightSelector: DirectionLightSelector,
     uid: number,
 
     // the position within the original instance array
@@ -424,7 +441,7 @@ export function readTieInstance(gn: GN, view: DataViewExt, instanceIndex: number
                 occlusionIndex: view.getInt32(0xc),
                 matrix,
                 ambientRgbas: view.subview(0x50, 0x80).getTypedArrayView(Uint16Array), // array of 64 A1BGR5 colors
-                directionalLights: view.getNibbleArray(0xd0, 2),
+                lightSelector: readDirectionLightSelector(view.subview(0xd0)),
                 uid: view.getInt32(0xd4),
 
                 _i: instanceIndex,
@@ -448,7 +465,7 @@ export function readTieInstance(gn: GN, view: DataViewExt, instanceIndex: number
                 occlusionIndex: view.getInt32(0xc),
                 matrix,
                 ambientRgbas: new Uint16Array(0x80).fill(0xFFFF), // TODO: remove this
-                directionalLights: view.getNibbleArray(0x50, 2),
+                lightSelector: readDirectionLightSelector(view.subview(0x50)),
                 uid: view.getInt32(0x54),
 
                 _i: instanceIndex,
@@ -475,7 +492,7 @@ export interface MobyInstance {
     position: { x: number, y: number, z: number },
     rotation: { x: number, y: number, z: number },
     color: { r: number, g: number, b: number },
-    directionalLights: number[],
+    lightSelector: DirectionLightSelector,
     skipOcclusionCheck: number,
 
     // the position within the original instance array
@@ -537,7 +554,7 @@ export function readMobyInstance(gn: GN, view: DataViewExt, i: number): MobyInst
                 skipOcclusionCheck: view.getInt32(0x5c),
                 modeBits: view.getInt32(0x60),
                 color: view.getInt32_Rgb(0x64),
-                directionalLights: view.getNibbleArray(0x70, 2),
+                lightSelector: readInstanceDirectionLightSelector(view.subview(0x70)),
 
                 _i: i,
                 _occlusionBit: 0, // populated elsewhere
@@ -582,7 +599,7 @@ export function readMobyInstance(gn: GN, view: DataViewExt, i: number): MobyInst
                 skipOcclusionCheck: view.getInt32(0x6c),
                 modeBits: view.getInt32(0x70),
                 color: view.getInt32_Rgb(0x74), // wrench calls this lightColor, not sure if different from the color field in rac1
-                directionalLights: view.getNibbleArray(0x80, 2),
+                lightSelector: readInstanceDirectionLightSelector(view.subview(0x80)),
 
                 _i: i,
                 _occlusionBit: 0, // populated elsewhere
@@ -623,7 +640,7 @@ export function readMobyInstance(gn: GN, view: DataViewExt, i: number): MobyInst
                 skipOcclusionCheck: view.getInt32(0x54),
                 modeBits: view.getInt32(0x58),
                 color: view.getInt32_Rgb(0x5c),
-                directionalLights: view.getNibbleArray(0x68, 2),
+                lightSelector: readInstanceDirectionLightSelector(view.subview(0x68)),
 
                 _i: i,
                 _occlusionBit: 0, // populated elsewhere
@@ -643,7 +660,7 @@ export interface ShrubInstance {
     drawDistance: number,
     matrix: mat4,
     color: { r: number, g: number, b: number },
-    directionalLights: number[],
+    lightSelector: DirectionLightSelector,
 
     // pre-transformed matrix
     _matrixPretransformed: mat4,
@@ -668,7 +685,7 @@ export function readShrubInstance(view: DataViewExt): ShrubInstance {
         drawDistance: view.getFloat32(0x4),
         matrix,
         color: view.getInt32_Rgb(0x50),
-        directionalLights: view.getNibbleArray(0x60, 2),
+        lightSelector: readDirectionLightSelector(view.subview(0x60)),
 
         _matrixPretransformed,
         _positionPretransformed,
@@ -775,20 +792,65 @@ export function readDirectionLightInstance(view: DataViewExt): DirectionLightIns
 }
 
 export interface PointLightInstance {
-    position: Float32Array,
+    position: { x: number, y: number, z: number },
     radius: number,
     color: { r: number, g: number, b: number },
 }
-export const SIZEOF_POINT_LIGHT_INSTANCE = 0x20;
-export function readPointLightInstance(view: DataViewExt): PointLightInstance {
-    /*
-    https://github.com/chaoticgd/wrench/blob/d80ca3a0b70c756c90f727faafc5513bd14def60/src/instancemgr/gameplay_impl_env.inl#L628
-    */
-    return {
-        position: view.getVec3Slice(0x0),
-        radius: view.getFloat32(0xc),
-        color: view.getUint8_Rgb(0x10),
+export const SIZEOF_POINT_LIGHT_INSTANCE = (gn: GN) => {
+    switch (gn) {
+        case 1:
+            return 0x20;
+        case 2:
+        case 3:
+        case 4:
+            return 0x10;
     }
+}
+export function readPointLightInstance(gn: GN, view: DataViewExt): PointLightInstance {
+    switch (gn) {
+        case 1:
+            return {
+                position: view.getFloat32_Xyz(0x0),
+                radius: view.getFloat32(0xc),
+                color: view.getUint8_Rgb(0x10),
+            };
+        case 2:
+        case 3:
+            const positionScale = 1 / 64;
+            const colorScale = 1 / 0xFFFF;
+            return {
+                position: {
+                    x: view.getUint16(0x0) * positionScale,
+                    y: view.getUint16(0x2) * positionScale,
+                    z: view.getUint16(0x4) * positionScale,
+                },
+                radius: view.getUint16(0x6) * positionScale,
+                color: {
+                    r: view.getUint16(0x8) * colorScale,
+                    g: view.getUint16(0xa) * colorScale,
+                    b: view.getUint16(0xc) * colorScale,
+                },
+            };
+        case 4:
+            assert(false);
+    }
+}
+
+export function readPointLightBlock(gn: GN, view: DataViewExt) {
+    /*
+    struct PointLightBlock {
+        int32 count;
+        int32 pad[3];
+        PointLightInstance instances[count];
+    }
+    */
+    const count = view.getInt32(0x0);
+    const dataStart = 0x10 + (gn >= 2 ? 0x800 : 0);
+    if (gn === 4) {
+        // unknown
+        return [];
+    }
+    return view.subdivide(dataStart, count, SIZEOF_POINT_LIGHT_INSTANCE(gn)).map(view => readPointLightInstance(gn, view));
 }
 
 export interface PathBlockHeader {

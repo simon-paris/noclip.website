@@ -18,13 +18,14 @@ import { ShrubGeometry, ShrubRenderer } from "./render-shrub";
 import { colorNewFromRGBA, OpaqueBlack, White } from "../Color";
 import { SkyAnimationState, SkyGeometry, SkyRenderer } from "./render-sky";
 import { RatchetShaderLib } from "./shader-lib";
-import { createGfxTextureForPaletteTexture, createTextureAtlases, createTieRgbaTexture_Rac1, createTieRgbaTexture_Rac234, TextureAtlases } from "./textures";
+import { createGfxTextureForPaletteTexture, createTextureAtlases, createTieNormalsTexture, createTieRgbaTexture_Rac1, createTieRgbaTexture_Rac234, TextureAtlases } from "./textures";
 import { CollisionGeometry, CollisionRenderer } from "./render-collision";
 import { IS_DEVELOPMENT } from "../BuildVersion";
 import { MobyGeometry, MobyRenderer } from "./render-moby";
 import { nArray } from "../util";
 import { AABB } from "../Geometry";
 import { DebugDrawFlags } from "../gfx/helpers/DebugDraw";
+import { renderWaterMeshes_Rac1 } from "./hardcoded";
 
 const pathBase = (gn: GN) => `RatchetAndClank${gn}`;
 
@@ -69,7 +70,9 @@ class RatchetAndClankScene implements SceneGfx {
     private textures: {
         textureAtlases: TextureAtlases | null,
         tieRgbaTexture: GfxTexture | null,
+        tieNormalsTexture: GfxTexture | null,
         skyTextures: GfxTexture[],
+        debugTextures: GfxTexture[],
     };
 
     private geometries: {
@@ -112,6 +115,7 @@ class RatchetAndClankScene implements SceneGfx {
             levelCoreHeader: null,
             gameplayHeader: null,
             missionGameplayHeader: null,
+            overlaySections: null,
             gsTable: null,
             levelSettings: null,
             occlusion: null,
@@ -174,7 +178,9 @@ class RatchetAndClankScene implements SceneGfx {
         this.textures = {
             textureAtlases: null,
             tieRgbaTexture: null,
+            tieNormalsTexture: null,
             skyTextures: [],
+            debugTextures: [],
         }
 
         this.geometries = {
@@ -209,7 +215,7 @@ class RatchetAndClankScene implements SceneGfx {
         } else {
             // load normal level
             this.filePromises = loadFilesFromNetwork(sceneContext.dataFetcher, this.resourceBasePath, this.gn, this.chunkNumber, this.missionNumber);
-            this.loadingPromise = load(this.gn, this.chunkNumber, this.levelResources, this.filePromises)
+            this.loadingPromise = load(this.gn, this.levelNumber, this.chunkNumber, this.levelResources, this.filePromises)
         }
 
         this.loadingPromise.then(() => {
@@ -318,6 +324,12 @@ class RatchetAndClankScene implements SceneGfx {
         return skyGeometry;
     }
 
+    private addDebugTexture = (gfxTexture: GfxTexture): void => {
+        this.textures.debugTextures.push(gfxTexture);
+        this.textureHolder.viewerTextures.push({ gfxTexture });
+        this.textureHolder.onnewtextures();
+    }
+
     getOrCreateSkyTextures(): GfxTexture[] | null {
         const existing = this.textures.skyTextures;
         if (existing.length > 0) return existing;
@@ -338,26 +350,33 @@ class RatchetAndClankScene implements SceneGfx {
         return gfxTextures;
     }
 
-    getOrCreateTieRgbaTexture(): GfxTexture | null {
+    getOrCreateTieInstanceTextures() {
         const existing = this.textures.tieRgbaTexture;
-        if (existing) return existing;
+        if (existing) return {
+            tieRgbaTexture: this.textures.tieRgbaTexture,
+            tieNormalsTexture: this.textures.tieNormalsTexture,
+        };
 
         if (this.gn === 1) {
-            const { tieInstances } = this.levelResources;
+            const { tieInstances, tieClasses } = this.levelResources;
             if (!tieInstances) return null;
+            if (!tieClasses) return null;
 
-            this.textures.tieRgbaTexture = createTieRgbaTexture_Rac1(this.renderHelper.device, tieInstances);
-            this.textureHolder.viewerTextures.push({ gfxTexture: this.textures.tieRgbaTexture });
-            this.textureHolder.onnewtextures();
-            return this.textures.tieRgbaTexture;
+            this.textures.tieNormalsTexture = createTieNormalsTexture(this.gn, this.renderHelper.device, tieClasses);
+            this.textures.tieRgbaTexture = createTieRgbaTexture_Rac1(this.renderHelper.device, tieInstances, this.addDebugTexture);
         } else {
             const { tieClasses, tieAmbientRgbas, tieInstances } = this.levelResources;
             if (!tieInstances) return null;
             if (!tieClasses) return null;
             if (!tieAmbientRgbas) return null;
 
-            this.textures.tieRgbaTexture = createTieRgbaTexture_Rac234(this.renderHelper.device, tieInstances, tieClasses, tieAmbientRgbas, this.levelResources.directionLights ?? []);
-            return this.textures.tieRgbaTexture;
+            this.textures.tieNormalsTexture = createTieNormalsTexture(this.gn, this.renderHelper.device, tieClasses);
+            this.textures.tieRgbaTexture = createTieRgbaTexture_Rac234(this.renderHelper.device, tieInstances, tieClasses, tieAmbientRgbas, this.addDebugTexture);
+        }
+
+        return {
+            tieRgbaTexture: this.textures.tieRgbaTexture,
+            tieNormalsTexture: this.textures.tieNormalsTexture,
         }
     }
 
@@ -366,7 +385,7 @@ class RatchetAndClankScene implements SceneGfx {
         if (!tfragTextures || !tieTextures || !mobyTextures || !shrubTextures) return null;
 
         if (!this.textures.textureAtlases) {
-            this.textures.textureAtlases = createTextureAtlases(this.renderHelper.device, tfragTextures, tieTextures, mobyTextures, shrubTextures);
+            this.textures.textureAtlases = createTextureAtlases(this.renderHelper.device, tfragTextures, tieTextures, mobyTextures, shrubTextures, this.addDebugTexture);
         }
         return [
             { gfxTexture: this.textures.textureAtlases.gfxTextures[16], gfxSampler: this.samplerGeneral },
@@ -524,10 +543,14 @@ class RatchetAndClankScene implements SceneGfx {
         }
 
         // ties
-        const tieRgbaTexture = this.getOrCreateTieRgbaTexture();
+        const tieInstanceTextures = this.getOrCreateTieInstanceTextures();
         const tieInstancesByOClass = this.levelResources.tieInstancesByOClass;
-        if (this.settings.enableTies && tieInstancesByOClass && atlasTextures && tieRgbaTexture) {
-            const tieTextureMappings = [...atlasTextures, { gfxTexture: tieRgbaTexture, gfxSampler: this.samplerGeneral }];
+        if (this.settings.enableTies && tieInstancesByOClass && atlasTextures && tieInstanceTextures) {
+            const tieTextureMappings: GfxSamplerBinding[] = [
+                ...atlasTextures,
+                { gfxTexture: tieInstanceTextures.tieRgbaTexture, gfxSampler: this.samplerGeneral },
+                { gfxTexture: tieInstanceTextures.tieNormalsTexture, gfxSampler: this.samplerGeneral }
+            ];
             for (let i = 0; i < tieInstancesByOClass.length; i++) {
                 const tieInstances = tieInstancesByOClass[i];
                 const oClass = tieInstances[0].oClass;
@@ -563,6 +586,10 @@ class RatchetAndClankScene implements SceneGfx {
                 if (!mobyGeometryArr) continue;
                 this.renderers.moby.renderMoby(this.renderInstList, mobyGeometryArr, mobyClass, mobyInstances, atlasTextures, cameraPosition, this.occlusionChecker, cameraFrustum, lodSetting, lodBias, this.settings.enableBangles, this.settings.mobyMissionFlags, this.instanceDataBuffer);
             }
+        }
+
+        if (this.levelResources.overlaySections) {
+            renderWaterMeshes_Rac1(this.levelNumber, this.levelResources.overlaySections, this.renderHelper);
         }
 
         // shrubs
@@ -860,16 +887,18 @@ class RatchetAndClankScene implements SceneGfx {
             geometry?.destroy(device);
         }
 
-        const allTextures = [
+        const allTextures = new Set<GfxTexture | null>([
             ...(this.textures.textureAtlases ? Object.values(this.textures.textureAtlases?.gfxTextures) : []),
             this.textures.tieRgbaTexture,
+            this.textures.tieNormalsTexture,
             ...this.textures.skyTextures,
-        ]
-        for (const texture of allTextures) {
+            ...this.textures.debugTextures,
+        ]);
+        allTextures.forEach((texture) => {
             if (texture) {
                 device.destroyTexture(texture);
             }
-        }
+        });
 
         this.instanceDataBuffer.destroy();
 
