@@ -56,7 +56,7 @@ class RatchetAndClankScene implements SceneGfx {
         enableTfrag: true,
         enableTies: true,
         enableMobys: true,
-        enableBangles: false, // disable bangles by default, there are two use cases for bangles - 1: bits that detach when shot, 2: damaged copy of the mesh. I'd like to have it enabled for the first but not the second but I can't tell them apart.
+        enableBangles: false, // disable bangles by default. I'd like to enable them for enemies but disable them on descructable objects but I can't tell them apart.
         enableShrubs: true,
         enableSky: true,
         enableFog: true,
@@ -133,7 +133,6 @@ class RatchetAndClankScene implements SceneGfx {
             shapesCylinders: null,
             shapesPills: null,
             directionLights: null,
-            pointLights: null,
             collisionGetter: null,
             tfrags: null,
             tfragTextures: null,

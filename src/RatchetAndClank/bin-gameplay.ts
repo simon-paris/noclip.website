@@ -24,7 +24,6 @@ export type GameplayHeader = {
     shapesPills: number,
     paths: number,
     grindPaths: number,
-    pointLightInstances: number,
     occlusionMappings: number,
     tieAmbientRgbas: number, // rac2+ only
 }
@@ -93,7 +92,6 @@ export function readGameplayHeader(gn: GN, view: DataViewExt, artFileView_rac4: 
                 shapesPills: view.getInt32(0x6c),
                 paths: view.getInt32(0x70),
                 grindPaths: view.getInt32(0x74),
-                pointLightInstances: view.getInt32(0x7c),
                 occlusionMappings: view.getInt32(0x8c),
                 tieAmbientRgbas: 0, // not in rac1
             };
@@ -167,7 +165,6 @@ export function readGameplayHeader(gn: GN, view: DataViewExt, artFileView_rac4: 
                 shapesPills: view.getInt32(0x64),
                 paths: view.getInt32(0x78),
                 grindPaths: view.getInt32(0x7c),
-                pointLightInstances: view.getInt32(0x80),
                 occlusionMappings: view.getInt32(0x90),
                 tieAmbientRgbas: view.getInt32(0x94),
             };
@@ -239,8 +236,6 @@ export function readGameplayHeader(gn: GN, view: DataViewExt, artFileView_rac4: 
                 shapesPills: view.getInt32(0x58),
                 paths: view.getInt32(0x5c),
                 grindPaths: view.getInt32(0x60),
-                pointLightInstances: view.getInt32(0x80),
-
                 // in rac4, these belong to the art file instead of gameplay
                 directionLightInstances: artFileView_rac4.getInt32(0x0),
                 tieClasses: artFileView_rac4.getInt32(0x4),
@@ -810,68 +805,6 @@ export function readDirectionLightInstance(view: DataViewExt): DirectionLightIns
     }
 }
 
-export interface PointLightInstance {
-    position: { x: number, y: number, z: number },
-    radius: number,
-    color: { r: number, g: number, b: number },
-}
-export const SIZEOF_POINT_LIGHT_INSTANCE = (gn: GN) => {
-    switch (gn) {
-        case 1:
-            return 0x20;
-        case 2:
-        case 3:
-        case 4:
-            return 0x10;
-    }
-}
-export function readPointLightInstance(gn: GN, view: DataViewExt): PointLightInstance {
-    switch (gn) {
-        case 1:
-            return {
-                position: view.getFloat32_Xyz(0x0),
-                radius: view.getFloat32(0xc),
-                color: view.getUint8_Rgb(0x10),
-            };
-        case 2:
-        case 3:
-            const positionScale = 1 / 64;
-            const colorScale = 1 / 0xFFFF;
-            return {
-                position: {
-                    x: view.getUint16(0x0) * positionScale,
-                    y: view.getUint16(0x2) * positionScale,
-                    z: view.getUint16(0x4) * positionScale,
-                },
-                radius: view.getUint16(0x6) * positionScale,
-                color: {
-                    r: view.getUint16(0x8) * colorScale,
-                    g: view.getUint16(0xa) * colorScale,
-                    b: view.getUint16(0xc) * colorScale,
-                },
-            };
-        case 4:
-            assert(false);
-    }
-}
-
-export function readPointLightBlock(gn: GN, view: DataViewExt) {
-    /*
-    struct PointLightBlock {
-        int32 count;
-        int32 pad[3];
-        PointLightInstance instances[count];
-    }
-    */
-    const count = view.getInt32(0x0);
-    const dataStart = 0x10 + (gn >= 2 ? 0x800 : 0);
-    if (gn === 4) {
-        // unknown
-        return [];
-    }
-    return view.subdivide(dataStart, count, SIZEOF_POINT_LIGHT_INSTANCE(gn)).map(view => readPointLightInstance(gn, view));
-}
-
 export interface PathBlockHeader {
     splineCount: number,
     dataOffset: number,
@@ -957,11 +890,11 @@ export function readSpline(view: DataViewExt): Spline {
     };
 }
 
-export interface GameplayShape {
+export interface Shape {
     matrix: mat4,
     inverseMatrix: mat4,
 }
-export function readShapeArray(view: DataViewExt): GameplayShape[] {
+export function readShapeArray(view: DataViewExt): Shape[] {
     const count = view.getInt32(0x0);
     return view.subdivide(0x10, count, 0x80).map(shapeView => {
         const matrix = shapeView.getMat4Slice(0x0);
@@ -979,13 +912,8 @@ export function readShapeArray(view: DataViewExt): GameplayShape[] {
 }
 
 export type TieAmbientRgbaBlock = {
-    maxCount: number,
     list: {
         tieIndex: number,
-        wordCount: number,
-        baseColor: { r: number, g: number, b: number },
-        colorShift: number,
-        rawColors: Uint16Array,
         ambientRgbas: { r: number, g: number, b: number }[],
     }[]
 };
@@ -1001,7 +929,7 @@ export function readTieAmbientRgbaBlock(view: DataViewExt): TieAmbientRgbaBlock 
         uint16 ambientRgbas[count - 2]; // array of A1BGR5 colors
     }
     */
-    const out: TieAmbientRgbaBlock = { maxCount: 0, list: [] };
+    const out: TieAmbientRgbaBlock = { list: [] };
     while (true) {
         const tieIndex = view.getInt16(0x0);
         if (tieIndex === -1) break;
@@ -1011,13 +939,8 @@ export function readTieAmbientRgbaBlock(view: DataViewExt): TieAmbientRgbaBlock 
         const rawColors = view.subview(0x8, wordCount * 2 - 4);
         out.list.push({
             tieIndex,
-            wordCount,
-            baseColor,
-            colorShift,
-            rawColors: rawColors.getTypedArrayView(Uint16Array),
             ambientRgbas: readTieAmbientRgbaBuffer(rawColors, wordCount - 2, baseColor, colorShift),
         });
-        out.maxCount = Math.max(out.maxCount, wordCount);
         view = view.subview(4 + wordCount * 2);
     }
     return out;

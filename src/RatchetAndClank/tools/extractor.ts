@@ -191,7 +191,6 @@ for (const levelSectors of tableOfContents.levelSectors) {
             shapesCylinders: null,
             shapesPills: null,
             directionLights: null,
-            pointLights: null,
             collisionGetter: null,
             tfrags: null,
             tfragTextures: null,

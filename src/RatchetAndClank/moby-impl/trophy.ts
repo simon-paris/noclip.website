@@ -16,7 +16,7 @@ export class Trophy implements MobyImpl {
             this.mobyInstance.rotation.z = Math.random() * 2 * Math.PI;
         } else {
             this.mobyInstance.rotation.y = Math.PI / 2;
-            // TODO: collision snap
+            this.mobyInstance.position.z += 0.36;
             updateTransform(this.mobyInstance);
         }
     }

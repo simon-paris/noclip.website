@@ -247,9 +247,9 @@ export class OcclusionChecker {
      * }
      * ```
      */
-    public tfragMappings: Int32Array;
-    public tieMappings: Int32Array;
-    public mobyMappings: Int32Array;
+    private tfragMappings: Int32Array;
+    private tieMappings: Int32Array;
+    private mobyMappings: Int32Array;
 
     constructor(private occlusionGrid: Occlusion, private occlusionMappings: OcclusionMappings) {
         this.tfragMappings = occlusionMappings.tfragMappings;

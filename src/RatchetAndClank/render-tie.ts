@@ -3,7 +3,7 @@ import { Frustum } from "../Geometry";
 import { createBufferFromData } from "../gfx/helpers/BufferHelpers";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
 import { fillMatrix4x3, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
-import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice, GfxFormat, GfxInputLayout, GfxProgram, GfxSamplerBinding, GfxSamplerFormatKind, GfxTextureDimension, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
+import { GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxDevice, GfxFormat, GfxInputLayout, GfxProgram, GfxSamplerBinding, GfxSamplerFormatKind, GfxTextureDimension, GfxVertexAttributeDescriptor, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { GfxRenderInstList } from "../gfx/render/GfxRenderInstManager";
@@ -58,7 +58,7 @@ layout(binding = 3) uniform sampler2DArray u_Texture_128;
 layout(binding = 4) uniform sampler2DArray u_Texture_256;
 
 layout(binding = 5) uniform sampler2D u_AmbientRgbaTexture;
-layout(binding = 6) uniform sampler2D u_TieNormalsTexture; // rac1 - contains x/y/z normals, rac234 - contains weird wrong-axis azimuth/elevation values
+layout(binding = 6) uniform sampler2D u_TieNormalsTexture; // rac1 - contains x/y/z normals, rac234 - contains azimuth/elevation
 
 `;
 
@@ -129,7 +129,6 @@ void main() {
 
         colors[i] = commonVertexLighting(rgba, normal, a_InstanceLightSelector);
     }
-    // mix colors based on lodMorphFactor
     v_Rgba = mix(colors[0], mix(colors[1], colors[2], 0.5), lodMorphFactor);
 
 #else
@@ -204,9 +203,8 @@ void main() {
 
 }
 
-const NO_REMAP_SOURCE: [number, number, number, number] = [-1, -1, -1, -1];
-// no remap entry for this column; shader renders magenta
-const MISSING_REMAP_SOURCE: [number, number, number, number] = [-2, -2, -2, -2];
+const REMAP_ZERO = -1;
+const REMAP_MISSING = -2;
 
 export class TieGeometry {
     public inputLayout: GfxInputLayout;
@@ -215,50 +213,43 @@ export class TieGeometry {
     private vertexCount: number;
 
     constructor(private cache: GfxRenderCache, private gn: GN, private tieOClass: number, private tie: TieClass, private lodLevel: number, private textureIndices: number[], private textureAtlases: TextureAtlases) {
+        let vertexAttributes: GfxVertexAttributeDescriptor[];
         if (gn === 1) {
-            this.inputLayout = cache.createInputLayout({
-                vertexAttributeDescriptors: [
-                    { location: TieProgram.a_Position, format: GfxFormat.F32_RGB, bufferByteOffset: 0, bufferIndex: 0, },
-                    { location: TieProgram.a_LodMorphOffset, format: GfxFormat.F32_RGB, bufferByteOffset: 3 * 4, bufferIndex: 0, },
-                    { location: TieProgram.a_ExtraData, format: GfxFormat.F32_RGB, bufferByteOffset: 6 * 4, bufferIndex: 0, },
-                    { location: TieProgram.a_ST, format: GfxFormat.F32_RG, bufferByteOffset: 9 * 4, bufferIndex: 0, },
-                    { location: TieProgram.a_RgbaIndices, format: GfxFormat.F32_RGB, bufferByteOffset: 11 * 4, bufferIndex: 0, },
-                    { location: TieProgram.a_NormalIndices, format: GfxFormat.F32_RGB, bufferByteOffset: 14 * 4, bufferIndex: 0, },
-                    { location: TieProgram.a_InstanceTransform0, format: GfxFormat.F32_RGBA, bufferByteOffset: 0 * 4, bufferIndex: 1, },
-                    { location: TieProgram.a_InstanceTransform1, format: GfxFormat.F32_RGBA, bufferByteOffset: 4 * 4, bufferIndex: 1, },
-                    { location: TieProgram.a_InstanceTransform2, format: GfxFormat.F32_RGBA, bufferByteOffset: 8 * 4, bufferIndex: 1, },
-                    { location: TieProgram.a_InstanceLightSelector, format: GfxFormat.F32_RGB, bufferByteOffset: 12 * 4, bufferIndex: 1, },
-                    { location: TieProgram.a_InstanceExtraData, format: GfxFormat.F32_RGB, bufferByteOffset: 16 * 4, bufferIndex: 1, },
-                    { location: TieProgram.a_InstanceExtraData2, format: GfxFormat.F32_RG, bufferByteOffset: 19 * 4, bufferIndex: 1, },
-                ],
-                vertexBufferDescriptors: [
-                    { byteStride: TieProgram.elementsPerVertex(this.gn) * 4, frequency: GfxVertexBufferFrequency.PerVertex, },
-                    { byteStride: TieProgram.elementsPerInstance * 4, frequency: GfxVertexBufferFrequency.PerInstance, },
-                ],
-                indexBufferFormat: null,
-            });
+            vertexAttributes = [
+                { location: TieProgram.a_Position, format: GfxFormat.F32_RGB, bufferByteOffset: 0, bufferIndex: 0, },
+                { location: TieProgram.a_LodMorphOffset, format: GfxFormat.F32_RGB, bufferByteOffset: 3 * 4, bufferIndex: 0, },
+                { location: TieProgram.a_ExtraData, format: GfxFormat.F32_RGB, bufferByteOffset: 6 * 4, bufferIndex: 0, },
+                { location: TieProgram.a_ST, format: GfxFormat.F32_RG, bufferByteOffset: 9 * 4, bufferIndex: 0, },
+                { location: TieProgram.a_RgbaIndices, format: GfxFormat.F32_RGB, bufferByteOffset: 11 * 4, bufferIndex: 0, },
+                { location: TieProgram.a_NormalIndices, format: GfxFormat.F32_RGB, bufferByteOffset: 14 * 4, bufferIndex: 0, },
+            ];
         } else {
-            this.inputLayout = cache.createInputLayout({
-                vertexAttributeDescriptors: [
-                    { location: TieProgram.a_Position, format: GfxFormat.F32_RGB, bufferByteOffset: 0, bufferIndex: 0, },
-                    { location: TieProgram.a_LodMorphOffset, format: GfxFormat.F32_RGB, bufferByteOffset: 3 * 4, bufferIndex: 0, },
-                    { location: TieProgram.a_ExtraData, format: GfxFormat.F32_RGB, bufferByteOffset: 6 * 4, bufferIndex: 0, },
-                    { location: TieProgram.a_ST, format: GfxFormat.F32_RG, bufferByteOffset: 9 * 4, bufferIndex: 0, },
-                    { location: TieProgram.a_RemapSources, format: GfxFormat.F32_RGBA, bufferByteOffset: 11 * 4, bufferIndex: 0, },
-                    { location: TieProgram.a_InstanceTransform0, format: GfxFormat.F32_RGBA, bufferByteOffset: 0 * 4, bufferIndex: 1, },
-                    { location: TieProgram.a_InstanceTransform1, format: GfxFormat.F32_RGBA, bufferByteOffset: 4 * 4, bufferIndex: 1, },
-                    { location: TieProgram.a_InstanceTransform2, format: GfxFormat.F32_RGBA, bufferByteOffset: 8 * 4, bufferIndex: 1, },
-                    { location: TieProgram.a_InstanceLightSelector, format: GfxFormat.F32_RGB, bufferByteOffset: 12 * 4, bufferIndex: 1, },
-                    { location: TieProgram.a_InstanceExtraData, format: GfxFormat.F32_RGB, bufferByteOffset: 16 * 4, bufferIndex: 1, },
-                    { location: TieProgram.a_InstanceExtraData2, format: GfxFormat.F32_RG, bufferByteOffset: 19 * 4, bufferIndex: 1, },
-                ],
-                vertexBufferDescriptors: [
-                    { byteStride: TieProgram.elementsPerVertex(this.gn) * 4, frequency: GfxVertexBufferFrequency.PerVertex, },
-                    { byteStride: TieProgram.elementsPerInstance * 4, frequency: GfxVertexBufferFrequency.PerInstance, },
-                ],
-                indexBufferFormat: null,
-            });
+            vertexAttributes = [
+                { location: TieProgram.a_Position, format: GfxFormat.F32_RGB, bufferByteOffset: 0, bufferIndex: 0, },
+                { location: TieProgram.a_LodMorphOffset, format: GfxFormat.F32_RGB, bufferByteOffset: 3 * 4, bufferIndex: 0, },
+                { location: TieProgram.a_ExtraData, format: GfxFormat.F32_RGB, bufferByteOffset: 6 * 4, bufferIndex: 0, },
+                { location: TieProgram.a_ST, format: GfxFormat.F32_RG, bufferByteOffset: 9 * 4, bufferIndex: 0, },
+                { location: TieProgram.a_RemapSources, format: GfxFormat.F32_RGBA, bufferByteOffset: 11 * 4, bufferIndex: 0, },
+            ];
         }
+
+        this.inputLayout = cache.createInputLayout({
+            vertexAttributeDescriptors: [
+                ...vertexAttributes,
+                { location: TieProgram.a_InstanceTransform0, format: GfxFormat.F32_RGBA, bufferByteOffset: 0 * 4, bufferIndex: 1, },
+                { location: TieProgram.a_InstanceTransform1, format: GfxFormat.F32_RGBA, bufferByteOffset: 4 * 4, bufferIndex: 1, },
+                { location: TieProgram.a_InstanceTransform2, format: GfxFormat.F32_RGBA, bufferByteOffset: 8 * 4, bufferIndex: 1, },
+                { location: TieProgram.a_InstanceLightSelector, format: GfxFormat.F32_RGB, bufferByteOffset: 12 * 4, bufferIndex: 1, },
+                { location: TieProgram.a_InstanceExtraData, format: GfxFormat.F32_RGB, bufferByteOffset: 16 * 4, bufferIndex: 1, },
+                { location: TieProgram.a_InstanceExtraData2, format: GfxFormat.F32_RG, bufferByteOffset: 19 * 4, bufferIndex: 1, },
+            ],
+            vertexBufferDescriptors: [
+                { byteStride: TieProgram.elementsPerVertex(this.gn) * 4, frequency: GfxVertexBufferFrequency.PerVertex, },
+                { byteStride: TieProgram.elementsPerInstance * 4, frequency: GfxVertexBufferFrequency.PerInstance, },
+            ],
+            indexBufferFormat: null,
+        });
+
     }
 
     public getOrCreateVertexBuffer() {
@@ -282,8 +273,9 @@ export class TieGeometry {
 
         const positionScale = tie.scale * (1 / 1024);
         const texcoordScale = 1 / 4096;
-        let vertexCount = 0;
 
+        // count verts first
+        let vertexCount = 0;
         for (let packetIndex = 0; packetIndex < tie.packets[lod].length; packetIndex++) {
             const packet = tie.packets[lod][packetIndex];
             for (let i = 0; i < packet.body.commandBuffer.length; i++) {
@@ -298,10 +290,10 @@ export class TieGeometry {
             }
         }
 
+        const remaps = this.untangleRemaps();
         const elementsPerVertex = TieProgram.elementsPerVertex(this.gn);
         const vertexArrayBuffer = new Float32Array(vertexCount * elementsPerVertex);
         let vertexPtr = 0;
-        const remapSources = this.buildRemapSources();
         let currentMaterial: { texture: number, clamp: number } | undefined;
         let globalVertexIndex = 0;
 
@@ -340,11 +332,6 @@ export class TieGeometry {
                         assert(expectedVertsInStrip > 0);
                         expectedVertsInStrip--;
 
-                        if (this.gn >= 2) {
-                            // vert.rgbaIndices = [globalVertexIndex, globalVertexIndex, globalVertexIndex];
-                            vert.rgbaIndices = [vert.writeOrder, vert.writeOrder, vert.writeOrder];
-                        }
-
                         tri[0] = tri[1];
                         tri[1] = tri[2];
                         tri[2] = vert;
@@ -381,7 +368,7 @@ export class TieGeometry {
                                     vertexArrayBuffer[vertexPtr++] = normalIndices[1];
                                     vertexArrayBuffer[vertexPtr++] = normalIndices[2];
                                 } else {
-                                    const remapSource = remapSources.get(writeOrder) ?? MISSING_REMAP_SOURCE;
+                                    const remapSource = remaps[writeOrder] ?? REMAP_MISSING;
                                     vertexArrayBuffer[vertexPtr++] = remapSource[0];
                                     vertexArrayBuffer[vertexPtr++] = remapSource[1];
                                     vertexArrayBuffer[vertexPtr++] = remapSource[2];
@@ -404,28 +391,30 @@ export class TieGeometry {
         return { vertexArrayBuffer, vertexCount };
     }
 
-    private buildRemapSources() {
-        // keyed by output column (byte offset / 4), matching the vertex writeOrder
-        const sources = new Map<number, [number, number, number, number]>();
-        const rgbaRemaps = this.tie.rgbaRemaps?.[this.lodLevel];
-        if (!rgbaRemaps) return sources;
+    private untangleRemaps() {
+        // order the remaps by their destination slot
+        const out: [number, number, number, number][] = [];
+        assert(!!this.tie.rgbaRemaps);
+        const rgbaRemaps = this.tie.rgbaRemaps[this.lodLevel];
+        assert(!!rgbaRemaps);
 
         for (let packetIndex = 0; packetIndex < rgbaRemaps.packets.length; packetIndex++) {
             const packet = rgbaRemaps.packets[packetIndex];
             for (let remapIndex = 0; remapIndex < packet.remaps.length; remapIndex++) {
                 const remap = packet.remaps[remapIndex];
-                const column = (packet.outputBase + remap.dest) / 4;
+                const destAddr = packet.outputBase + remap.dest;
+                const destSlot = destAddr / 4;
                 if (remap.kind === RgbaRemapKind.Zero) {
-                    sources.set(column, NO_REMAP_SOURCE);
+                    out[destSlot] = [REMAP_ZERO, REMAP_ZERO, REMAP_ZERO, REMAP_ZERO];
                 } else {
                     assert(Array.isArray(remap.src));
                     const src = remap.src;
-                    sources.set(column, [src[0] / 4, src[1] / 4, src[2] / 4, src[3] / 4]);
+                    out[destSlot] = [src[0] / 4, src[1] / 4, src[2] / 4, src[3] / 4];
                 }
             }
         }
 
-        return sources;
+        return out;
     }
 
     private fixTexcoords(v0: { s: number, t: number }, v1: { s: number, t: number }, v2: { s: number, t: number }) {

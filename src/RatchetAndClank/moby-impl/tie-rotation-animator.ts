@@ -10,7 +10,7 @@ export class TieRotationAnimator implements MobyImpl {
         // both unknowns are group indices
         unknown4: number;
         unknown8: number;
-        angularVelocity: { x: number; y: number; z: number; };
+        angularVelocity: { x: number; y: number; z: number; }; // in degrees per second
         individualPivots: number;
     };
 
@@ -32,12 +32,10 @@ export class TieRotationAnimator implements MobyImpl {
         if (this.pvars.groupId === -1) return;
         const group = this.resources.tieGroups.groups[this.pvars.groupId];
 
-        // Angular velocity is in degrees per second
-        const elapsedAngle = updateKit.dt / 1000;
         const r = mat4.fromQuat(mat4.create(), quat.fromEuler(quat.create(),
-            this.pvars.angularVelocity.x * elapsedAngle,
-            this.pvars.angularVelocity.y * elapsedAngle,
-            this.pvars.angularVelocity.z * elapsedAngle
+            this.pvars.angularVelocity.x * updateKit.dt / 1000,
+            this.pvars.angularVelocity.y * updateKit.dt / 1000,
+            this.pvars.angularVelocity.z * updateKit.dt / 1000
         ));
 
         for (let j = 0; j < group.members.length; j++) {

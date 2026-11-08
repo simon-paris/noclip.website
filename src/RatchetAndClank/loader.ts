@@ -1,11 +1,11 @@
-import { InstanceGroupBlock, MissionGameplayHeader, OcclusionMappings, Pvar, readClassPositionBlock, readDirectionLightInstance, readGameplayHeader, readGrindPathBlock, readInstanceBlock, readInstanceGroupBlock, readLevelSettings, readMissionGameplayHeader, readMobyInstance, readOcclusionMappings, readPathBlock, readPointLightBlock, readPointLightInstance, readPvars, readShapeArray, readShrubInstance, readTieAmbientRgbaBlock, readTieInstance, ShrubInstance, SIZEOF_DIRECTION_LIGHT_INSTANCE, SIZEOF_MOBY_INSTANCE, SIZEOF_POINT_LIGHT_INSTANCE, SIZEOF_SHRUB_INSTANCE, SIZEOF_TIE_INSTANCE, TieAmbientRgbaBlock, TieInstance } from "./bin-gameplay";
+import { InstanceGroupBlock, MissionGameplayHeader, OcclusionMappings, Pvar, readClassPositionBlock, readDirectionLightInstance, readGameplayHeader, readGrindPathBlock, readInstanceBlock, readInstanceGroupBlock, readLevelSettings, readMissionGameplayHeader, readMobyInstance, readOcclusionMappings, readPathBlock, readPvars, readShapeArray, readShrubInstance, readTieAmbientRgbaBlock, readTieInstance, ShrubInstance, SIZEOF_DIRECTION_LIGHT_INSTANCE, SIZEOF_MOBY_INSTANCE, SIZEOF_SHRUB_INSTANCE, SIZEOF_TIE_INSTANCE, TieAmbientRgbaBlock, TieInstance } from "./bin-gameplay";
 import { DataViewExt } from "./DataViewExt";
 import { GsRamTableEntry, MobyClass, Occlusion, readCollision, readGsRamTableEntry, readMobyClass, readOcclusion, readShrubClass, readSky, readTfrag, readTfragBlockHeader, readTfragHeader, readTieClass, ShrubClass, SIZEOF_GS_RAM_TABLE_ENTRY, SIZEOF_TFRAG_HEADER, TieClass } from "./bin-core";
 import { filterInstancesByChunkPlane, filterMobyInstancesByChunkPlane, GN, makeClassOClassMap, makeInstanceOClassMap as makeInstancesByOClass, makeTextureIndicesByOClassMap, populateMobyOcclusionBits, populateTieOcclusionBits } from "./utils";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { readTexture_Sky, readTexture_Regular, readTexture_Fx } from "./textures";
 import { ClassEntry, FxTextureEntry, readClassEntry, readFxTextureEntry, readLevelCoreHeader, readTextureEntry, readTitleHeader, SIZEOF_MOBY_CLASS_ENTRY, SIZEOF_SHRUB_CLASS_ENTRY, SIZEOF_TEXTURE_ENTRY, SIZEOF_TIE_CLASS_ENTRY, TextureEntry } from "./bin-index";
-import { DirectionLightInstance, GameplayHeader, GameplayShape, LevelSettings, MobyInstance, PointLightInstance, Spline } from "./bin-gameplay";
+import { DirectionLightInstance, GameplayHeader, Shape, LevelSettings, MobyInstance, Spline } from "./bin-gameplay";
 import { PaletteTexture } from "./textures";
 import { Collision, Sky, Tfrag } from "./bin-core";
 import { LevelCoreHeader } from "./bin-index";
@@ -31,12 +31,11 @@ export interface LevelResources {
     occlusionMappings: OcclusionMappings | null;
     paths: Spline[] | null,
     grindPaths: Spline[] | null,
-    shapesCuboids: GameplayShape[] | null,
-    shapesSpheres: GameplayShape[] | null,
-    shapesCylinders: GameplayShape[] | null,
-    shapesPills: GameplayShape[] | null,
+    shapesCuboids: Shape[] | null,
+    shapesSpheres: Shape[] | null,
+    shapesCylinders: Shape[] | null,
+    shapesPills: Shape[] | null,
     directionLights: DirectionLightInstance[] | null,
-    pointLights: PointLightInstance[] | null,
     collisionGetter: (() => Collision) | null,
 
     tfrags: Tfrag[] | null,
@@ -127,10 +126,11 @@ export interface FilePromises {
     gameplayMissionFilePromise: Promise<DataViewExt> | null,
     coreIndexFilePromise: Promise<DataViewExt>,
     gsRamFilePromise: Promise<DataViewExt>,
-    overlayFilePromise: Promise<DataViewExt>,
+    overlayFilePromise: Promise<DataViewExt> | null,
     chunkTfragFilePromise: Promise<DataViewExt> | null,
     chunkCollisionFilePromise: Promise<DataViewExt> | null,
 }
+
 export function loadFilesFromNetwork(dataFetcher: DataFetcher, basePath: string, gn: GN, chunkNumber: number | null, missionNumber: number | null): FilePromises {
     // load binary files
     return {
@@ -141,16 +141,18 @@ export function loadFilesFromNetwork(dataFetcher: DataFetcher, basePath: string,
         gameplayMissionFilePromise: missionNumber !== null ? toDataViewExt(dataFetcher.fetchData(`${basePath}_mission_${missionNumber}_gameplay.bin`)) : null,
         coreIndexFilePromise: toDataViewExt(dataFetcher.fetchData(`${basePath}_index.bin`)),
         gsRamFilePromise: toDataViewExt(dataFetcher.fetchData(`${basePath}_gs.bin`)),
-        overlayFilePromise: toDataViewExt(dataFetcher.fetchData(`${basePath}_overlay.bin`)),
+        overlayFilePromise: gn === 1 ? toDataViewExt(dataFetcher.fetchData(`${basePath}_overlay.bin`)) : null, // overlay only used in rac1 for now
         chunkTfragFilePromise: chunkNumber !== null ? decompress(toDataViewExt(dataFetcher.fetchData(`${basePath}_${chunkNumber}_tfrag.wad`))) : null,
         chunkCollisionFilePromise: chunkNumber !== null ? decompress(toDataViewExt(dataFetcher.fetchData(`${basePath}_${chunkNumber}_collision.wad`))) : null,
     }
 }
+
 export function loadMissionFileFromNetworkOnly(dataFetcher: DataFetcher, basePath: string, gn: GN, missionNumber: number | null): Pick<FilePromises, "gameplayMissionFilePromise"> {
     return {
         gameplayMissionFilePromise: missionNumber !== null ? toDataViewExt(dataFetcher.fetchData(`${basePath}_mission_${missionNumber}_gameplay.bin`)) : null,
     }
 }
+
 export function loadTitleFileFromNetwork(dataFetcher: DataFetcher, basePath: string): { titleFilePromise: Promise<DataViewExt> } {
     return {
         titleFilePromise: decompress(toDataViewExt(dataFetcher.fetchData(`${basePath}.wad`))),
@@ -186,7 +188,6 @@ export function load(gn: GN, levelNumber: number, filterChunk: number | null, ou
         loadShapeData(out, gameplayFilePromise, gameplayHeaderPromise),
         loadPathData(gn, out, gameplayFilePromise, gameplayHeaderPromise),
         loadDirectionLights(gn, out, gameplayFilePromise, gameplayArtFilePromise, gameplayHeaderPromise),
-        loadPointLights(gn, out, gameplayFilePromise, gameplayHeaderPromise),
         occlusionPromise,
         loadTieAndShrubInstanceData(gn, out, filterChunk, gameplayFilePromise, gameplayArtFilePromise, gameplayHeaderPromise, levelSettingsPromise, occlusionMappingsPromise),
         mobyInstanceDataMainPromise,
@@ -235,7 +236,6 @@ export async function load_Rac1TitleLevel(out: LevelResources, titleFilePromise:
         loadTextureData(gn, out, coreDataFilePromise, gsRamFilePromise, indexDataPromise),
         loadSkyData(gn, -1, out, coreDataFilePromise, indexDataPromise),
         loadDirectionLights(gn, out, gameplayFilePromise, null, gameplayHeaderPromise),
-        loadPointLights(gn, out, gameplayFilePromise, gameplayHeaderPromise),
         loadTieAndShrubInstanceData(gn, out, null, gameplayFilePromise, null, gameplayHeaderPromise, levelSettingsPromise, noOcclusionMappingsPromise),
         loadMobyInstanceData_Gameplay(gn, out, null, gameplayFilePromise, gameplayHeaderPromise, levelSettingsPromise, noOcclusionMappingsPromise),
     ]);
@@ -514,12 +514,6 @@ async function loadDirectionLights(gn: GN, out: LevelResources, gameplayFileProm
     }
 
     out.directionLights = readInstanceBlock(srcFile.subview(gameplayHeader.directionLightInstances), SIZEOF_DIRECTION_LIGHT_INSTANCE, readDirectionLightInstance);
-}
-
-async function loadPointLights(gn: GN, out: LevelResources, gameplayFilePromise: Promise<DataViewExt>, gameplayHeaderPromise: Promise<GameplayHeader>) {
-    const [gameplayFile, gameplayHeader] = await Promise.all([gameplayFilePromise, gameplayHeaderPromise]);
-
-    out.pointLights = readPointLightBlock(gn, gameplayFile.subview(gameplayHeader.pointLightInstances));
 }
 
 export async function loadSkyData(gn: GN, levelNumber: number, out: LevelResources, coreDataFilePromise: Promise<DataViewExt>, indexDataPromise: Promise<LoadIndexDataResult>) {

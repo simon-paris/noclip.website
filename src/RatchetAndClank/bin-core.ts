@@ -160,7 +160,7 @@ function readTieNormalEntry_rac234(view: DataViewExt) {
 
 export interface RgbaRemap {
     dest: number,
-    src: [number, number, number, number] | 0,
+    src: [number, number, number, number],
     kind: RgbaRemapKind,
 }
 export enum RgbaRemapKind {
@@ -189,8 +189,8 @@ export interface RgbaRemaps {
     packets: RgbaRemapPacket[],
 }
 
-// needs more reverse engineering work
-// I can parse the headers but no idea what the inner data is
+// each remap defines a mixture of up to 4 input values
+// (the data to be mixed is the lit color cache)
 export function readTieRgbaRemaps(view: DataViewExt, oClass: number): RgbaRemaps {
     const blockSizes = view.getArrayOfNumbers(0x0, 32, Uint8Array).map(size => size * 0x10);
 
@@ -265,7 +265,7 @@ export function readTieRgbaRemaps(view: DataViewExt, oClass: number): RgbaRemaps
             const packed = view.getUint32(0x0);
             const dest = packed & 0x7FF;
             assert(dest % 4 === 0);
-            const b = (packed >> 21) & 0x7FC; // <- reverse order
+            const b = (packed >> 21) & 0x7FC; // <- its backwards
             const a = (packed >> 12) & 0x7FC;
             return { dest, src: [a, a, a, b], kind: RgbaRemapKind.AAAB };
         });
@@ -301,7 +301,7 @@ export function readTieRgbaRemaps(view: DataViewExt, oClass: number): RgbaRemaps
         const zeroRemaps: RgbaRemap[] = zeroView.subdivide(0, 0xFFFF, 8).map(view => {
             const dest = view.getUint16(0x0) & 0x7FF;
             assert(dest % 4 === 0);
-            return { dest, src: 0, kind: RgbaRemapKind.Zero };
+            return { dest, src: [0, 0, 0, 0], kind: RgbaRemapKind.Zero };
         });
 
         const allRemaps = [aaaaRemaps, aabbRemaps, aaabRemaps, aabcRemaps, abcdRemaps, zeroRemaps].flat(1);
@@ -317,8 +317,8 @@ export function readTieRgbaRemaps(view: DataViewExt, oClass: number): RgbaRemaps
     }
 
     return {
-        packets
-    }
+        packets,
+    };
 }
 
 export type TieClassHeader = {
@@ -337,11 +337,11 @@ export type TieClassHeader = {
     normalsCount: number,
     ambientSize: number,
     /**
-     * Seems to affect what the alpha channel does
-     * 0x2 = wind effect?
-     * 0x4 = another wind effect?
+     * 0x1 = disable rendering
+     * 0x2 = wind effect
+     * 0x4 = wind effect but bigger
      * 0x10 = glow?
-     * 0x20 = specular mask?
+     * 0x20 = alpha is specular mask?
      * 0x40 = no idea (used on enemy spawners on rac3 veldin)
      */
     modeBits: number,
