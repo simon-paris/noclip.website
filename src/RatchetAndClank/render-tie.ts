@@ -13,7 +13,7 @@ import { RgbaRemapKind, TieClass, TieVertexWithLightingInfo } from "./bin-core";
 import { DirectionLightSelector, TieInstance } from "./bin-gameplay";
 import { RatchetShaderLib } from "./shader-lib";
 import { GN, ImaginaryGsCommandType, MegaBuffer, OcclusionChecker } from "./utils";
-import { decodeLodK, packRemap, TextureAtlases } from "./textures";
+import { decodeLodK, packRemap, TextureAtlas } from "./textures";
 import { invlerp } from "../MathHelpers";
 
 export class TieProgram extends DeviceProgram {
@@ -212,7 +212,7 @@ export class TieGeometry {
     private vertexBuffer: GfxBuffer;
     private vertexCount: number;
 
-    constructor(private cache: GfxRenderCache, private gn: GN, private tieOClass: number, private tie: TieClass, private lodLevel: number, private textureIndices: number[], private textureAtlases: TextureAtlases) {
+    constructor(private cache: GfxRenderCache, private gn: GN, private tieOClass: number, private tie: TieClass, private lodLevel: number, private textureIndices: number[], private textureAtlas: TextureAtlas) {
         let vertexAttributes: GfxVertexAttributeDescriptor[];
         if (gn === 1) {
             vertexAttributes = [
@@ -353,7 +353,7 @@ export class TieGeometry {
                                 vertexArrayBuffer[vertexPtr++] = positionScale * vertex.lodMorphOffsetX;
                                 vertexArrayBuffer[vertexPtr++] = positionScale * vertex.lodMorphOffsetY;
                                 vertexArrayBuffer[vertexPtr++] = positionScale * vertex.lodMorphOffsetZ;
-                                vertexArrayBuffer[vertexPtr++] = packRemap(this.textureAtlases.tieTextureRemap[textureIndices[currentMaterial.texture]]);
+                                vertexArrayBuffer[vertexPtr++] = packRemap(this.textureAtlas.textureRemap[textureIndices[currentMaterial.texture]]);
                                 vertexArrayBuffer[vertexPtr++] = currentMaterial.clamp;
                                 vertexArrayBuffer[vertexPtr++] = decodeLodK(tie.adGifs[currentMaterial.texture].tex1.low);
                                 vertexArrayBuffer[vertexPtr++] = texcoordScale * fixedTexcoord.s;

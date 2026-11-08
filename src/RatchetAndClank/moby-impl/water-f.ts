@@ -93,7 +93,7 @@ export class Water_F implements MobyImpl {
                 break;
             }
             case 994: {
-                this.alpha = 0x20 / 0x80; // lmao you can barely see this
+                this.alpha = 0x20 / 0x80;
                 this.lateRender = true;
                 break;
             }

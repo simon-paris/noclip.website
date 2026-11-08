@@ -14,7 +14,7 @@ import { mat4, vec3 } from "gl-matrix";
 import { fillMatrix4x3, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
 import { ShrubInstance } from "./bin-gameplay";
 import { Frustum } from "../Geometry";
-import { decodeLodK, packRemap, TextureAtlases } from "./textures";
+import { decodeLodK, packRemap, TextureAtlas } from "./textures";
 import { invlerp, saturate } from "../MathHelpers";
 
 export class ShrubProgram extends DeviceProgram {
@@ -127,7 +127,7 @@ export class ShrubGeometry {
     private vertexBuffer: GfxBuffer;
     private vertexCount: number;
 
-    constructor(private cache: GfxRenderCache, public shrub: ShrubClass, private textureIndices: number[], private textureAtlases: TextureAtlases) {
+    constructor(private cache: GfxRenderCache, public shrub: ShrubClass, private textureIndices: number[], private textureAtlas: TextureAtlas) {
         this.inputLayout = cache.createInputLayout({
             vertexAttributeDescriptors: [
                 // per vertex
@@ -265,7 +265,7 @@ export class ShrubGeometry {
                                 vertexArrayBuffer[vertexPtr++] = normalScale * normal.x;
                                 vertexArrayBuffer[vertexPtr++] = normalScale * normal.y;
                                 vertexArrayBuffer[vertexPtr++] = normalScale * normal.z;
-                                vertexArrayBuffer[vertexPtr++] = packRemap(this.textureAtlases.shrubTextureRemap[textureIndices[currentMaterial.texture]]);
+                                vertexArrayBuffer[vertexPtr++] = packRemap(this.textureAtlas.textureRemap[textureIndices[currentMaterial.texture]]);
                                 vertexArrayBuffer[vertexPtr++] = currentMaterial.clamp;
                                 vertexArrayBuffer[vertexPtr++] = currentMaterial.lodK;
                                 vertexArrayBuffer[vertexPtr++] = texcoordScale * vertex.s;

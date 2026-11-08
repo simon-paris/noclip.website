@@ -127,7 +127,7 @@ void main() {
     // get color from vertex color or color lut
     float useColorLut = a_InstanceRenderParams.y;
     float vertexColorScale = a_InstanceRenderParams.w;
-    v_Rgba = (useColorLut == 1.0 ? texture(u_VertexColorTexture, vec3(a_ColorLutCoords, a_InstanceUVParams.z)) : a_VertexColor) * vertexColorScale;
+    v_Rgba = (useColorLut == 1.0 ? (textureLod(SAMPLER_2DArray(u_VertexColorTexture), vec3(a_ColorLutCoords, a_InstanceUVParams.z), 0.0)) : a_VertexColor) * vertexColorScale;
 
     // uv
     vec2 uvPosition = a_ST;
@@ -163,7 +163,7 @@ flat in vec4 v_RenderParams;
 
 void main() {
     if (u_RenderSettings.x == 0.0) { gl_FragColor = vec4(v_Rgba.rgb / 2.0, v_Rgba.a); return; }
-    vec4 textureSample = texture(u_FxTexture, v_ST);
+    vec4 textureSample = texture(SAMPLER_2D(u_FxTexture), v_ST);
     float enableTextureAlpha = u_RenderSettings.y;
     if (enableTextureAlpha == 1.0) {
         textureSample.a *= 2.0;

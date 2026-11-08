@@ -47,15 +47,13 @@ export function readOverlaySections(view: DataViewExt): OverlaySection[] {
 // returns a truncated overlay with the last section (game code) removed
 export function snipOverlay(view: DataViewExt): DataViewExt {
     const sectionCount = readOverlaySections(view).length;
-    let i = 0;
     let ptr = 0;
-    while (ptr < view.byteLength) {
+    for (let i = 0; i < sectionCount - 1; i++) {
+        assert(ptr < view.byteLength);
         const header = readOverlaySectionHeader(view.subview(ptr));
         ptr += 0x10 + header.size;
-        if (i >= sectionCount - 1) return view.subview(0, ptr);
-        i++;
     }
-    assert(false);
+    return view.subview(0, ptr)
 }
 
 // returns a virtual memory range

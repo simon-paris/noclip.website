@@ -18,7 +18,7 @@ import { ShrubGeometry, ShrubRenderer } from "./render-shrub";
 import { colorNewFromRGBA, OpaqueBlack, White } from "../Color";
 import { SkyAnimationState, SkyGeometry, SkyRenderer } from "./render-sky";
 import { RatchetShaderLib } from "./shader-lib";
-import { createGfxTextureForPaletteTexture, createTextureAtlases, createTieNormalsTexture, createTieRgbaTexture_Rac1, createTieRgbaTexture_Rac234, TextureAtlases } from "./textures";
+import { createGfxTextureForPaletteTexture, createTextureAtlases, createTieNormalsTexture, createTieRgbaTexture_Rac1, createTieRgbaTexture_Rac234, TextureAtlas, TextureAtlases } from "./textures";
 import { CollisionGeometry, CollisionRenderer } from "./render-collision";
 import { IS_DEVELOPMENT } from "../BuildVersion";
 import { MobyGeometry, MobyRenderer } from "./render-moby";
@@ -275,7 +275,7 @@ class RatchetAndClankScene implements SceneGfx {
         const { tfrags, tfragTextures } = this.levelResources;
         if (!tfrags || !tfragTextures) return null;
 
-        this.geometries.tfrag = new TfragGeometry(this.renderHelper.renderCache, tfrags, tfragTextures, this.textures.textureAtlases);
+        this.geometries.tfrag = new TfragGeometry(this.renderHelper.renderCache, tfrags, tfragTextures, this.textures.textureAtlases.tfrag);
         return this.geometries.tfrag;
     }
 
@@ -293,7 +293,7 @@ class RatchetAndClankScene implements SceneGfx {
         const tieGeometry: (TieGeometry | null)[] = [null, null, null];
         for (let i = 0; i < 3; i++) {
             if (tieClass.packets[i].length === 0) continue; // no mesh for this lod
-            tieGeometry[i] = new TieGeometry(this.renderHelper.renderCache, this.gn, oClass, tieClass, i, tieTextureIndices, this.textures.textureAtlases);
+            tieGeometry[i] = new TieGeometry(this.renderHelper.renderCache, this.gn, oClass, tieClass, i, tieTextureIndices, this.textures.textureAtlases.tie);
         }
         this.geometries.ties.set(oClass, tieGeometry);
         return tieGeometry;
@@ -314,7 +314,7 @@ class RatchetAndClankScene implements SceneGfx {
         const mobyGeometry: (MobyGeometry | null)[] = [null, null];
         for (let i = 0; i < 2; i++) {
             if (!mobyClass.mesh.packetsByLod[i].length) continue;
-            mobyGeometry[i] = new MobyGeometry(this.renderHelper.renderCache, oClass, mobyClass, i, mobyTextureIndices, this.textures.textureAtlases);
+            mobyGeometry[i] = new MobyGeometry(this.renderHelper.renderCache, oClass, mobyClass, i, mobyTextureIndices, this.textures.textureAtlases.moby);
         }
 
         this.geometries.mobys.set(oClass, mobyGeometry);
@@ -332,7 +332,7 @@ class RatchetAndClankScene implements SceneGfx {
         const shrubTextureIndices = this.levelResources.shrubClassTextureIndices?.get(oClass);
         if (!shrubTextureIndices) return null;
 
-        const shrubGeometry = new ShrubGeometry(this.renderHelper.renderCache, shrubClass, shrubTextureIndices, this.textures.textureAtlases);
+        const shrubGeometry = new ShrubGeometry(this.renderHelper.renderCache, shrubClass, shrubTextureIndices, this.textures.textureAtlases.shrub);
         this.geometries.shrubs.set(oClass, shrubGeometry);
         return shrubGeometry;
     }
@@ -416,20 +416,27 @@ class RatchetAndClankScene implements SceneGfx {
         }
     }
 
-    getOrCreateAtlasTextures(): GfxSamplerBinding[] | null {
+    getOrCreateAtlasTextures(): { tfrag: GfxSamplerBinding[], tie: GfxSamplerBinding[], moby: GfxSamplerBinding[], shrub: GfxSamplerBinding[] } | null {
         const { tfragTextures, tieTextures, mobyTextures, shrubTextures } = this.levelResources;
         if (!tfragTextures || !tieTextures || !mobyTextures || !shrubTextures) return null;
 
         if (!this.textures.textureAtlases) {
             this.textures.textureAtlases = createTextureAtlases(this.renderHelper.device, tfragTextures, tieTextures, mobyTextures, shrubTextures, this.addDebugTexture);
         }
-        return [
-            { gfxTexture: this.textures.textureAtlases.gfxTextures[16], gfxSampler: this.samplerGeneral },
-            { gfxTexture: this.textures.textureAtlases.gfxTextures[32], gfxSampler: this.samplerGeneral },
-            { gfxTexture: this.textures.textureAtlases.gfxTextures[64], gfxSampler: this.samplerGeneral },
-            { gfxTexture: this.textures.textureAtlases.gfxTextures[128], gfxSampler: this.samplerGeneral },
-            { gfxTexture: this.textures.textureAtlases.gfxTextures[256], gfxSampler: this.samplerGeneral },
+
+        const createBindings = (atlas: TextureAtlas): GfxSamplerBinding[] => [
+            { gfxTexture: atlas.gfxTextures[16], gfxSampler: this.samplerGeneral },
+            { gfxTexture: atlas.gfxTextures[32], gfxSampler: this.samplerGeneral },
+            { gfxTexture: atlas.gfxTextures[64], gfxSampler: this.samplerGeneral },
+            { gfxTexture: atlas.gfxTextures[128], gfxSampler: this.samplerGeneral },
+            { gfxTexture: atlas.gfxTextures[256], gfxSampler: this.samplerGeneral },
         ];
+        return {
+            tfrag: createBindings(this.textures.textureAtlases.tfrag),
+            tie: createBindings(this.textures.textureAtlases.tie),
+            moby: createBindings(this.textures.textureAtlases.moby),
+            shrub: createBindings(this.textures.textureAtlases.shrub),
+        };
     }
 
     getOrCreateFxTextures() {
@@ -577,7 +584,7 @@ class RatchetAndClankScene implements SceneGfx {
         this.renderHelper.debugDraw.beginFrame(viewerInput.camera.projectionMatrix, viewerInput.camera.viewMatrix, viewerInput.backbufferWidth, viewerInput.backbufferHeight);
 
         // textures shared between tfrags, ties, and shrubs
-        const atlasTextures = this.getOrCreateAtlasTextures();
+        const atlasTextureMappings = this.getOrCreateAtlasTextures();
         const fxTextures = this.getOrCreateFxTextures();
 
         const updateKit: MobyUpdateKit = {
@@ -626,19 +633,19 @@ class RatchetAndClankScene implements SceneGfx {
         }
 
         // tfrag
-        if (this.settings.enableTfrag && atlasTextures) {
+        if (this.settings.enableTfrag && atlasTextureMappings) {
             const tfragGeometry = this.getOrCreateTfragGeometry();
             if (tfragGeometry) {
-                this.renderers.tfrag.renderTfrag(this.renderInstList, tfragGeometry, lodSetting, atlasTextures, cameraPosition);
+                this.renderers.tfrag.renderTfrag(this.renderInstList, tfragGeometry, lodSetting, atlasTextureMappings.tfrag, cameraPosition);
             }
         }
 
         // ties
         const tieInstanceTextures = this.getOrCreateTieInstanceTextures();
         const tieInstancesByOClass = this.levelResources.tieInstancesByOClass;
-        if (this.settings.enableTies && tieInstancesByOClass && atlasTextures && tieInstanceTextures) {
+        if (this.settings.enableTies && tieInstancesByOClass && atlasTextureMappings && tieInstanceTextures) {
             const tieTextureMappings: GfxSamplerBinding[] = [
-                ...atlasTextures,
+                ...atlasTextureMappings.tie,
                 { gfxTexture: tieInstanceTextures.tieRgbaTexture, gfxSampler: this.samplerGeneral },
                 { gfxTexture: tieInstanceTextures.tieNormalsTexture, gfxSampler: this.samplerGeneral }
             ];
@@ -663,19 +670,19 @@ class RatchetAndClankScene implements SceneGfx {
 
         // shrubs
         const shrubInstancesByOClass = this.levelResources.shrubInstancesByOClass;
-        if (this.settings.enableShrubs && shrubInstancesByOClass && atlasTextures) {
+        if (this.settings.enableShrubs && shrubInstancesByOClass && atlasTextureMappings) {
             for (let i = 0; i < shrubInstancesByOClass.length; i++) {
                 const shrubInstances = shrubInstancesByOClass[i];
                 const oClass = shrubInstances[0].oClass;
                 const geometry = this.getOrCreateShrubGeometry(oClass);
                 if (!geometry) continue;
-                this.renderers.shrub.renderShrub(this.renderInstList, geometry, shrubInstances, atlasTextures, cameraPosition, cameraFrustum, lodSetting, lodBias, this.instanceDataBuffer);
+                this.renderers.shrub.renderShrub(this.renderInstList, geometry, shrubInstances, atlasTextureMappings.shrub, cameraPosition, cameraFrustum, lodSetting, lodBias, this.instanceDataBuffer);
             }
         }
 
         // mobys
         const mobyInstancesByOClass = this.levelResources.mobyInstancesByOClass;
-        if (this.settings.enableMobys && mobyInstancesByOClass && atlasTextures) {
+        if (this.settings.enableMobys && mobyInstancesByOClass && atlasTextureMappings) {
             for (let i = 0; i < mobyInstancesByOClass.length; i++) {
                 const mobyInstances = mobyInstancesByOClass[i];
                 const oClass = mobyInstances[0].oClass;
@@ -683,11 +690,11 @@ class RatchetAndClankScene implements SceneGfx {
                 if (!mobyClass) continue;
                 const mobyGeometryArr = this.getOrCreateMobyGeometry(oClass);
                 if (!mobyGeometryArr) continue;
-                this.renderers.moby.renderMoby(this.renderInstList, mobyGeometryArr, mobyClass, mobyInstances, atlasTextures, cameraPosition, this.occlusionChecker, cameraFrustum, lodSetting, lodBias, this.settings.enableBangles, this.settings.mobyMissionFlags, this.instanceDataBuffer);
+                this.renderers.moby.renderMoby(this.renderInstList, mobyGeometryArr, mobyClass, mobyInstances, atlasTextureMappings.moby, cameraPosition, this.occlusionChecker, cameraFrustum, lodSetting, lodBias, this.settings.enableBangles, this.settings.mobyMissionFlags, this.instanceDataBuffer);
             }
         }
         const missionMobyInstancesByOClass = this.levelResources.missionMobyInstancesByOClass;
-        if (this.settings.enableMobys && missionMobyInstancesByOClass && atlasTextures) {
+        if (this.settings.enableMobys && missionMobyInstancesByOClass && atlasTextureMappings) {
             for (let i = 0; i < missionMobyInstancesByOClass.length; i++) {
                 const mobyInstances = missionMobyInstancesByOClass[i];
                 const oClass = mobyInstances[0].oClass;
@@ -695,7 +702,7 @@ class RatchetAndClankScene implements SceneGfx {
                 if (!mobyClass) continue;
                 const mobyGeometryArr = this.getOrCreateMobyGeometry(oClass);
                 if (!mobyGeometryArr) continue;
-                this.renderers.moby.renderMoby(this.renderInstList, mobyGeometryArr, mobyClass, mobyInstances, atlasTextures, cameraPosition, this.occlusionChecker, cameraFrustum, lodSetting, lodBias, this.settings.enableBangles, this.settings.mobyMissionFlags, this.instanceDataBuffer);
+                this.renderers.moby.renderMoby(this.renderInstList, mobyGeometryArr, mobyClass, mobyInstances, atlasTextureMappings.moby, cameraPosition, this.occlusionChecker, cameraFrustum, lodSetting, lodBias, this.settings.enableBangles, this.settings.mobyMissionFlags, this.instanceDataBuffer);
             }
         }
 
@@ -997,7 +1004,10 @@ class RatchetAndClankScene implements SceneGfx {
         }
 
         const allTextures = new Set<GfxTexture | null>([
-            ...(this.textures.textureAtlases ? Object.values(this.textures.textureAtlases?.gfxTextures) : []),
+            ...Object.values(this.textures.textureAtlases?.tfrag.gfxTextures ?? {}),
+            ...Object.values(this.textures.textureAtlases?.tie.gfxTextures ?? {}),
+            ...Object.values(this.textures.textureAtlases?.moby.gfxTextures ?? {}),
+            ...Object.values(this.textures.textureAtlases?.shrub.gfxTextures ?? {}),
             this.textures.tieRgbaTexture,
             this.textures.tieNormalsTexture,
             ...this.textures.skyTextures,

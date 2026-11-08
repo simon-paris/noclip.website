@@ -464,15 +464,19 @@ export function packRemap(remap: { sizeBucket: number, index: number }) {
     return (slice << 3) | (bucket & 0x07);
 };
 
-export interface TextureAtlases {
+export interface TextureAtlas {
     gfxTextures: { [size in 16 | 32 | 64 | 128 | 256]: GfxTexture },
-    tfragTextureRemap: { sizeBucket: number, index: number }[],
-    tieTextureRemap: { sizeBucket: number, index: number }[],
-    mobyTextureRemap: { sizeBucket: number, index: number }[],
-    shrubTextureRemap: { sizeBucket: number, index: number }[],
+    textureRemap: { sizeBucket: number, index: number }[],
 };
 
-export function createTextureAtlases(device: GfxDevice, tfragTextures: PaletteTexture[], tieTextures: PaletteTexture[], mobyTextures: PaletteTexture[], shrubTextures: PaletteTexture[], addDebugTexture: (texture: GfxTexture) => void): TextureAtlases {
+export interface TextureAtlases {
+    tfrag: TextureAtlas,
+    tie: TextureAtlas,
+    moby: TextureAtlas,
+    shrub: TextureAtlas,
+};
+
+function createTextureAtlas(device: GfxDevice, name: string, textures: PaletteTexture[], addDebugTexture: (texture: GfxTexture) => void): TextureAtlas {
     const texturesBySize: TexturesBySize = {
         16: [],
         32: [],
@@ -481,24 +485,24 @@ export function createTextureAtlases(device: GfxDevice, tfragTextures: PaletteTe
         256: [],
     };
 
-    const tfragTextureRemap = assignTexturesToSizeBucket(texturesBySize, tfragTextures);
-    const tieTextureRemap = assignTexturesToSizeBucket(texturesBySize, tieTextures);
-    const mobyTextureRemap = assignTexturesToSizeBucket(texturesBySize, mobyTextures);
-    const shrubTextureRemap = assignTexturesToSizeBucket(texturesBySize, shrubTextures);
+    const textureRemap = assignTexturesToSizeBucket(texturesBySize, textures);
 
     const gfxTextures = {
-        16: createGfxTextureArrayForPaletteTextures(device, '16x16 Texture Array', texturesBySize[16], addDebugTexture),
-        32: createGfxTextureArrayForPaletteTextures(device, '32x32 Texture Array', texturesBySize[32], addDebugTexture),
-        64: createGfxTextureArrayForPaletteTextures(device, '64x64 Texture Array', texturesBySize[64], addDebugTexture),
-        128: createGfxTextureArrayForPaletteTextures(device, '128x128 Texture Array', texturesBySize[128], addDebugTexture),
-        256: createGfxTextureArrayForPaletteTextures(device, '256x256 Texture Array', texturesBySize[256], addDebugTexture),
+        16: createGfxTextureArrayForPaletteTextures(device, `${name} 16x16 Texture Array`, texturesBySize[16], addDebugTexture),
+        32: createGfxTextureArrayForPaletteTextures(device, `${name} 32x32 Texture Array`, texturesBySize[32], addDebugTexture),
+        64: createGfxTextureArrayForPaletteTextures(device, `${name} 64x64 Texture Array`, texturesBySize[64], addDebugTexture),
+        128: createGfxTextureArrayForPaletteTextures(device, `${name} 128x128 Texture Array`, texturesBySize[128], addDebugTexture),
+        256: createGfxTextureArrayForPaletteTextures(device, `${name} 256x256 Texture Array`, texturesBySize[256], addDebugTexture),
     };
 
+    return { gfxTextures, textureRemap };
+}
+
+export function createTextureAtlases(device: GfxDevice, tfragTextures: PaletteTexture[], tieTextures: PaletteTexture[], mobyTextures: PaletteTexture[], shrubTextures: PaletteTexture[], addDebugTexture: (texture: GfxTexture) => void): TextureAtlases {
     return {
-        gfxTextures,
-        tfragTextureRemap,
-        tieTextureRemap,
-        mobyTextureRemap,
-        shrubTextureRemap,
+        tfrag: createTextureAtlas(device, 'Tfrag', tfragTextures, addDebugTexture),
+        tie: createTextureAtlas(device, 'Tie', tieTextures, addDebugTexture),
+        moby: createTextureAtlas(device, 'Moby', mobyTextures, addDebugTexture),
+        shrub: createTextureAtlas(device, 'Shrub', shrubTextures, addDebugTexture),
     };
 }

@@ -7,7 +7,7 @@ import { DeviceProgram } from "../Program";
 import { assert } from "../util";
 import { RatchetShaderLib } from "./shader-lib";
 import { Tfrag, TfragVertexInfo } from "./bin-core";
-import { decodeLodK, packRemap, PaletteTexture, TextureAtlases } from "./textures";
+import { decodeLodK, packRemap, PaletteTexture, TextureAtlas } from "./textures";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { GfxRenderInstList } from "../gfx/render/GfxRenderInstManager";
 import { noclipSpaceFromRatchetSpace } from "./utils";
@@ -115,7 +115,7 @@ export class TfragGeometry {
         vertexCountTransparent: number,
     } | null)[] = [null, null, null];
 
-    constructor(private cache: GfxRenderCache, private tfrags: Tfrag[], private textureAssets: PaletteTexture[], private textureAtlases: TextureAtlases) {
+    constructor(private cache: GfxRenderCache, private tfrags: Tfrag[], private textureAssets: PaletteTexture[], private textureAtlas: TextureAtlas) {
         this.inputLayout = cache.createInputLayout({
             vertexAttributeDescriptors: [
                 { location: TfragProgram.a_Position, format: GfxFormat.F32_RGB, bufferByteOffset: 0, bufferIndex: 0, },
@@ -305,7 +305,7 @@ export class TfragGeometry {
                         vertexArrayBuffer[vertexPtr++] = colorScale * light.ambientColor.r;
                         vertexArrayBuffer[vertexPtr++] = colorScale * light.ambientColor.g;
                         vertexArrayBuffer[vertexPtr++] = colorScale * light.ambientColor.b;
-                        vertexArrayBuffer[vertexPtr++] = packRemap(this.textureAtlases.tfragTextureRemap[currentMaterial.texture]);
+                        vertexArrayBuffer[vertexPtr++] = packRemap(this.textureAtlas.textureRemap[currentMaterial.texture]);
                         vertexArrayBuffer[vertexPtr++] = currentMaterial.clamp;
                         vertexArrayBuffer[vertexPtr++] = currentMaterial.lodK;
                         vertexArrayBuffer[vertexPtr++] = texcoordScale * this.fixTexcoord(vertInfo.s);

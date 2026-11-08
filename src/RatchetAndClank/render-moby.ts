@@ -13,7 +13,7 @@ import { fillMatrix4x3, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
 import { MobyInstance } from "./bin-gameplay";
 import { Frustum } from "../Geometry";
 import { assert } from "../util";
-import { decodeLodK, packRemap, TextureAtlases } from "./textures";
+import { decodeLodK, packRemap, TextureAtlas } from "./textures";
 import { invlerp, saturate } from "../MathHelpers";
 
 export class MobyProgram extends DeviceProgram {
@@ -139,7 +139,7 @@ export class MobyGeometry {
     private mainMeshVertexCount: number | null = null;
     private bangleVertexCount: number | null = null;
 
-    constructor(private cache: GfxRenderCache, public oClass: number, public moby: MobyClass, public lod: number, public textureIndices: number[], private textureAtlases: TextureAtlases) {
+    constructor(private cache: GfxRenderCache, public oClass: number, public moby: MobyClass, public lod: number, public textureIndices: number[], private textureAtlas: TextureAtlas) {
         this.inputLayout = cache.createInputLayout({
             vertexAttributeDescriptors: [
                 // per vertex
@@ -372,7 +372,7 @@ export class MobyGeometry {
             vertexArrayBuffer[vertexPtr++] = angleScale * v.normalElevation;
             vertexArrayBuffer[vertexPtr++] = texcoordScale * v.s;
             vertexArrayBuffer[vertexPtr++] = texcoordScale * v.t;
-            vertexArrayBuffer[vertexPtr++] = packRemap(this.textureAtlases.mobyTextureRemap[v.textureIndex]);
+            vertexArrayBuffer[vertexPtr++] = packRemap(this.textureAtlas.textureRemap[v.textureIndex]);
             vertexArrayBuffer[vertexPtr++] = v.clamp;
             vertexArrayBuffer[vertexPtr++] = v.lodK;
         }
