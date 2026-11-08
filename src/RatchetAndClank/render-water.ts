@@ -40,6 +40,7 @@ interface WaterRenderOptions {
     useAdditiveBlend: boolean;
     vertexColorTexture: GfxTexture | null;
     vertexColorLayers: number[] | null;
+    vertexColorScale: number;
 }
 
 // mud, lava, ice and glass are considered "honorary water"
@@ -84,11 +85,11 @@ layout(location = ${WaterProgram.a_ColorLutCoords}) in vec2 a_ColorLutCoords;
 layout(location = ${WaterProgram.a_InstanceTransform0}) in vec4 a_InstanceTransform0;
 layout(location = ${WaterProgram.a_InstanceTransform1}) in vec4 a_InstanceTransform1;
 layout(location = ${WaterProgram.a_InstanceTransform2}) in vec4 a_InstanceTransform2;
-layout(location = ${WaterProgram.a_InstanceUVParams}) in vec4 a_InstanceUVParams; // xy = uv scroll, z = color lut layer, w = uv scale
+layout(location = ${WaterProgram.a_InstanceUVParams}) in vec4 a_InstanceUVParams; // xy = uv scroll, z = color lut layer, w = 0 means use mesh uvs, nonzero means use worldspace uvs with value as scale
 layout(location = ${WaterProgram.a_InstanceWobbleParams}) in vec4 a_InstanceWobbleParams; // x = wobble amount, y = wobble period, z = vertical wobble seed, w = uv wobble seed
 layout(location = ${WaterProgram.a_InstanceFogColor}) in vec4 a_InstanceFogColor;
 layout(location = ${WaterProgram.a_InstanceFogParams}) in vec4 a_InstanceFogParams; // same as u_FogParams, overrides if fog alpha is non-zero
-layout(location = ${WaterProgram.a_InstanceRenderParams}) in vec4 a_InstanceRenderParams; // x=enable texture alpha, y=use color from lut texture instead of vertex color attribute, z=wobble seed is world position, w=unused
+layout(location = ${WaterProgram.a_InstanceRenderParams}) in vec4 a_InstanceRenderParams; // x=enable texture alpha, y=use color from lut texture instead of vertex color attribute, z=wobble seed is world position, w=vertex color scale
 
 out vec4 v_Rgba;
 out vec2 v_ST;
@@ -105,14 +106,15 @@ void main() {
     // calcualte wobble amount for vertical world displacement and uvs
     float zWobble = 0.0;
     float phase = seededRandom(positionWorld, a_InstanceWobbleParams.z) * 2.0 * PI;
-    if (a_InstanceRenderParams.z > 0.5) {
+    float wobbleIsWorldSpace = a_InstanceRenderParams.z;
+    if (wobbleIsWorldSpace == 1.0) {
         phase = (positionWorld.x + positionWorld.z) / 8.0; // not sure about this scale
     }
     float uvWobbleDirectionPhase = seededRandom(positionWorld, a_InstanceWobbleParams.w) * 2.0 * PI;
     vec2 uvWobbleDirection = vec2(cos(uvWobbleDirectionPhase), sin(uvWobbleDirectionPhase));
     float uvWobbleAmount = 0.0;
     if (a_InstanceWobbleParams.y > 0.0) {
-        if (a_InstanceRenderParams.z > 0.5) {
+        if (wobbleIsWorldSpace == 1.0) {
             zWobble = a_InstanceWobbleParams.x * sin(phase + (u_Time.x / 1000.0) / a_InstanceWobbleParams.y);
         } else {
             zWobble = a_InstanceWobbleParams.x * sin(2.0 * PI * (u_Time.x / 60.0) / a_InstanceWobbleParams.y + phase);
@@ -123,10 +125,15 @@ void main() {
     positionWorld.y += zWobble;
 
     // get color from vertex color or color lut
-    v_Rgba = a_InstanceRenderParams.y > 0.5 ? texture(u_VertexColorTexture, vec3(a_ColorLutCoords, a_InstanceUVParams.z)) : a_VertexColor;
+    float useColorLut = a_InstanceRenderParams.y;
+    float vertexColorScale = a_InstanceRenderParams.w;
+    v_Rgba = (useColorLut == 1.0 ? texture(u_VertexColorTexture, vec3(a_ColorLutCoords, a_InstanceUVParams.z)) : a_VertexColor) * vertexColorScale;
+
+    // uv
     vec2 uvPosition = a_ST;
-    if (a_InstanceUVParams.w != 0.0) {
-        uvPosition = positionWorld.xz * a_InstanceUVParams.w;
+    float worldspaceUvScale = a_InstanceUVParams.w;
+    if (worldspaceUvScale != 0.0) { // replace uvs with worldspace position
+        uvPosition = positionWorld.xz * worldspaceUvScale;
     }
     v_ST = uvPosition + a_InstanceUVParams.xy + (uvWobbleAmount * uvWobbleDirection);
 
@@ -157,7 +164,8 @@ flat in vec4 v_RenderParams;
 void main() {
     if (u_RenderSettings.x == 0.0) { gl_FragColor = vec4(v_Rgba.rgb / 2.0, v_Rgba.a); return; }
     vec4 textureSample = texture(u_FxTexture, v_ST);
-    if (v_RenderParams.x == 1.0) {
+    float enableTextureAlpha = u_RenderSettings.y;
+    if (enableTextureAlpha == 1.0) {
         textureSample.a *= 2.0;
     } else {
         textureSample.a = 1.0;
@@ -279,7 +287,7 @@ export class WaterRenderer {
         const { instanceDataBuffer, fxSampler, renderInstList } = updateKit;
         const { uvScroll, zWobble, randomSeed, uvRandomSeed, useWorldspaceWobble, uvWorldSpaceScale } = animation;
         const { blendAlpha, useTextureAlpha, useVertexColorAlpha } = alpha;
-        const { depthWrite, useAdditiveBlend, vertexColorTexture, vertexColorLayers } = options;
+        const { depthWrite, useAdditiveBlend, vertexColorTexture, vertexColorLayers, vertexColorScale } = options;
         const instanceDataStartBytes = instanceDataBuffer.ptr * 4;
         for (let i = 0; i < transforms.length; i++) {
             instanceDataBuffer.ptr += fillMatrix4x3(instanceDataBuffer.f32View, instanceDataBuffer.ptr, transforms[i]);
@@ -307,7 +315,7 @@ export class WaterRenderer {
                 useTextureAlpha ? 1 : 0,
                 vertexColorTexture !== null ? 1 : 0,
                 useWorldspaceWobble ? 1 : 0,
-                0,
+                vertexColorScale,
             );
         }
 

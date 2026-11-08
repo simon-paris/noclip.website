@@ -246,7 +246,7 @@ export class Water_I implements MobyImpl {
             { uvScroll: ZERO_VEC2, zWobble: ZERO_VEC2, randomSeed: this.mobyInstance.uid, uvRandomSeed: this.mobyInstance.uid, useWorldspaceWobble: false, uvWorldSpaceScale: 0 },
             { blendAlpha: 1, useTextureAlpha: false, useVertexColorAlpha: true },
             null,
-            { depthWrite: false, useAdditiveBlend: false, vertexColorTexture: null, vertexColorLayers: null },
+            { depthWrite: false, useAdditiveBlend: false, vertexColorTexture: null, vertexColorLayers: null, vertexColorScale: 1 },
         );
 
         updateKit.renderers.water.renderWater(
@@ -254,7 +254,7 @@ export class Water_I implements MobyImpl {
             { uvScroll: this.surfaceUVScroll1, zWobble: ZERO_VEC2, randomSeed: this.mobyInstance.uid + 1, uvRandomSeed: this.mobyInstance.uid + 1, useWorldspaceWobble: false, uvWorldSpaceScale: 4 / surfaceSize },
             { blendAlpha: 1, useTextureAlpha: false, useVertexColorAlpha: true },
             null,
-            { depthWrite: false, useAdditiveBlend: true, vertexColorTexture: null, vertexColorLayers: null },
+            { depthWrite: false, useAdditiveBlend: true, vertexColorTexture: null, vertexColorLayers: null, vertexColorScale: 1 },
         );
 
         updateKit.renderers.water.renderWater(
@@ -262,7 +262,7 @@ export class Water_I implements MobyImpl {
             { uvScroll: this.surfaceUVScroll2, zWobble: ZERO_VEC2, randomSeed: this.mobyInstance.uid + 2, uvRandomSeed: this.mobyInstance.uid + 2, useWorldspaceWobble: false, uvWorldSpaceScale: 6 / surfaceSize },
             { blendAlpha: 1, useTextureAlpha: true, useVertexColorAlpha: true },
             null,
-            { depthWrite: false, useAdditiveBlend: true, vertexColorTexture: null, vertexColorLayers: null },
+            { depthWrite: false, useAdditiveBlend: true, vertexColorTexture: null, vertexColorLayers: null, vertexColorScale: 1 },
         );
     }
 

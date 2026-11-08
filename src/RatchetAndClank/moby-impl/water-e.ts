@@ -209,7 +209,7 @@ export class Water_E implements MobyImpl {
                 { uvScroll: this.uvScrolls[gridIndex], zWobble: this.zWobble, randomSeed: 0, uvRandomSeed: 0, useWorldspaceWobble: false, uvWorldSpaceScale: 0 },
                 { blendAlpha: (this.waterFixOverride ?? waterGrid.descriptor.fixWater) / 0x80, useTextureAlpha: false, useVertexColorAlpha: false },
                 null,
-                { depthWrite: false, useAdditiveBlend: false, vertexColorTexture: null, vertexColorLayers: null },
+                { depthWrite: false, useAdditiveBlend: false, vertexColorTexture: null, vertexColorLayers: null, vertexColorScale: 1 },
             );
         }
     }

@@ -127,14 +127,14 @@ export class Water_G implements MobyImpl {
                 { uvScroll: this.uvScroll1, zWobble, randomSeed, uvRandomSeed: randomSeed, useWorldspaceWobble: true, uvWorldSpaceScale: 0 },
                 { blendAlpha: 1, useTextureAlpha: false, useVertexColorAlpha: true },
                 null,
-                { depthWrite: false, useAdditiveBlend: false, vertexColorTexture: null, vertexColorLayers: null },
+                { depthWrite: false, useAdditiveBlend: false, vertexColorTexture: null, vertexColorLayers: null, vertexColorScale: 1 },
             );
             updateKit.renderers.water.renderWater(
                 updateKit, geometry, transforms, updateKit.fxTextures[TEXTURE_ID],
                 { uvScroll: this.uvScroll2, zWobble, randomSeed, uvRandomSeed: randomSeed, useWorldspaceWobble: true, uvWorldSpaceScale: 0 },
                 { blendAlpha: 1, useTextureAlpha: false, useVertexColorAlpha: true },
                 null,
-                { depthWrite: false, useAdditiveBlend: false, vertexColorTexture: null, vertexColorLayers: null },
+                { depthWrite: false, useAdditiveBlend: false, vertexColorTexture: null, vertexColorLayers: null, vertexColorScale: 1 },
             );
         }
     }

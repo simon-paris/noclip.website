@@ -89,10 +89,10 @@ export class Water_A implements MobyImpl {
             const texcoords = waterMesh.texcoords;
             const vertexColors = new Float32Array(vertexCount * 4);
             for (let j = 0; j < vertexCount; j++) {
-                vertexColors[j * 4 + 0] = waterMesh.descriptor.rgba.r / 0x80;
-                vertexColors[j * 4 + 1] = waterMesh.descriptor.rgba.g / 0x80;
-                vertexColors[j * 4 + 2] = waterMesh.descriptor.rgba.b / 0x80;
-                vertexColors[j * 4 + 3] = 1;
+                vertexColors[j * 4 + 0] = waterMesh.descriptor.rgba.r;
+                vertexColors[j * 4 + 1] = waterMesh.descriptor.rgba.g;
+                vertexColors[j * 4 + 2] = waterMesh.descriptor.rgba.b;
+                vertexColors[j * 4 + 3] = 0x80;
             }
             const indices = makeTriangleIndexBuffer(GfxTopology.TriStrips, 0, vertexCount);
             this.geometries.push(new WaterGeometry(updateKit.renderHelper.renderCache, positions, texcoords, vertexColors, indices));
@@ -123,7 +123,7 @@ export class Water_A implements MobyImpl {
                 { uvScroll: this.scroll1, zWobble, randomSeed: seed1, uvRandomSeed: seed1, useWorldspaceWobble: false, uvWorldSpaceScale: 0 },
                 { blendAlpha: descriptor.fix1 / 0x80, useTextureAlpha: false, useVertexColorAlpha: false },
                 null,
-                { depthWrite: false, useAdditiveBlend: false, vertexColorTexture: null, vertexColorLayers: null },
+                { depthWrite: false, useAdditiveBlend: false, vertexColorTexture: null, vertexColorLayers: null, vertexColorScale: 1 / 0x80 },
             );
 
             updateKit.renderers.water.renderWater(
@@ -131,7 +131,7 @@ export class Water_A implements MobyImpl {
                 { uvScroll: this.scroll2, zWobble, randomSeed: seed1, uvRandomSeed: seed2, useWorldspaceWobble: false, uvWorldSpaceScale: 0 },
                 { blendAlpha: descriptor.fix2 / 0x80, useTextureAlpha: false, useVertexColorAlpha: false },
                 null,
-                { depthWrite: false, useAdditiveBlend: false, vertexColorTexture: null, vertexColorLayers: null },
+                { depthWrite: false, useAdditiveBlend: false, vertexColorTexture: null, vertexColorLayers: null, vertexColorScale: 1 / 0x80 },
             );
         }
     }

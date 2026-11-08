@@ -18,7 +18,7 @@ interface WaterDecl_D {
     uvScrollSpeedCount: number;
     count: number;
     textureId: number;
-    replaceVertexColorRgb?: [number, number, number];
+    replaceVertexColorRgb: [number, number, number];
     alphaScale?: number;
     additive?: boolean;
     depthWrite?: boolean;
@@ -133,12 +133,9 @@ export class Water_D implements MobyImpl {
                     texcoords.push(texcoord.x, texcoord.y);
 
                     const color = waterMesh.colors[stripIndex].getUint8_Rgba(vertexIndex * 4);
-                    if (decl.replaceVertexColorRgb) {
-                        color.r = decl.replaceVertexColorRgb[0] * 255;
-                        color.g = decl.replaceVertexColorRgb[1] * 255;
-                        color.b = decl.replaceVertexColorRgb[2] * 255;
-                    }
-                    vertexColors.push(color.r / 255, color.g / 255, color.b / 255, color.a / 255);
+                    // for some reason, only use the alpha and replace the rest with hardcoded colors
+                    // (there's something in the color data but it aint color, looks more like velocity...)
+                    vertexColors.push(decl.replaceVertexColorRgb[0], decl.replaceVertexColorRgb[1], decl.replaceVertexColorRgb[2], color.a / 255);
                 }
 
                 // copy triangle indices
@@ -179,7 +176,7 @@ export class Water_D implements MobyImpl {
                 { uvScroll: this.uvScrolls[i][0], zWobble: this.zWobble, randomSeed: this.mobyInstance.uid + i, uvRandomSeed: 0, useWorldspaceWobble: false, uvWorldSpaceScale: 0 },
                 { blendAlpha: 1, useTextureAlpha: !decl.ignoreTextureAlpha, useVertexColorAlpha: false },
                 null,
-                { depthWrite: decl.depthWrite ?? false, useAdditiveBlend: decl.additive ?? false, vertexColorTexture: null, vertexColorLayers: null },
+                { depthWrite: decl.depthWrite ?? false, useAdditiveBlend: decl.additive ?? false, vertexColorTexture: null, vertexColorLayers: null, vertexColorScale: 1 },
             );
 
             if (decl.additiveSecondDraw) {
@@ -188,7 +185,7 @@ export class Water_D implements MobyImpl {
                     { uvScroll: this.uvScrolls[i][1], zWobble: this.zWobble, randomSeed: this.mobyInstance.uid + i, uvRandomSeed: 0, useWorldspaceWobble: false, uvWorldSpaceScale: 0 },
                     { blendAlpha: 1, useTextureAlpha: !decl.ignoreTextureAlpha, useVertexColorAlpha: false },
                     null,
-                    { depthWrite: decl.depthWrite ?? false, useAdditiveBlend: true, vertexColorTexture: null, vertexColorLayers: null },
+                    { depthWrite: decl.depthWrite ?? false, useAdditiveBlend: true, vertexColorTexture: null, vertexColorLayers: null, vertexColorScale: 1 },
                 );
             }
         }

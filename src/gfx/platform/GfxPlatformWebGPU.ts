@@ -1500,7 +1500,7 @@ class GfxImplP_WebGPU implements GfxSwapChain, GfxDevice {
 
         const descriptor = computePipeline.descriptor;
         const program = descriptor.program as GfxComputeProgramP_WebGPU;
-
+        
         const layout = descriptor.pipelineLayout as GPUPipelineLayout;
         const compute = program.computeStage!;
 
@@ -1863,9 +1863,9 @@ class GfxImplP_WebGPU implements GfxSwapChain, GfxDevice {
         }
 
         switch (format) {
-            case GfxFormat.U16_RGB_565: return false;
-            case GfxFormat.U16_RGBA_NORM: return this._featureTextureFormatsTier1;
-            case GfxFormat.F32_RGBA: return this._featureFloat32Filterable;
+        case GfxFormat.U16_RGB_565: return false;
+        case GfxFormat.U16_RGBA_NORM: return this._featureTextureFormatsTier1;
+        case GfxFormat.F32_RGBA: return this._featureFloat32Filterable;
         }
 
         return true;

@@ -143,7 +143,7 @@ export class Water_H implements MobyImpl {
                 { uvScroll, zWobble: ZERO_VEC2, randomSeed: this.mobyInstance.uid + meshIndex, uvRandomSeed: this.mobyInstance.uid + meshIndex, useWorldspaceWobble: false, uvWorldSpaceScale: 0 },
                 { blendAlpha: 1, useTextureAlpha: false, useVertexColorAlpha: true },
                 null,
-                { depthWrite: false, useAdditiveBlend: false, vertexColorTexture: null, vertexColorLayers: null },
+                { depthWrite: false, useAdditiveBlend: false, vertexColorTexture: null, vertexColorLayers: null, vertexColorScale: 1 },
             );
         }
     }

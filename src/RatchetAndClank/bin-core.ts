@@ -125,25 +125,25 @@ function readTieNormalData(gn: GN, view: DataViewExt, count: number) {
         }
         case 2:
         case 3: {
-            return view.subdivide(0, count, 8).map(view => readTieNormalEntry_rac234(view));
+            return view.subdivide(0, count, 8).map(view => readTieNormalEntry_Rac234(view));
         }
         case 4: {
-            return view.subdivide(0x10, count, 8).map(view => readTieNormalEntry_rac234(view));
+            return view.subdivide(0x10, count, 8).map(view => readTieNormalEntry_Rac234(view));
         }
     }
 }
 
-function readTieNormalEntry_rac234(view: DataViewExt) {
+function readTieNormalEntry_Rac234(view: DataViewExt) {
     /*
     struct TieNormalEntry {
         uint8 x;
         uint8 y;
         uint8 z;
         uint8 w;
-        uint8 unknown5;
+        uint8 unknown4;
         uint8 scale;
-        uint8 elevation; // xyzw and elevation/azimuth are redundant, idk why, I'll use the second
-        uint8 azimuth;
+        uint8 azimuth; // xyzw and elevation/azimuth are redundant, idk why, I'll use the second
+        uint8 elevation;
     }
     */
     const angleScale = 2 * Math.PI / 256;
@@ -167,14 +167,14 @@ export enum RgbaRemapKind {
     Zero = 0,
     AAAA = 1,
     AABB = 2,
-    AAAB = 3,
+    ABBB = 3,
     AABC = 4,
     ABCD = 5,
 }
 export interface RgbaRemapPacketDescriptor {
     aaaaSize: number;
     aabbSize: number;
-    aaabSize: number;
+    abbbSize: number;
     aabcSize: number;
     abcdSize: number;
     zeroSize: number;
@@ -205,7 +205,7 @@ export function readTieRgbaRemaps(view: DataViewExt, oClass: number): RgbaRemaps
         const descriptor = {
             aaaaSize: packetView.getUint16(0x0),
             aabbSize: packetView.getUint16(0x2),
-            aaabSize: packetView.getUint16(0x4),
+            abbbSize: packetView.getUint16(0x4),
             aabcSize: packetView.getUint16(0x6),
             abcdSize: packetView.getUint16(0x8),
             zeroSize: packetView.getUint16(0xa),
@@ -215,7 +215,7 @@ export function readTieRgbaRemaps(view: DataViewExt, oClass: number): RgbaRemaps
 
         assert(descriptor.aaaaSize % 4 === 0);
         assert(descriptor.aabbSize % 4 === 0);
-        assert(descriptor.aaabSize % 4 === 0);
+        assert(descriptor.abbbSize % 4 === 0);
         assert(descriptor.aabcSize % 8 === 0);
         assert(descriptor.abcdSize % 8 === 0);
 
@@ -225,8 +225,8 @@ export function readTieRgbaRemaps(view: DataViewExt, oClass: number): RgbaRemaps
         ptr += descriptor.aaaaSize;
         const aabbView = descriptor.aabbSize ? packetView.subview(ptr, descriptor.aabbSize) : EMPTY_VIEW;
         ptr += descriptor.aabbSize;
-        const aaabView = descriptor.aaabSize ? packetView.subview(ptr, descriptor.aaabSize) : EMPTY_VIEW;
-        ptr += descriptor.aaabSize;
+        const abbbView = descriptor.abbbSize ? packetView.subview(ptr, descriptor.abbbSize) : EMPTY_VIEW;
+        ptr += descriptor.abbbSize;
         const aabcView = descriptor.aabcSize ? packetView.subview(ptr, descriptor.aabcSize) : EMPTY_VIEW;
         ptr += descriptor.aabcSize;
         const abcdView = descriptor.abcdSize ? packetView.subview(ptr, descriptor.abcdSize) : EMPTY_VIEW;
@@ -237,78 +237,53 @@ export function readTieRgbaRemaps(view: DataViewExt, oClass: number): RgbaRemaps
         assert(ptr === descriptor.packetSize);
         assert(ptr === packetSizeBytes);
 
-        // unsure about any of this
-
-        // everything here is an 11-bit int divisible by 4
+        // everything here is 11-bit, because they're byte offsets into uint32[512] arrays
 
         // AAAA
         const aaaaRemaps: RgbaRemap[] = aaaaView.subdivide(0, 0xFFFF, 4).map((view): RgbaRemap => {
-            const a = view.getUint16(0x0) & 0x7FF;
-            assert(a % 4 === 0);
-            const dest = view.getUint16(0x2);
-            assert(dest % 4 === 0);
+            const a = decodeRemap_11(view, 0x0);
+            const dest = decodeRemap_11(view, 0x2);
             return { dest, src: [a, a, a, a], kind: RgbaRemapKind.AAAA };
         });
 
         // AABB
         const aabbRemaps: RgbaRemap[] = aabbView.subdivide(0, 0xFFFF, 4).map(view => {
-            const packed = view.getUint32(0x0);
-            const dest = packed & 0x7FF;
-            assert(dest % 4 === 0);
-            const a = (packed >> 21) & 0x7FC;
-            const b = (packed >> 12) & 0x7FC;
+            const { value1: a, value2: b, value3: dest } = decodeRemap_11_11_11_Weird(view, 0x0);
             return { dest, src: [a, a, b, b], kind: RgbaRemapKind.AABB };
         });
 
-        // AAAB
-        const aaabRemaps: RgbaRemap[] = aaabView.subdivide(0, 0xFFFF, 4).map(view => {
-            const packed = view.getUint32(0x0);
-            const dest = packed & 0x7FF;
-            assert(dest % 4 === 0);
-            const b = (packed >> 21) & 0x7FC; // <- its backwards
-            const a = (packed >> 12) & 0x7FC;
-            return { dest, src: [a, a, a, b], kind: RgbaRemapKind.AAAB };
+        // ABBB
+        const abbbRemaps: RgbaRemap[] = abbbView.subdivide(0, 0xFFFF, 4).map(view => {
+            const { value1: a, value2: b, value3: dest } = decodeRemap_11_11_11_Weird(view, 0x0);
+            return { dest, src: [a, b, b, b], kind: RgbaRemapKind.ABBB };
         });
 
         // AABC
         const aabcRemaps: RgbaRemap[] = aabcView.subdivide(0, 0xFFFF, 8).map(view => {
-            const a = view.getUint16(0x0) & 0x7FF;
-            assert(a % 4 === 0);
-            const b = view.getUint16(0x2) & 0x7FF;
-            assert(b % 4 === 0);
-            const c = view.getUint16(0x4) & 0x7FF;
-            assert(c % 4 === 0);
-            const dest = view.getUint16(0x6) & 0x7FF;
-            assert(dest % 4 === 0);
+            const a = decodeRemap_11(view, 0x0);
+            const b = decodeRemap_11(view, 0x2);
+            const c = decodeRemap_11(view, 0x4);
+            const dest = decodeRemap_11(view, 0x6);
             return { dest, src: [a, a, b, c], kind: RgbaRemapKind.AABC };
         });
 
         // ABCD
         const abcdRemaps: RgbaRemap[] = abcdView.subdivide(0, 0xFFFF, 8).map(view => {
-            const packed = view.getUint32(0x0);
-            const a = packed & 0x7FF;
-            assert(a % 4 === 0);
-            const b = (packed >> 9) & 0x7FC;
-            const c = (packed >> 18) & 0x7FC;
-            const d = view.getUint16(0x4) & 0x7FF;
-            assert(d % 4 === 0);
-            const dest = view.getUint16(0x6) & 0x7FF;
-            assert(dest % 4 === 0);
+            const { value1: a, value2: b, value3: c } = decodeRemap_11_11_11(view, 0x0);
+            const d = decodeRemap_11(view, 0x4);
+            const dest = decodeRemap_11(view, 0x6);
             return { dest, src: [a, b, c, d], kind: RgbaRemapKind.ABCD };
         });
 
         // zero
         const zeroRemaps: RgbaRemap[] = zeroView.subdivide(0, 0xFFFF, 8).map(view => {
-            const dest = view.getUint16(0x0) & 0x7FF;
-            assert(dest % 4 === 0);
+            const dest = decodeRemap_11(view, 0x0);
             return { dest, src: [0, 0, 0, 0], kind: RgbaRemapKind.Zero };
         });
 
-        const allRemaps = [aaaaRemaps, aabbRemaps, aaabRemaps, aabcRemaps, abcdRemaps, zeroRemaps].flat(1);
-
         packets.push({
             outputBase: base,
-            remaps: allRemaps,
+            remaps: [aaaaRemaps, aabbRemaps, abbbRemaps, aabcRemaps, abcdRemaps, zeroRemaps].flat(1),
         });
 
         packetView = packetView.subview(packetSizeBytes);
@@ -319,6 +294,38 @@ export function readTieRgbaRemaps(view: DataViewExt, oClass: number): RgbaRemaps
     return {
         packets,
     };
+}
+
+function decodeRemap_11(view: DataViewExt, offset: number): number {
+    const value = view.getUint16(offset);
+    assert(value % 4 === 0);
+    return value & 0x7FF;
+}
+
+function decodeRemap_11_11_11(view: DataViewExt, offset: number): { value1: number, value2: number, value3: number } {
+    // | unused: 3 bits | value1: 9 bits | value2: 9 bits | value3: 11 bits |
+    // 9 bit values leftshifted 2
+    const packed = view.getUint32(offset);
+    const value1 = (packed >> 18) & 0x7FC;
+    const value2 = (packed >> 9) & 0x7FC;
+    const value3 = packed & 0x7FF;
+    assert(value1 % 4 === 0);
+    assert(value2 % 4 === 0);
+    assert(value3 % 4 === 0);
+    return { value1, value2, value3 };
+}
+
+function decodeRemap_11_11_11_Weird(view: DataViewExt, offset: number): { value1: number, value2: number, value3: number } {
+    // | value1: 9 bits | value2: 9 bits | unused: 3 bits | value3: 11 bits |
+    // 9 bit values leftshifted 2
+    const packed = view.getUint32(offset);
+    const value1 = (packed >> 21) & 0x7FC;
+    const value2 = (packed >> 12) & 0x7FC;
+    const value3 = packed & 0x7FF;
+    assert(value1 % 4 === 0);
+    assert(value2 % 4 === 0);
+    assert(value3 % 4 === 0);
+    return { value1, value2, value3 };
 }
 
 export type TieClassHeader = {
@@ -483,13 +490,13 @@ export function readTiePacketHeader(view: DataViewExt): TiePacketHeader {
     };
 }
 
-export interface TieVertexWithNormalAndRgba {
-    writeOrder: number, // the order in which the vertex was copied from the uploaded data to the GS packet buffer
+export interface TieVertexWithLightingInfo {
     vertex: TieVertex,
-    normalIndices: [number, number, number],
-    rgbaIndices: [number, number, number],
+    rgbaRemapSlot_Rac234: number | null, // the order in which the vertex was copied from the uploaded data to the GS packet buffer
+    normalIndices_Rac1: [number, number, number] | null,
+    rgbaIndices_Rac1: [number, number, number] | null,
 };
-export type TieImaginaryGsCommand = ImaginaryGsCommand<TieStrip, { material: number, clamp: number }, TieVertexWithNormalAndRgba>;
+export type TieImaginaryGsCommand = ImaginaryGsCommand<TieStrip, { material: number, clamp: number }, TieVertexWithLightingInfo>;
 
 const tieCommandSizes = {
     primitiveReset: 1,
@@ -591,7 +598,7 @@ export function readTiePacketBody(gn: GN, view: DataViewExt, tiePacketHeader: Ti
         }
     }
 
-    const imaginaryGsBuffer = new ImaginaryGsCommandBuffer<TieStrip, { material: number, clamp: number }, TieVertexWithNormalAndRgba>();
+    const imaginaryGsBuffer = new ImaginaryGsCommandBuffer<TieStrip, { material: number, clamp: number }, TieVertexWithLightingInfo>();
 
     // first command always sets the material to the first material
     const firstMaterialId = adGifSrcOffsets[0] / SIZEOF_TIE_AD_GIFS;
@@ -599,59 +606,74 @@ export function readTiePacketBody(gn: GN, view: DataViewExt, tiePacketHeader: Ti
     const firstClamp = firstAdGif.clamp.low + (firstAdGif.clamp.high << 2);
     imaginaryGsBuffer.writeSetMaterial(0, tieCommandSizes.setMaterial, { material: firstMaterialId, clamp: firstClamp });
 
-    let vertexWriteOrder = baseRgbaRemapSlot;
+    let rgbaRemapSlot = baseRgbaRemapSlot;
 
     // Write verts into command buffer
     // Some are written twice.
     for (let i = 0; i < regularVerts.length; i++) {
         const vertex = regularVerts[i];
-        let normalIndices: [number, number, number] = [0, 0, 0];
-        let rgbaIndices: [number, number, number] = [0, 0, 0];
-        if (gn === 1) {
-            normalIndices = [regularNormalIndices[i], regularNormalIndices[i], regularNormalIndices[i]];
-            rgbaIndices = [regularRgbaIndices[i] - 64, regularRgbaIndices[i] - 64, regularRgbaIndices[i] - 64];
-        }
-        const commandValue: TieVertexWithNormalAndRgba = {
-            writeOrder: vertexWriteOrder++,
+
+        const commandValue: TieVertexWithLightingInfo = {
             vertex,
-            normalIndices,
-            rgbaIndices,
+            normalIndices_Rac1: null,
+            rgbaIndices_Rac1: null,
+            rgbaRemapSlot_Rac234: null,
         };
+        switch (gn) {
+            case 1: {
+                commandValue.normalIndices_Rac1 = [regularNormalIndices[i], regularNormalIndices[i], regularNormalIndices[i]];
+                commandValue.rgbaIndices_Rac1 = [regularRgbaIndices[i] - 64, regularRgbaIndices[i] - 64, regularRgbaIndices[i] - 64];
+                break;
+            }
+            case 2:
+            case 3:
+            case 4: {
+                commandValue.rgbaRemapSlot_Rac234 = rgbaRemapSlot;
+                break;
+            }
+        }
+
         imaginaryGsBuffer.writeVertex(vertex.gsPacketWriteOffset, tieCommandSizes.vertex, commandValue, true);
         if (vertex.gsPacketWriteOffset2 !== 0 && vertex.gsPacketWriteOffset !== vertex.gsPacketWriteOffset2) {
             imaginaryGsBuffer.writeVertex(vertex.gsPacketWriteOffset2, tieCommandSizes.vertex, commandValue, true);
         }
+
+        rgbaRemapSlot++;
     }
     for (let i = 0; i < morphingVerts.length; i++) {
         const vertex = morphingVerts[i];
-        let normalIndices: [number, number, number] = [0, 0, 0];
-        let rgbaIndices: [number, number, number] = [0, 0, 0];
-        if (gn === 1) {
-            normalIndices = [
-                morphingNormalIndices[i].x,
-                morphingNormalIndices[i].y,
-                morphingNormalIndices[i].z,
-            ];
-            rgbaIndices = [
-                morphingRgbaIndices[i].x - 64,
-                morphingRgbaIndices[i].y - 64,
-                morphingRgbaIndices[i].z - 64,
-            ];
-        }
-        const commandValue: TieVertexWithNormalAndRgba = {
-            writeOrder: vertexWriteOrder++,
+
+        const commandValue: TieVertexWithLightingInfo = {
             vertex,
-            normalIndices,
-            rgbaIndices,
+            normalIndices_Rac1: null,
+            rgbaIndices_Rac1: null,
+            rgbaRemapSlot_Rac234: null,
         };
+        switch (gn) {
+            case 1: {
+                commandValue.normalIndices_Rac1 = [morphingNormalIndices[i].x, morphingNormalIndices[i].y, morphingNormalIndices[i].z];
+                commandValue.rgbaIndices_Rac1 = [morphingRgbaIndices[i].x - 64, morphingRgbaIndices[i].y - 64, morphingRgbaIndices[i].z - 64];
+                break;
+            }
+            case 2:
+            case 3:
+            case 4: {
+                commandValue.rgbaRemapSlot_Rac234 = rgbaRemapSlot;
+                break;
+            }
+        }
+
         imaginaryGsBuffer.writeVertex(vertex.gsPacketWriteOffset, tieCommandSizes.vertex, commandValue, true);
         if (vertex.gsPacketWriteOffset2 !== 0 && vertex.gsPacketWriteOffset !== vertex.gsPacketWriteOffset2) {
             imaginaryGsBuffer.writeVertex(vertex.gsPacketWriteOffset2, tieCommandSizes.vertex, commandValue, true);
         }
+
+        rgbaRemapSlot++;
     }
 
     // Write primitive reset commands
-    for (const strip of tieStrips) {
+    for (let i = 0; i < tieStrips.length; i++) {
+        const strip = tieStrips[i];
         imaginaryGsBuffer.writePrimitiveReset(strip.gifTagOffset, tieCommandSizes.primitiveReset, strip);
     }
 

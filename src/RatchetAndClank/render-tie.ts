@@ -9,7 +9,7 @@ import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { GfxRenderInstList } from "../gfx/render/GfxRenderInstManager";
 import { DeviceProgram } from "../Program";
 import { assert } from "../util";
-import { RgbaRemapKind, TieClass, TieVertexWithNormalAndRgba } from "./bin-core";
+import { RgbaRemapKind, TieClass, TieVertexWithLightingInfo } from "./bin-core";
 import { DirectionLightSelector, TieInstance } from "./bin-gameplay";
 import { RatchetShaderLib } from "./shader-lib";
 import { GN, ImaginaryGsCommandType, MegaBuffer, OcclusionChecker } from "./utils";
@@ -120,7 +120,7 @@ void main() {
     for (int i = 0; i < 3; i++) {
         ivec2 ambientRgbaTexcoord = ivec2(int(rgbaIndices[i]), int(a_InstanceExtraData.x));
         vec4 rgba = texelFetch(TEXTURE(u_AmbientRgbaTexture), ambientRgbaTexcoord, 0);
-        rgba.rgb /= 128.0 / 255.0;
+        rgba.rgb *= (255.0 / 128.0);
 
         ivec2 normalTexcoord = ivec2(int(a_NormalIndices[i]), int(a_InstanceExtraData2.x));
         vec4 normalTexData = texelFetch(TEXTURE(u_TieNormalsTexture), normalTexcoord, 0);
@@ -290,15 +290,14 @@ export class TieGeometry {
             }
         }
 
-        const remaps = this.untangleRemaps();
+        const remaps = this.gn >= 2 ? this.untangleRemaps() : null;
         const elementsPerVertex = TieProgram.elementsPerVertex(this.gn);
         const vertexArrayBuffer = new Float32Array(vertexCount * elementsPerVertex);
         let vertexPtr = 0;
         let currentMaterial: { texture: number, clamp: number } | undefined;
-        let globalVertexIndex = 0;
 
         let expectedVertsInStrip = 0;
-        let tri = [null, null, null] as [TieVertexWithNormalAndRgba | null, TieVertexWithNormalAndRgba | null, TieVertexWithNormalAndRgba | null];
+        let tri = [null, null, null] as [TieVertexWithLightingInfo | null, TieVertexWithLightingInfo | null, TieVertexWithLightingInfo | null];
 
         for (let packetIndex = 0; packetIndex < tie.packets[lod].length; packetIndex++) {
             const packet = tie.packets[lod][packetIndex];
@@ -346,7 +345,7 @@ export class TieGeometry {
                             for (let i = 0; i < 3; i++) {
                                 const v = tri[i];
                                 assert(v !== null);
-                                const { vertex, normalIndices, rgbaIndices, writeOrder } = v;
+                                const { vertex, normalIndices_Rac1, rgbaIndices_Rac1, rgbaRemapSlot_Rac234 } = v;
                                 const fixedTexcoord = fixedTexcoords[i];
                                 vertexArrayBuffer[vertexPtr++] = positionScale * vertex.x;
                                 vertexArrayBuffer[vertexPtr++] = positionScale * vertex.y;
@@ -361,14 +360,18 @@ export class TieGeometry {
                                 vertexArrayBuffer[vertexPtr++] = texcoordScale * fixedTexcoord.t;
                                 assert(vertex.q === 4096);
                                 if (this.gn === 1) {
-                                    vertexArrayBuffer[vertexPtr++] = rgbaIndices[0];
-                                    vertexArrayBuffer[vertexPtr++] = rgbaIndices[1];
-                                    vertexArrayBuffer[vertexPtr++] = rgbaIndices[2];
-                                    vertexArrayBuffer[vertexPtr++] = normalIndices[0];
-                                    vertexArrayBuffer[vertexPtr++] = normalIndices[1];
-                                    vertexArrayBuffer[vertexPtr++] = normalIndices[2];
+                                    assert(rgbaIndices_Rac1 !== null);
+                                    vertexArrayBuffer[vertexPtr++] = rgbaIndices_Rac1[0];
+                                    vertexArrayBuffer[vertexPtr++] = rgbaIndices_Rac1[1];
+                                    vertexArrayBuffer[vertexPtr++] = rgbaIndices_Rac1[2];
+                                    assert(normalIndices_Rac1 !== null);
+                                    vertexArrayBuffer[vertexPtr++] = normalIndices_Rac1[0];
+                                    vertexArrayBuffer[vertexPtr++] = normalIndices_Rac1[1];
+                                    vertexArrayBuffer[vertexPtr++] = normalIndices_Rac1[2];
                                 } else {
-                                    const remapSource = remaps[writeOrder] ?? REMAP_MISSING;
+                                    assert(remaps !== null);
+                                    assert(rgbaRemapSlot_Rac234 !== null);
+                                    const remapSource = remaps[rgbaRemapSlot_Rac234] ?? REMAP_MISSING;
                                     vertexArrayBuffer[vertexPtr++] = remapSource[0];
                                     vertexArrayBuffer[vertexPtr++] = remapSource[1];
                                     vertexArrayBuffer[vertexPtr++] = remapSource[2];
@@ -376,8 +379,6 @@ export class TieGeometry {
                                 }
                             }
                         }
-
-                        globalVertexIndex++;
                     }
                 }
             }

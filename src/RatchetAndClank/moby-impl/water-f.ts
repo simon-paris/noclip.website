@@ -249,7 +249,8 @@ export class Water_F implements MobyImpl {
                 }
             }
 
-            for (const transform of transforms) {
+            for (let i = 0; i < transforms.length; i++) {
+                const transform = transforms[i];
                 const HARDCODED_OFFSET = this.mobyInstance.oClass === 879 ? -0.5 : 0; // ocean height in rilgar is wrong, not sure why
                 mat4.translate(transform, transform, vec3.fromValues(0, 0, HARDCODED_OFFSET + this.bobAmplitude * Math.sin(2 * Math.PI * this.elapsedTime * this.bobFrequency)));
             }
@@ -266,7 +267,7 @@ export class Water_F implements MobyImpl {
                     farIntensity: descriptor.fogFarIntensity,
                     color: descriptor.fogColor,
                 },
-                { depthWrite: this.alpha === 1, useAdditiveBlend: false, vertexColorTexture: colorTextures[gridIndex], vertexColorLayers: colorTextureLayers },
+                { depthWrite: this.alpha === 1, useAdditiveBlend: false, vertexColorTexture: colorTextures[gridIndex], vertexColorLayers: colorTextureLayers, vertexColorScale: 255 / 128 },
             );
         }
     }
@@ -313,8 +314,8 @@ function untangleStripOrderedTexcoords(overlaySections: OverlaySection[], texcoo
 
     // odd texcoords from bottom edge of last row
     for (let col = 0; col < 8; col++) {
-        out[ptr++] = strips[6].getFloat32((col * 2 + 1) * SIZEOF_TEXCOORD + 0x0);
-        out[ptr++] = strips[6].getFloat32((col * 2 + 1) * SIZEOF_TEXCOORD + 0x4);
+        out[ptr++] = strips[6].getFloat32((col * 2 + 1) * SIZEOF_TEXCOORD + 0x0) * uvScale;
+        out[ptr++] = strips[6].getFloat32((col * 2 + 1) * SIZEOF_TEXCOORD + 0x4) * uvScale;
     }
 
     return out;

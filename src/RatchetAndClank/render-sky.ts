@@ -73,7 +73,7 @@ void main() {
         // textured sky shell
         if (u_RenderSettings.x == 0.0) discard;
         vec4 textureSample = texture(SAMPLER_2D(u_Texture), v_ST);
-        textureSample.a /= 128.0 / 255.0;
+        textureSample.a *= (255.0 / 128.0);
         gl_FragColor = commonFragmentShader(v_Rgba, textureSample, 0.0, 0.0);
     } else {
         // vertex colored sky shell

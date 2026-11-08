@@ -27,7 +27,7 @@ export type GameplayHeader = {
     occlusionMappings: number,
     tieAmbientRgbas: number, // rac2+ only
 }
-export function readGameplayHeader(gn: GN, view: DataViewExt, artFileView_rac4: DataViewExt | null): GameplayHeader {
+export function readGameplayHeader(gn: GN, view: DataViewExt, artFileView_Rac4: DataViewExt | null): GameplayHeader {
     switch (gn) {
         case 1: {
             /*
@@ -221,7 +221,7 @@ export function readGameplayHeader(gn: GN, view: DataViewExt, artFileView_rac4: 
             }
             */
 
-            assert(artFileView_rac4 !== null);
+            assert(artFileView_Rac4 !== null);
 
             return {
                 levelSettings: view.getInt32(0x0),
@@ -237,15 +237,15 @@ export function readGameplayHeader(gn: GN, view: DataViewExt, artFileView_rac4: 
                 paths: view.getInt32(0x5c),
                 grindPaths: view.getInt32(0x60),
                 // in rac4, these belong to the art file instead of gameplay
-                directionLightInstances: artFileView_rac4.getInt32(0x0),
-                tieClasses: artFileView_rac4.getInt32(0x4),
-                tieInstances: artFileView_rac4.getInt32(0x8),
-                tieGroups: artFileView_rac4.getInt32(0xc),
-                shrubClasses: artFileView_rac4.getInt32(0x10),
-                shrubInstances: artFileView_rac4.getInt32(0x14),
-                shrubGroups: artFileView_rac4.getInt32(0x18),
-                occlusionMappings: artFileView_rac4.getInt32(0x1c),
-                tieAmbientRgbas: artFileView_rac4.getInt32(0x20),
+                directionLightInstances: artFileView_Rac4.getInt32(0x0),
+                tieClasses: artFileView_Rac4.getInt32(0x4),
+                tieInstances: artFileView_Rac4.getInt32(0x8),
+                tieGroups: artFileView_Rac4.getInt32(0xc),
+                shrubClasses: artFileView_Rac4.getInt32(0x10),
+                shrubInstances: artFileView_Rac4.getInt32(0x14),
+                shrubGroups: artFileView_Rac4.getInt32(0x18),
+                occlusionMappings: artFileView_Rac4.getInt32(0x1c),
+                tieAmbientRgbas: artFileView_Rac4.getInt32(0x20),
             }
         }
         default: {
@@ -413,7 +413,7 @@ export interface TieInstance {
     drawDistance: number,
     occlusionIndex: number,
     matrix: mat4,
-    ambientRgbas: Uint16Array,
+    ambientRgbas_Rac1: Uint16Array | null,
     lightSelector: DirectionLightSelector,
     uid: number,
 
@@ -445,7 +445,7 @@ export function readTieInstance(gn: GN, view: DataViewExt, instanceIndex: number
                 drawDistance: view.getInt32(0x4),
                 occlusionIndex: view.getInt32(0xc),
                 matrix,
-                ambientRgbas: view.subview(0x50, 0x80).getTypedArrayView(Uint16Array), // array of 64 A1BGR5 colors
+                ambientRgbas_Rac1: view.subview(0x50, 0x80).getTypedArrayView(Uint16Array), // array of 64 A1BGR5 colors
                 lightSelector: readDirectionLightSelector(view.subview(0xd0)),
                 uid: view.getInt32(0xd4),
 
@@ -469,7 +469,7 @@ export function readTieInstance(gn: GN, view: DataViewExt, instanceIndex: number
                 drawDistance: view.getInt32(0x4),
                 occlusionIndex: view.getInt32(0xc),
                 matrix,
-                ambientRgbas: new Uint16Array(0x80).fill(0xFFFF), // TODO: remove this
+                ambientRgbas_Rac1: null,
                 lightSelector: readDirectionLightSelector(view.subview(0x50)),
                 uid: view.getInt32(0x54),
 

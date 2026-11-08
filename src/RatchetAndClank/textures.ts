@@ -319,8 +319,9 @@ export function createTieRgbaTexture_Rac1(device: GfxDevice, tieInstances: (TieI
     for (let i = 0; i < tieInstances.length; i++) {
         const instance = tieInstances[i];
         if (instance) {
+            assert(instance.ambientRgbas_Rac1 !== null);
             for (let j = 0; j < 64; j++) {
-                const a1bgr5 = instance.ambientRgbas[j];
+                const a1bgr5 = instance.ambientRgbas_Rac1[j];
                 data[ptr + 0] = ((a1bgr5 >> 0) & 0x1F) << 3;
                 data[ptr + 1] = ((a1bgr5 >> 5) & 0x1F) << 3;
                 data[ptr + 2] = ((a1bgr5 >> 10) & 0x1F) << 3;
