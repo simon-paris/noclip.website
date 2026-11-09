@@ -1085,7 +1085,6 @@ export const sceneGroup1: SceneGroup = {
 export const sceneGroup2: SceneGroup = {
     id: "RatchetAndClank2",
     name: "Ratchet & Clank: Going Commando",
-    hidden: !IS_DEVELOPMENT,
     sceneDescs: [
         "Main Game",
         new RatchetAndClankSceneDesc(2, 0, null, "Aranos (Tutorial)"),
@@ -1133,7 +1132,6 @@ export const sceneGroup2: SceneGroup = {
 export const sceneGroup3: SceneGroup = {
     id: "RatchetAndClank3",
     name: "Ratchet & Clank: Up Your Arsenal",
-    hidden: !IS_DEVELOPMENT,
     sceneDescs: [
         "Main Game",
         new RatchetAndClankSceneDesc(3, 1, null, "Veldin"),
@@ -1213,7 +1211,6 @@ export const sceneGroup3: SceneGroup = {
 export const sceneGroup4: SceneGroup = {
     id: "RatchetAndClank4",
     name: "Ratchet: Deadlocked",
-    hidden: !IS_DEVELOPMENT,
     sceneDescs: [
         "Main Game",
         new RatchetAndClankSceneDesc(4, 1, 0, "DreadZone Station (Tutorial & Hub)"),

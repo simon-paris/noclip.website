@@ -297,7 +297,7 @@ export class TieGeometry {
         let currentMaterial: { texture: number, clamp: number } | undefined;
 
         let expectedVertsInStrip = 0;
-        let tri = [null, null, null] as [TieVertexWithLightingInfo | null, TieVertexWithLightingInfo | null, TieVertexWithLightingInfo | null];
+        const tri = [null, null, null] as [TieVertexWithLightingInfo | null, TieVertexWithLightingInfo | null, TieVertexWithLightingInfo | null];
 
         for (let packetIndex = 0; packetIndex < tie.packets[lod].length; packetIndex++) {
             const packet = tie.packets[lod][packetIndex];
