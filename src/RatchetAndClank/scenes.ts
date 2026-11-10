@@ -36,7 +36,7 @@ class RatchetAndClankScene implements SceneGfx {
     private renderInstList = new GfxRenderInstList();
 
     private samplerGeneral: GfxSampler;
-    private samplerWater: GfxSampler;
+    private samplerFx: GfxSampler;
     private samplerSky: GfxSampler;
 
     private occlusionChecker: OcclusionChecker | null = null;
@@ -114,63 +114,7 @@ class RatchetAndClankScene implements SceneGfx {
         this.renderHelper = new GfxRenderHelper(sceneContext.device, sceneContext);
         const cache = this.renderHelper.renderCache;
 
-        this.levelResources = {
-            gn: gn,
-            levelNumber: this.levelNumber,
-            metadata: null,
-            levelCoreHeader: null,
-            gameplayHeader: null,
-            missionGameplayHeader: null,
-            overlaySections: null,
-            gsTable: null,
-            levelSettings: null,
-            occlusion: null,
-            occlusionMappings: null,
-            paths: null,
-            grindPaths: null,
-            shapesCuboids: null,
-            shapesSpheres: null,
-            shapesCylinders: null,
-            shapesPills: null,
-            directionLights: null,
-            collisionGetter: null,
-            tfrags: null,
-            tfragTextures: null,
-            tieTextures: null,
-            tieOClasses: null,
-            tieClasses: null,
-            tieClassTextureIndices: null,
-            tieInstances: null,
-            tieInstancesByOClass: null,
-            tieGroups: null,
-            tieAmbientRgbas: null,
-            mobyTextures: null,
-            mobyGsStashList: null,
-            mobyOClasses: null,
-            mobyClasses: null,
-            mobyClassTextureIndices: null,
-            mobyInstances: null,
-            mobyInstancesByOClass: null,
-            mobyGroups: null,
-            mobyUniqueMissionIds: null,
-            mobyImpls: null,
-            mobyImplShared: null,
-            pvars: null,
-            missionMobyOClasses: null,
-            missionMobyInstances: null,
-            missionMobyInstancesByOClass: null,
-            missionMobyGroups: null,
-            shrubTextures: null,
-            shrubOClasses: null,
-            shrubClasses: null,
-            shrubClassTextureIndices: null,
-            shrubInstances: null,
-            shrubInstancesByOClass: null,
-            shrubGroups: null,
-            sky: null,
-            skyTextures: null,
-            fxTextures: null,
-        };
+        this.levelResources = new LevelResources(gn, this.levelNumber);
 
         this.samplerGeneral = cache.createSampler({
             minFilter: GfxTexFilterMode.Point,
@@ -180,7 +124,7 @@ class RatchetAndClankScene implements SceneGfx {
             wrapT: GfxWrapMode.Clamp,
         });
 
-        this.samplerWater = cache.createSampler({
+        this.samplerFx = cache.createSampler({
             minFilter: GfxTexFilterMode.Bilinear,
             magFilter: GfxTexFilterMode.Bilinear,
             mipFilter: GfxMipFilterMode.Linear,
@@ -602,7 +546,7 @@ class RatchetAndClankScene implements SceneGfx {
                 water: this.renderers.water,
             },
             fxTextures,
-            fxSampler: this.samplerWater,
+            fxSampler: this.samplerFx,
         };
 
         // moby update

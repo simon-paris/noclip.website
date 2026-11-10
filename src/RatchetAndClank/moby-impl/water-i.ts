@@ -190,42 +190,28 @@ export class Water_I implements MobyImpl {
         return [this.surfaceGeometry, this.rippleGeometry1, this.rippleGeometry2];
     }
 
+    // copy the x/z of the camera position and rotation
     private getCameraTransform(updateKit: MobyUpdateKit): mat4 {
+        const transform = mat4.fromTranslation(mat4.create(), vec3.fromValues(
+            updateKit.cameraPosition[0],
+            this.pvars.height,
+            updateKit.cameraPosition[2],
+        ));
         const forward = vec3.fromValues(updateKit.cameraForward[0], 0, updateKit.cameraForward[2]);
-        if (vec3.squaredLength(forward) < 0.000001)
-            vec3.set(forward, 0, 0, -1);
-        else
-            vec3.normalize(forward, forward);
-        const right = vec3.fromValues(-forward[2], 0, forward[0]);
-
-        const transform = mat4.create();
-        transform[0] = right[0];
-        transform[1] = right[1];
-        transform[2] = right[2];
-        transform[4] = forward[0];
-        transform[5] = forward[1];
-        transform[6] = forward[2];
-        transform[8] = 0;
-        transform[9] = 1;
-        transform[10] = 0;
-        transform[12] = updateKit.cameraPosition[0];
-        transform[13] = this.pvars.height;
-        transform[14] = updateKit.cameraPosition[2];
+        vec3.normalize(forward, forward);
+        mat4.rotateY(transform, transform, Math.atan2(-forward[0], -forward[2]));
+        mat4.rotateX(transform, transform, -Math.PI / 2);
         return transform;
     }
 
+    // copy the x/z of the camera position
     private getSurfaceTransform(updateKit: MobyUpdateKit): mat4 {
-        const transform = mat4.create();
-        transform[0] = 1;
-        transform[4] = 0;
-        transform[5] = 0;
-        transform[6] = -1;
-        transform[8] = 0;
-        transform[9] = 1;
-        transform[10] = 0;
-        transform[12] = updateKit.cameraPosition[0];
-        transform[13] = this.pvars.height;
-        transform[14] = updateKit.cameraPosition[2];
+        const transform = mat4.fromTranslation(mat4.create(), vec3.fromValues(
+            updateKit.cameraPosition[0],
+            this.pvars.height,
+            updateKit.cameraPosition[2],
+        ));
+        mat4.rotateX(transform, transform, -Math.PI / 2);
         return transform;
     }
 
@@ -241,8 +227,9 @@ export class Water_I implements MobyImpl {
         const surfaceTransform = this.getSurfaceTransform(updateKit);
         const surfaceSize = this.pvars.tileSize * 2;
 
+        const MAGIC_TEXTURE = 22;
         updateKit.renderers.water.renderWater(
-            updateKit, surfaceGeometry, [transform], updateKit.fxTextures[22],
+            updateKit, surfaceGeometry, [transform], updateKit.fxTextures[MAGIC_TEXTURE],
             { uvScroll: ZERO_VEC2, zWobble: ZERO_VEC2, randomSeed: this.mobyInstance.uid, uvRandomSeed: this.mobyInstance.uid, useWorldspaceWobble: false, uvWorldSpaceScale: 0 },
             { blendAlpha: 1, useTextureAlpha: false, useVertexColorAlpha: true },
             null,

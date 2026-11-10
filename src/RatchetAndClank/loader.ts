@@ -16,72 +16,71 @@ import { LevelDataHeader, LevelDescriptor } from "./bin-toc";
 import { OverlaySection, readOverlaySections } from "./bin-overlay";
 import { MobyImpl } from "./moby-impl/moby";
 
-export interface LevelResources {
-    gn: GN,
-    levelNumber: number,
-    metadata: MetaFile | null,
-    levelCoreHeader: LevelCoreHeader | null,
-    gameplayHeader: GameplayHeader | null,
-    missionGameplayHeader: MissionGameplayHeader | null,
+export class LevelResources {
+    constructor(public gn: GN, public levelNumber: number) { }
 
-    overlaySections: OverlaySection[] | null,
-    gsTable: GsRamTableEntry[] | null,
-    levelSettings: LevelSettings | null,
-    occlusion: Occlusion | null,
-    occlusionMappings: OcclusionMappings | null;
-    paths: Spline[] | null,
-    grindPaths: Spline[] | null,
-    shapesCuboids: Shape[] | null,
-    shapesSpheres: Shape[] | null,
-    shapesCylinders: Shape[] | null,
-    shapesPills: Shape[] | null,
-    directionLights: DirectionLightInstance[] | null,
-    collisionGetter: (() => Collision) | null,
+    public metadata: MetaFile | null = null;
+    public levelCoreHeader: LevelCoreHeader | null = null;
+    public gameplayHeader: GameplayHeader | null = null;
+    public missionGameplayHeader: MissionGameplayHeader | null = null;
 
-    tfrags: Tfrag[] | null,
-    tfragTextures: PaletteTexture[] | null,
+    public overlaySections: OverlaySection[] | null = null;
+    public gsTable: GsRamTableEntry[] | null = null;
+    public levelSettings: LevelSettings | null = null;
+    public occlusion: Occlusion | null = null;
+    public occlusionMappings: OcclusionMappings | null = null;
+    public paths: Spline[] | null = null;
+    public grindPaths: Spline[] | null = null;
+    public shapesCuboids: Shape[] | null = null;
+    public shapesSpheres: Shape[] | null = null;
+    public shapesCylinders: Shape[] | null = null;
+    public shapesPills: Shape[] | null = null;
+    public directionLights: DirectionLightInstance[] | null = null;
+    public collisionGetter: (() => Collision) | null = null;
 
-    tieTextures: PaletteTexture[] | null,
-    tieOClasses: number[] | null,
-    tieClasses: Map<number, TieClass> | null,
-    tieClassTextureIndices: Map<number, number[]> | null,
-    tieInstances: (TieInstance | null)[] | null, // null means filtered out by the chunk filter
-    tieInstancesByOClass: TieInstance[][] | null,
-    tieGroups: InstanceGroupBlock | null,
-    tieAmbientRgbas: TieAmbientRgbaBlock | null,
+    public tfrags: Tfrag[] | null = null;
+    public tfragTextures: PaletteTexture[] | null = null;
 
-    mobyTextures: PaletteTexture[] | null,
-    mobyGsStashList: number[] | null,
-    mobyOClasses: number[] | null,
-    mobyClasses: Map<number, MobyClass | null> | null,
-    mobyClassTextureIndices: Map<number, number[]> | null,
-    mobyInstances: MobyInstance[] | null,
-    mobyInstancesByOClass: MobyInstance[][] | null,
-    mobyGroups: InstanceGroupBlock | null,
-    mobyUniqueMissionIds: Set<number> | null,
-    mobyImpls: MobyImpl[] | null,
-    mobyImplShared: Record<string, number> | null,
-    pvars: Pvar[] | null,
+    public tieTextures: PaletteTexture[] | null = null;
+    public tieOClasses: number[] | null = null;
+    public tieClasses: Map<number, TieClass> | null = null;
+    public tieClassTextureIndices: Map<number, number[]> | null = null;
+    public tieInstances: (TieInstance | null)[] | null = null;
+    public tieInstancesByOClass: TieInstance[][] | null = null;
+    public tieGroups: InstanceGroupBlock | null = null;
+    public tieAmbientRgbas: TieAmbientRgbaBlock | null = null;
 
-    missionMobyOClasses: number[] | null,
-    missionMobyInstances: MobyInstance[] | null,
-    missionMobyInstancesByOClass: MobyInstance[][] | null,
-    missionMobyGroups: InstanceGroupBlock | null,
+    public mobyTextures: PaletteTexture[] | null = null;
+    public mobyGsStashList: number[] | null = null;
+    public mobyOClasses: number[] | null = null;
+    public mobyClasses: Map<number, MobyClass | null> | null = null;
+    public mobyClassTextureIndices: Map<number, number[]> | null = null;
+    public mobyInstances: MobyInstance[] | null = null;
+    public mobyInstancesByOClass: MobyInstance[][] | null = null;
+    public mobyGroups: InstanceGroupBlock | null = null;
+    public mobyUniqueMissionIds: Set<number> | null = null;
+    public mobyImpls: MobyImpl[] | null = null;
+    public mobyImplShared: Record<string, number> | null = null;
+    public pvars: Pvar[] | null = null;
 
+    public missionMobyOClasses: number[] | null = null;
+    public missionMobyInstances: MobyInstance[] | null = null;
+    public missionMobyInstancesByOClass: MobyInstance[][] | null = null;
+    public missionMobyGroups: InstanceGroupBlock | null = null;
 
-    shrubTextures: PaletteTexture[] | null,
-    shrubOClasses: number[] | null,
-    shrubClasses: Map<number, ShrubClass> | null,
-    shrubClassTextureIndices: Map<number, number[]> | null,
-    shrubInstances: (ShrubInstance | null)[] | null,
-    shrubInstancesByOClass: ShrubInstance[][] | null,
-    shrubGroups: InstanceGroupBlock | null,
+    public shrubTextures: PaletteTexture[] | null = null;
+    public shrubOClasses: number[] | null = null;
+    public shrubClasses: Map<number, ShrubClass> | null = null;
+    public shrubClassTextureIndices: Map<number, number[]> | null = null;
+    public shrubInstances: (ShrubInstance | null)[] | null = null;
+    public shrubInstancesByOClass: ShrubInstance[][] | null = null;
+    public shrubGroups: InstanceGroupBlock | null = null;
 
-    sky: Sky | null,
-    skyTextures: PaletteTexture[] | null,
+    public sky: Sky | null = null;
+    public skyTextures: PaletteTexture[] | null = null;
 
-    fxTextures: PaletteTexture[] | null,
-};
+    public fxTextures: PaletteTexture[] | null = null;
+}
 
 async function toDataViewExt(slicePromise: Promise<ArrayBufferSlice>): Promise<DataViewExt> {
     const slice = await slicePromise;
